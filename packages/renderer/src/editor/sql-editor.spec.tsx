@@ -36,6 +36,11 @@ const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
 const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35, KeyM: 43 };
 
 interface FakeEditor {
+  /** Monaco's own per-editor id (`editor-1`, `editor-2`, …), and the value of its `editorId` key. */
+  id: string;
+  /** Set by `dispose()`. Monaco keeps the object alive and inert; so does this. */
+  disposed: boolean;
+  getId: ReturnType<typeof vi.fn>;
   getValue: ReturnType<typeof vi.fn>;
   getModel: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
@@ -54,6 +59,17 @@ interface FakeEditor {
   dispose: ReturnType<typeof vi.fn>;
 }
 
+/**
+ * One entry of the standalone keybinding service's dynamic rule list
+ * (`standaloneServices.js:321-347`). The list is PROCESS-GLOBAL: every editor on the page adds to
+ * the same one, which is the whole subject of J-132.
+ */
+interface KeybindingRule {
+  keybinding: number;
+  command: string;
+  when: string | null;
+}
+
 const state = {
   created: [] as { element: HTMLElement; options: Record<string, unknown> }[],
   editors: [] as FakeEditor[],
@@ -68,7 +84,14 @@ const state = {
   disposedSubscriptions: 0,
   contentListeners: [] as (() => void)[],
   cursorListeners: [] as ((event: { position: { lineNumber: number; column: number } }) => void)[],
-  commands: new Map<number, () => void>(),
+  /** Monaco's `CommandsRegistry` — command ids are global to the page, not to an editor. */
+  commandRegistry: new Map<string, () => void>(),
+  /** The global dynamic keybinding list, in registration order. */
+  rules: [] as KeybindingRule[],
+  /** Monaco numbers editors from a module counter; so does the double, so ids are unique. */
+  nextEditorId: 1,
+  /** Monaco's `LAST_GENERATED_COMMAND_ID`, for the ids `addCommand` invents. */
+  nextDynamicCommandId: 1,
   action: { run: vi.fn(async () => undefined) },
   actionExists: true,
   /** Every id handed to `trigger`, in order. */
@@ -82,13 +105,88 @@ const state = {
   tabFocusCommandExists: true,
 };
 
+/**
+ * `CommandsRegistry.registerCommand` (`standaloneEditor.js:98-103`) — a global id → handler entry,
+ * removed by the disposable it hands back.
+ */
+function registerCommand(id: string, run: () => void): { dispose: () => void } {
+  state.commandRegistry.set(id, run);
+  return {
+    dispose: () => {
+      state.commandRegistry.delete(id);
+    },
+  };
+}
+
+/**
+ * `StandaloneKeybindingService.addDynamicKeybindings` (`standaloneServices.js:321-347`) — appends to
+ * the global rule list and hands back the disposable that removes exactly those entries. Copies each
+ * rule for the same reason Monaco does: removal is by identity of the stored entry.
+ */
+function addRules(rules: KeybindingRule[]): { dispose: () => void } {
+  const entries = rules.map(rule => ({ ...rule }));
+  state.rules.push(...entries);
+  return {
+    dispose: () => {
+      state.rules = state.rules.filter(entry => !entries.includes(entry));
+    },
+  };
+}
+
+/** The only when-clause shape this double understands: Monaco's own per-editor scope. */
+const EDITOR_ID_WHEN = /^editorId == '([\w.-]+)'$/;
+
+function whenMatches(when: string | null, focused: FakeEditor): boolean {
+  // No when-clause means the rule matches EVERY context this service can be dispatched in — which
+  // is not a simplification of the double: it is what `addCommand` registers, and it is why one
+  // editor's rule can answer a keystroke typed in another.
+  if (when === null) return true;
+  const scoped = EDITOR_ID_WHEN.exec(when);
+  if (scoped === null) throw new Error(`[double] unsupported when clause: ${when}`);
+  return focused.id === scoped[1];
+}
+
+/**
+ * One keystroke typed INSIDE an editor, resolved the way Monaco resolves it: against the GLOBAL rule
+ * list, newest rule first, skipping any rule whose when-clause does not match the context of the
+ * editor that has focus (`keybindingResolver.js:281-290` — `_findCommand` walks backwards and
+ * returns the first match).
+ *
+ * The focused editor is required rather than optional because the standalone keybinding service
+ * listens for keydown on each editor's own container element and nowhere else
+ * (`standaloneServices.js:259-268`), so there is no such thing as a dispatch from outside every
+ * editor. A rule can therefore only ever be resolved against SOME editor's context — the question
+ * this file is about is whether it is the right one.
+ *
+ * Returns whether a rule claimed the keystroke, because "nothing happened" and "the wrong editor
+ * happened" are different failures and the tests distinguish them.
+ */
+function press(keybinding: number, focused: FakeEditor): boolean {
+  for (let i = state.rules.length - 1; i >= 0; i--) {
+    const rule = state.rules[i] as KeybindingRule;
+    if (rule.keybinding !== keybinding) continue;
+    if (!whenMatches(rule.when, focused)) continue;
+    const handler = state.commandRegistry.get(rule.command);
+    if (handler === undefined) {
+      throw new Error(`[double] rule for "${rule.command}", but no such command is registered`);
+    }
+    handler();
+    return true;
+  }
+  return false;
+}
+
 function makeEditor(): FakeEditor {
   const subscription = {
     dispose: () => {
       state.disposedSubscriptions += 1;
     },
   };
+  const id = `editor-${state.nextEditorId++}`;
   const editor: FakeEditor = {
+    id,
+    disposed: false,
+    getId: vi.fn(() => id),
     getValue: vi.fn(() => 'select 1'),
     getModel: vi.fn(() => state.model),
     // `isEmpty` is Monaco's own zero-WIDTH check and it is what `hasSelection` reads, so the double
@@ -114,6 +212,11 @@ function makeEditor(): FakeEditor {
     // that: `trigger` is what moves the mode, and it moves nothing for an id the build lacks.
     trigger: vi.fn((_source: string | null | undefined, handlerId: string) => {
       state.triggered.push(handlerId);
+      // A DISPOSED editor takes the call and does nothing with it: `trigger` returns at
+      // `if (!this._modelData) return;` (`codeEditorWidget.js:821`) before it ever reaches the
+      // command path. Silent, like every other way this API fails — which is what makes a rule that
+      // outlives its editor able to swallow a keystroke and report a healthy build as broken.
+      if (editor.disposed) return;
       if (handlerId === 'editor.action.toggleTabFocusMode' && state.tabFocusCommandExists) {
         state.tabFocusMode = !state.tabFocusMode;
       }
@@ -124,8 +227,17 @@ function makeEditor(): FakeEditor {
       }
       return state.tabFocusMode;
     }),
+    // `StandaloneCodeEditor.addCommand` (`standaloneCodeEditor.js:85-94`) verbatim in behaviour: it
+    // registers a generated command id AND an UNSCOPED dynamic keybinding rule against the global
+    // service, then returns the id and DROPS the disposable that would remove them. Modelled rather
+    // than stubbed because that dropped disposable — and the missing when-clause — are the two
+    // halves of the defect J-132 is about; a double that recorded the handler in a per-test map
+    // could not express either.
     addCommand: vi.fn((keybinding: number, handler: () => void) => {
-      state.commands.set(keybinding, handler);
+      const commandId = `DYNAMIC_${state.nextDynamicCommandId++}`;
+      registerCommand(commandId, handler);
+      addRules([{ keybinding, command: commandId, when: null }]);
+      return commandId;
     }),
     onDidChangeModelContent: vi.fn((listener: () => void) => {
       state.contentListeners.push(listener);
@@ -137,7 +249,9 @@ function makeEditor(): FakeEditor {
         return subscription;
       }
     ),
-    dispose: vi.fn(),
+    dispose: vi.fn(() => {
+      editor.disposed = true;
+    }),
   };
   state.editors.push(editor);
   return editor;
@@ -152,6 +266,10 @@ const monacoDouble = {
     defineTheme: vi.fn(),
     setTheme: vi.fn(),
     setModelLanguage: vi.fn(),
+    // The two module-level registrations, both of which return an `IDisposable` — unlike the
+    // editor-level `addCommand` above, which returns a string and keeps the disposable to itself.
+    addCommand: vi.fn(({ id, run }: { id: string; run: () => void }) => registerCommand(id, run)),
+    addKeybindingRule: vi.fn((rule: KeybindingRule) => addRules([rule])),
     // Monaco's real index for this computed option (`editor.api.d.ts`). The value is opaque to the
     // component — what matters is that it is the one `getOption` is called with.
     EditorOption: { tabFocusMode: 164 },
@@ -214,7 +332,8 @@ beforeEach(() => {
   state.editors = [];
   state.contentListeners = [];
   state.cursorListeners = [];
-  state.commands = new Map();
+  state.commandRegistry = new Map();
+  state.rules = [];
   state.disposedSubscriptions = 0;
   state.actionExists = true;
   state.triggered = [];
@@ -393,7 +512,7 @@ describe('keybindings', () => {
   it('binds ⌘E to the gated execute', () => {
     const onExecuteShortcut = vi.fn();
     mount({ onExecuteShortcut });
-    state.commands.get(KEY_MOD.CtrlCmd | KEY_CODE.KeyE)?.();
+    expect(press(KEY_MOD.CtrlCmd | KEY_CODE.KeyE, lastEditor())).toBe(true);
     expect(onExecuteShortcut).toHaveBeenCalledOnce();
   });
 
@@ -401,8 +520,8 @@ describe('keybindings', () => {
     const onExecute = vi.fn();
     mount({ onExecute });
 
-    state.commands.get(KEY_MOD.CtrlCmd | KEY_CODE.Enter)?.();
-    state.commands.get(KEY_CODE.F5)?.();
+    press(KEY_MOD.CtrlCmd | KEY_CODE.Enter, lastEditor());
+    press(KEY_CODE.F5, lastEditor());
 
     expect(onExecute).toHaveBeenCalledTimes(2);
   });
@@ -415,7 +534,7 @@ describe('keybindings', () => {
     // binds `CtrlCmd` — the expectation is computed the same way rather than hardcoded, because
     // hardcoding either constant would pass on one platform and lie on the other.
     mount();
-    expect([...state.commands.keys()].sort((a, b) => a - b)).toEqual(
+    expect(state.rules.map(rule => rule.keybinding).sort((a, b) => a - b)).toEqual(
       [
         KEY_CODE.F5,
         KEY_MOD.CtrlCmd | KEY_CODE.Enter,
@@ -429,11 +548,11 @@ describe('keybindings', () => {
     // It is a toggle, so pressing it twice must come back.
     mount();
 
-    state.commands.get(TAB_FOCUS_KEY)?.();
+    press(TAB_FOCUS_KEY, lastEditor());
     expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
     expect(state.tabFocusMode).toBe(true);
 
-    state.commands.get(TAB_FOCUS_KEY)?.();
+    press(TAB_FOCUS_KEY, lastEditor());
     expect(state.tabFocusMode).toBe(false);
   });
 
@@ -444,7 +563,7 @@ describe('keybindings', () => {
     // path from both sides: the command id goes to `trigger`, and `getAction` is never consulted
     // for it — and the double now answers null there no matter what the test asks for.
     mount();
-    state.commands.get(TAB_FOCUS_KEY)?.();
+    press(TAB_FOCUS_KEY, lastEditor());
 
     expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
     expect(lastEditor().getAction).not.toHaveBeenCalledWith(TAB_FOCUS_COMMAND_ID);
@@ -466,7 +585,78 @@ describe('keybindings', () => {
     state.tabFocusCommandExists = false;
     mount();
 
-    expect(() => state.commands.get(TAB_FOCUS_KEY)?.()).toThrow(/left tab focus mode unchanged/);
+    expect(() => press(TAB_FOCUS_KEY, lastEditor())).toThrow(/left tab focus mode unchanged/);
+  });
+});
+
+/**
+ * J-132. Every keybinding this component registers goes into ONE process-global list that Monaco
+ * never prunes, and `StandaloneCodeEditor.addCommand` — the API the component used to call — both
+ * drops the disposable that would remove the rule and registers it with NO when-clause. So the rules
+ * of a closed tab keep resolving, and because the resolver walks the list backwards, the newest rule
+ * wins whatever has focus: the survivor's own binding never gets a look in.
+ *
+ * The two symptoms below are the same defect seen from either side of an unmount.
+ */
+describe('keybinding lifetime', () => {
+  const EXECUTE_KEY = KEY_MOD.CtrlCmd | KEY_CODE.KeyE;
+
+  it('takes its rules out of the global list on unmount', () => {
+    const { view } = mount();
+    expect(state.rules).toHaveLength(4);
+    const commandIds = state.rules.map(rule => rule.command);
+
+    view.unmount();
+
+    // Both halves of what a keybinding IS — the rule and the command it names — are the component's
+    // to remove, and Monaco removes neither on its own.
+    expect(state.rules).toEqual([]);
+    for (const id of commandIds) expect(state.commandRegistry.has(id)).toBe(false);
+  });
+
+  it('does not let a closed tab’s ⌃M answer for the tab that is still open', () => {
+    // The ticket's scenario: two query tabs, close the second, press ⌃M in the first. The dead
+    // editor's `trigger` returns at its null `_modelData`, so the mode never moves and the J-83
+    // guard reports a perfectly healthy build as broken — a spurious throw on the one keystroke a
+    // trapped keyboard user has left.
+    mount();
+    const survivorEditor = lastEditor();
+    const closed = mount();
+    closed.view.unmount();
+
+    expect(() => press(TAB_FOCUS_KEY, survivorEditor)).not.toThrow();
+    expect(state.tabFocusMode).toBe(true);
+  });
+
+  it('runs the focused editor’s execute, not the most recently mounted one’s', () => {
+    // The live half of the same defect: with two tabs open, an unscoped rule from tab B answers ⌘E
+    // pressed in tab A, so the user runs the other tab's SQL. Monaco's own `addAction` scopes every
+    // rule it adds with `editorId == '…'` for exactly this reason.
+    const first = vi.fn();
+    const second = vi.fn();
+    mount({ onExecuteShortcut: first });
+    const firstEditor = lastEditor();
+    mount({ onExecuteShortcut: second });
+
+    expect(press(EXECUTE_KEY, firstEditor)).toBe(true);
+
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it('leaves a closed tab’s execute keys unresolvable', () => {
+    // The ⌘E half of the ⌃M case above, and the reason this is worth more than tidiness: a stale
+    // rule that still resolves runs a CLOSED tab's callbacks — the gate, the connection, the tab
+    // state, all belonging to a panel React has already torn down.
+    const onExecuteShortcut = vi.fn();
+    mount();
+    const survivorEditor = lastEditor();
+    const closed = mount({ onExecuteShortcut });
+    closed.view.unmount();
+
+    press(EXECUTE_KEY, survivorEditor);
+
+    expect(onExecuteShortcut).not.toHaveBeenCalled();
   });
 });
 

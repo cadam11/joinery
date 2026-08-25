@@ -101,6 +101,27 @@ export type EditorActionId =
  */
 const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
 
+/**
+ * The when-clause that ties a keybinding rule to ONE editor: Monaco's `CodeEditorWidget` publishes
+ * `editorId` on the context key service it scopes to its own DOM node
+ * (`codeEditorWidget.js:1624`), and the keybinding resolver evaluates a rule's when-clause against
+ * the context of whatever currently has focus (`keybindingResolver.js:281-296`). So a rule carrying
+ * this clause is inert unless focus is inside that editor — which is exactly the scoping Monaco's
+ * own `addAction` applies to every rule it registers (`standaloneCodeEditor.js:110`).
+ *
+ * The id is asserted rather than trusted because the clause is a STRING: Monaco generates
+ * `editor-<n>`, and anything carrying a quote or a space would parse into a rule that silently never
+ * matches — a keybinding that does nothing, which is the failure mode this whole file is careful
+ * about.
+ */
+function editorScope(instance: monaco.editor.IStandaloneCodeEditor): string {
+  const editorId = instance.getId();
+  if (!/^[\w.-]+$/.test(editorId)) {
+    throw new Error(`[SqlEditor] cannot scope keybindings to editor id "${editorId}"`);
+  }
+  return `editorId == '${editorId}'`;
+}
+
 export interface SqlEditorProps {
   /** Seeds the document once, on mount. Later changes are ignored — the editor owns the text. */
   readonly defaultValue: string;
@@ -355,18 +376,62 @@ export function SqlEditor({
       ),
     ];
 
+    /**
+     * Every keystroke this editor claims, registered so that it can be UNclaimed (J-132).
+     *
+     * `instance.addCommand` — what these four calls used to be — is unusable for anything that
+     * outlives a single page: it registers a command and a dynamic keybinding rule against the
+     * process-global standalone keybinding service, then returns the generated command id and
+     * DROPS the disposable that would remove them (`standaloneCodeEditor.js:85-94`). Nothing else
+     * can remove them either, so every mount left four rules behind for the life of the window,
+     * each holding a closure over an editor that no longer exists. Two consequences, both real:
+     *
+     *  - the resolver walks its rule list BACKWARDS and takes the first when-clause that matches
+     *    (`keybindingResolver.js:281-290`), so the newest rule wins — a closed tab's ⌃M answered
+     *    for the tab still open, `trigger` returned at its now-null `_modelData`
+     *    (`codeEditorWidget.js:821`), and the tab-focus guard below reported a healthy build as
+     *    broken. Same shape for ⌘E: with two tabs open, the newer editor's callbacks ran;
+     *  - and nothing stopped that, because `addCommand` registers with no when-clause at all, so
+     *    every rule matched every context the service dispatches in.
+     *
+     * The blast radius is editors and only editors: the standalone keybinding service listens for
+     * keydown on each editor's container element rather than on the window
+     * (`standaloneServices.js:259-268`), so these keys never fired from the results grid or the
+     * sidebar, before this change or after it. What changes is WHICH editor answers.
+     *
+     * The module-level pair below is the same two registrations, with both handles kept:
+     * `monaco.editor.addCommand` is `CommandsRegistry.registerCommand` (`standaloneEditor.js:98`)
+     * and `addKeybindingRule` is `addDynamicKeybindings` (`standaloneEditor.js:153-173`) — the two
+     * calls `instance.addCommand` makes internally — and each returns an `IDisposable`. Weight is
+     * unchanged at `weight1: 1000` (`standaloneServices.js:329`), so J-83's ruling that the app's
+     * ⌃M outranks Monaco's own Ctrl+M on Windows still holds.
+     *
+     * `when` narrows each rule to this editor, and it is not merely belt-and-braces for the
+     * disposal: it is what fixes the live case, where both tabs are open and neither rule is stale
+     * but the newest still wins. Disposal fixes the dead case; the scope fixes the live one.
+     */
+    const scope = editorScope(instance);
+    const keybindings: monaco.IDisposable[] = [];
+    const bindKey = (name: string, keybinding: number, run: () => void): void => {
+      const commandId = `joinery.sqlEditor.${instance.getId()}.${name}`;
+      keybindings.push(
+        monaco.editor.addCommand({ id: commandId, run }),
+        monaco.editor.addKeybindingRule({ keybinding, command: commandId, when: scope })
+      );
+    };
+
     // ⌘E / ⌃E. `menu.ts` registers Query ▸ Execute with `registerAccelerator: false` precisely so
     // this keybinding is the renderer's, which is why it is here and not a menu channel.
-    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, () =>
+    bindKey('executeShortcut', monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, () =>
       callbacks.current.onExecuteShortcut()
     );
-    // ⌘↩ and F5, both ungated. `addCommand` rather than the Angular `onKeyDown` +
+    // ⌘↩ and F5, both ungated. A keybinding rather than the Angular `onKeyDown` +
     // `preventDefault` + `stopPropagation` intercept at `:1308-1314`: a Monaco keybinding already
     // consumes the keystroke, so ⌘↩ cannot also insert a newline.
-    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () =>
+    bindKey('execute', monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () =>
       callbacks.current.onExecute()
     );
-    instance.addCommand(monaco.KeyCode.F5, () => callbacks.current.onExecute());
+    bindKey('executeF5', monaco.KeyCode.F5, () => callbacks.current.onExecute());
 
     // ⌃M — the keyboard trap's escape hatch (J-83, WCAG 2.1.2).
     //
@@ -387,7 +452,7 @@ export function SqlEditor({
     // A toggle, not a one-way move: turning it on makes Tab move focus, turning it off restores
     // tab-as-indent, and Monaco announces the state to assistive technology itself.
     const controlKey = IS_MAC ? monaco.KeyMod.WinCtrl : monaco.KeyMod.CtrlCmd;
-    instance.addCommand(controlKey | monaco.KeyCode.KeyM, () => {
+    bindKey('toggleTabFocus', controlKey | monaco.KeyCode.KeyM, () => {
       // `trigger` and NOT `getAction`, which is the opposite of `runAction` above and the one place
       // in this file where that is correct. Monaco 0.56 registers this one with `registerAction2`,
       // i.e. as a platform *command* rather than as an editor action, so `getAction` returns null
@@ -422,6 +487,10 @@ export function SqlEditor({
     }
 
     return () => {
+      // Keybindings first, and before the editor: a rule is resolvable for as long as it is in the
+      // global list, so the order that cannot expose a disposed editor to a keystroke is
+      // rules → listeners → editor.
+      for (const keybinding of keybindings) keybinding.dispose();
       for (const subscription of subscriptions) subscription.dispose();
       // Disposing the editor disposes its model, which is what we want: one model per editor, created
       // implicitly by `create({ value, language })` and owned by nothing else.
