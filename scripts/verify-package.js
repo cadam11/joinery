@@ -196,6 +196,7 @@ function checkRendererBundle(extractDir) {
   }
 
   failures += checkRendererTreeComplete(path.join(extractDir, BROWSER_REL));
+  failures += checkRendererReachable(path.join(extractDir, BROWSER_REL));
   return failures;
 }
 
@@ -241,6 +242,77 @@ function checkRendererTreeComplete(browserInAsar) {
 
   console.log(`  ok  ${label(`renderer bundle complete (${built.length} files)`)}`);
   return 0;
+}
+
+/**
+ * Every emitted file is reachable from `index.html` (J-98).
+ *
+ * turbo's cache restore is ADDITIVE: on a cache hit it replays the cached outputs over whatever is
+ * already in `dist/`, and the build script never runs, so vite's `emptyOutDir` — which only sweeps
+ * on a miss — never sees them. Chunks from an earlier generation therefore accumulate,
+ * electron-builder copies all of `dist/browser` into the asar, and every existing check stays green
+ * because the tree on disk and the tree in the asar agree with each other. 92 dead files, including
+ * a fully orphaned `index-*.js`, shipped that way.
+ *
+ * Verified rather than assumed while writing this: a marker file dropped into `dist/browser/assets`
+ * survived `pnpm run build` on a cache hit. So `rm -rf dist` in the build script — which this PR
+ * also adds — cannot be the whole fix; it only cleans the path where the script actually runs.
+ *
+ * Reachability is by MENTION, not by parsing modules: start at `index.html`, and treat any emitted
+ * filename appearing in a reachable file's text as reachable in turn. Vite writes its imports and
+ * asset URLs as literal filenames, so a mention is what a reference looks like — and a check that
+ * over-approximates reachability cannot produce a false failure, only miss an orphan.
+ */
+function checkRendererReachable(browserDir) {
+  const label = name => `  ${name.padEnd(46)}`;
+  const indexPath = path.join(browserDir, 'index.html');
+
+  if (!fs.existsSync(indexPath)) {
+    console.log(`  FAIL${label('no orphaned renderer chunks')} no index.html in the asar bundle`);
+    return 1;
+  }
+
+  const emitted = listFilesRelative(browserDir);
+  const byBasename = new Map(emitted.map(rel => [path.basename(rel), rel]));
+
+  const reachable = new Set(['index.html']);
+  const queue = ['index.html'];
+
+  // Bounded by the file count: each file is read at most once, and nothing is queued twice.
+  for (let index = 0; index < queue.length && index <= emitted.length; index += 1) {
+    const current = queue[index];
+    const text = readTextOrEmpty(path.join(browserDir, current));
+    if (text === '') continue;
+
+    for (const [basename, rel] of byBasename) {
+      if (reachable.has(rel) || !text.includes(basename)) continue;
+      reachable.add(rel);
+      queue.push(rel);
+    }
+  }
+
+  const orphans = emitted.filter(rel => !reachable.has(rel));
+  if (orphans.length > 0) {
+    console.log(
+      `  FAIL${label('no orphaned renderer chunks')} ${orphans.length} of ${emitted.length} ` +
+        `file(s) unreachable from index.html, e.g. ${orphans[0]} — ` +
+        `run "pnpm run clean:dist" and build again`
+    );
+    return 1;
+  }
+
+  console.log(`  ok  ${label(`no orphaned renderer chunks (${emitted.length} reachable)`)}`);
+  return 0;
+}
+
+/** A file's text, or '' for one that is not text — a font or an image mentions nothing. */
+function readTextOrEmpty(filePath) {
+  if (/\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|mp4|webm)$/i.test(filePath)) return '';
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 /** Every non-dot file under `root`, as paths relative to it. Bounded by the directory tree. */
@@ -305,7 +377,7 @@ try {
 
 console.log(
   failures
-    ? `\n${failures} problem(s) — the packaged app is missing dependencies.`
+    ? `\n${failures} problem(s) — the packaged app is not fit to ship.`
     : '\nAll modules load entirely from within the bundle.'
 );
 process.exit(failures ? 1 : 0);

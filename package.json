@@ -51,7 +51,8 @@
     "package:mac": "pnpm run build && node scripts/package.js --mac",
     "package:dir": "pnpm run build && node scripts/package.js --dir",
     "verify:package": "node scripts/verify-package.js",
-    "prepare": "husky"
+    "prepare": "husky",
+    "clean:dist": "turbo run clean && rm -rf packages/*/dist"
   },
   "main": "packages/main/dist/index.js",
   "dependencies": {
