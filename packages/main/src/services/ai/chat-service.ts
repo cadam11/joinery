@@ -509,6 +509,9 @@ export class ChatService extends BaseSingleton {
     let accumulatedContent = assistantMessage.content || '';
 
     // Continue the agentic loop
+
+    /** Set when the loop stops to ask the user, so the turn is not reported as finished. */
+    let pausedForConfirmation = false;
     for (let iteration = 0; iteration < ChatService.MAX_TOOL_ITERATIONS; iteration++) {
       if (signal.aborted) break;
 
@@ -597,6 +600,11 @@ export class ChatService extends BaseSingleton {
             });
           }
         }
+        // Paused on the human, NOT finished (J-61). The `done: true` below is skipped, so the
+        // renderer's `streaming` flag stays set across the confirmation: Stop keeps working, the
+        // composer keeps refusing a second message mid-turn, and the continuation's deltas land in
+        // the same coalescing buffer instead of a segment nobody is treating as a stream.
+        pausedForConfirmation = true;
         break;
       }
 
@@ -639,11 +647,15 @@ export class ChatService extends BaseSingleton {
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
 
-    this.sendChunk(mainWindow, {
-      conversationId: conversation.id,
-      done: true,
-      messageId: assistantMessage.id,
-    });
+    // The turn ends here only if nothing is waiting on the user. `confirmToolCall` sends the
+    // terminal chunk for the paused case, on whichever branch it takes (J-61).
+    if (!pausedForConfirmation) {
+      this.sendChunk(mainWindow, {
+        conversationId: conversation.id,
+        done: true,
+        messageId: assistantMessage.id,
+      });
+    }
   }
 
   // ---- Core generation with agentic tool-calling loop ----
@@ -689,6 +701,9 @@ export class ChatService extends BaseSingleton {
     };
 
     let accumulatedContent = '';
+
+    /** Set when the loop stops to ask the user, so the turn is not reported as finished. */
+    let pausedForConfirmation = false;
 
     for (let iteration = 0; iteration < ChatService.MAX_TOOL_ITERATIONS; iteration++) {
       if (signal.aborted) break;
@@ -783,6 +798,11 @@ export class ChatService extends BaseSingleton {
             });
           }
         }
+        // Paused on the human, NOT finished (J-61). The terminal chunk below is skipped so the
+        // renderer's `streaming` flag survives the confirmation — Stop keeps working, the composer
+        // keeps refusing a second message mid-turn, and the continuation's deltas land in the same
+        // coalescing buffer rather than in a segment nobody is treating as a stream.
+        pausedForConfirmation = true;
         break; // Wait for user confirmation before continuing
       }
 
@@ -843,11 +863,15 @@ export class ChatService extends BaseSingleton {
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
 
-    this.sendChunk(mainWindow, {
-      conversationId: conversation.id,
-      done: true,
-      messageId: assistantMessage.id,
-    });
+    // The turn ends here only if nothing is waiting on the user. `confirmToolCall` sends the
+    // terminal chunk for the paused case, on whichever branch it takes (J-61).
+    if (!pausedForConfirmation) {
+      this.sendChunk(mainWindow, {
+        conversationId: conversation.id,
+        done: true,
+        messageId: assistantMessage.id,
+      });
+    }
   }
 
   private async executeTool(
