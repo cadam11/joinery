@@ -16,13 +16,15 @@
  * ── The one filled affordance, and how it is actually kept to one ──────────────────────────
  *
  * HOUSE-RULES §5 allows at most one filled oxide affordance per visible surface. The composer's Send
- * is the surface's filled affordance at rest, and **an earlier version of this comment claimed a
- * confirmation could only exist while the stream was open, so the composer would be showing Stop.
- * That is false.** The main process sends the `pendingConfirmation` chunk and then `done: true`,
- * because it breaks its agentic loop to wait for the user — so `streaming` is already false when this
- * card appears. What keeps the rule true is the gate: the composer refuses while a confirmation is
- * pending (`selectHasPendingConfirmation`), and `Button`'s disabled-`primary` treatment drops the fill,
- * so Send is on screen unarmed and unfilled while "Run it" is the one filled control.
+ * is the surface's filled affordance at rest, and while this card is on screen it is not on screen at
+ * all: since J-61 the main process keeps the turn open across a confirmation — it emits the
+ * `pendingConfirmation` chunk and no `done` — so `streaming` is true and the composer renders **Stop**
+ * in Send's place. Stop is `variant="outline"`, so "Run it" is the one filled control.
+ *
+ * The rule survives the other route into this state too. A confirmation can outlive its stream (a
+ * decline, or a card restored from history), and there the composer's second gate does the work:
+ * it refuses while a confirmation is pending (`selectHasPendingConfirmation`), and `Button`'s
+ * disabled-`primary` treatment drops the fill, so Send is on screen unarmed and unfilled.
  *
  * ── Approving is armed once ────────────────────────────────────────────────────────────────
  *

@@ -370,13 +370,16 @@ describe('the transcript', () => {
 
 describe('the tool-confirmation flow', () => {
   /**
-   * Sends a message and puts a pending tool call on the assistant placeholder — **including the
-   * `done: true` the main process sends immediately afterwards.**
+   * Sends a message and puts a pending tool call on the assistant placeholder — **and stops there,
+   * with no `done: true`, because that is now the whole sequence the main process emits.**
    *
-   * That second chunk is not padding, it is the shape of the feature: `ChatService` breaks its agentic
-   * loop to wait for the user, so the stream ENDS while the confirmation waits. A helper that stopped
-   * at the toolCall chunk left every test in this block running against a state the app never reaches
-   * (a confirmation with `streaming: true`), which is how the composer came to be live underneath one.
+   * The absence of the terminal chunk is the shape of the feature (J-61). `ChatService` breaks its
+   * agentic loop to wait for the user but does NOT declare the turn over: it stays open across the
+   * confirmation, so the continuation's deltas land in a message the renderer is still treating as
+   * streaming. An earlier version of this helper emitted `done: true` here, which was true of main
+   * at the time and is not any more — every test in this block would have been driving a sequence
+   * main can no longer produce. `streaming` is therefore TRUE while the card is on screen, and the
+   * composer's second gate (`selectHasPendingConfirmation`) is what refuses a message, not `done`.
    */
   async function pendingConfirmation(store: ChatStore): Promise<void> {
     await store.getState().sendMessage('drop it');
@@ -390,7 +393,6 @@ describe('the tool-confirmation flow', () => {
       },
       done: false,
     });
-    double.emit({ conversationId: CONVERSATION_ID, done: true });
   }
 
   it('states the tool, its description and its SQL — the description being what Angular never loaded', async () => {
@@ -440,19 +442,23 @@ describe('the tool-confirmation flow', () => {
   });
 
   it('refuses to send another message while the confirmation is unanswered', async () => {
-    // The state this closes: the main process sends the `pendingConfirmation` chunk and then
-    // `done: true`, so `streaming` is FALSE while the card is on screen and an ungated composer is
-    // fully live. A message sent from it orphans the card — main's `confirmToolCall` looks the id up in
-    // the last assistant message, which the new turn displaces.
+    // Two independent gates, and this pins both. Since J-61 the turn is still open while the card
+    // waits, so `streaming` alone would already disable the box — but the reason the composer must
+    // ALSO gate on `selectHasPendingConfirmation` is that a message sent from it orphans the card:
+    // main's `confirmToolCall` looks the id up in the last assistant message, which a new turn
+    // displaces. The placeholder proves which gate is doing the talking.
     const { store } = await mount();
     await pendingConfirmation(store);
     await screen.findByTestId('chat-tool-confirm');
 
-    expect(store.getState().streaming).toBe(false);
+    expect(store.getState().streaming).toBe(true);
     const box = screen.getByTestId('chat-input') as HTMLTextAreaElement;
     expect(box.disabled).toBe(true);
     expect(box.getAttribute('placeholder')).toBe('Waiting on the tool request above');
-    expect(screen.getByTestId('chat-send').hasAttribute('disabled')).toBe(true);
+    // Stop, not a disabled Send: the turn is open. Stop is `outline`, so the card's Run it is still
+    // the only filled control on the surface (HOUSE-RULES §5).
+    expect(screen.queryByTestId('chat-send')).toBeNull();
+    expect(screen.getByTestId('chat-stop')).not.toBeNull();
     // And it says why, where the refusal is.
     expect(screen.getByTestId('chat-confirm-blocked').textContent).toContain('run it or cancel it');
 
@@ -460,10 +466,18 @@ describe('the tool-confirmation flow', () => {
     await userEvent.type(box, 'never mind, do something else{Enter}');
     expect(double.sends()).toHaveLength(sendsBefore);
 
-    // Answering the card gives the composer back.
+    // Answering the card gives the composer back — but only once main ends the turn it kept open.
+    // A decline is answered with the terminal chunk from `ChatService.confirmToolCall`.
     await userEvent.click(screen.getByTestId('chat-tool-decline'));
     await waitFor(() => expect(screen.queryByTestId('chat-confirm-blocked')).toBeNull());
-    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(false);
+    double.emit({
+      conversationId: CONVERSATION_ID,
+      delta: '\n\nTool call cancelled by user.',
+      done: true,
+    });
+    await waitFor(() =>
+      expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(false)
+    );
   });
 
   it('declines the tool call in the message that holds it, not the newest one', async () => {
@@ -730,10 +744,10 @@ describe('the model’s UI actions', () => {
 });
 
 describe('the database context line', () => {
-  it('says there is none when no query tab is in front, rather than implying one', async () => {
+  it('says there is none when nothing in front carries a connection', async () => {
     await mount();
-    // Focus derives from the ACTIVE QUERY TAB (`selectFocusedConnectionId`) and nothing else, so with
-    // no query tab the model gets no connection — and this line has to agree with what is sent.
+    // The line reads the same source `sendMessage` does, so with no context it has to say so
+    // rather than imply one.
     expect(screen.getByTestId('chat-context').textContent).toContain('No database context');
   });
 });

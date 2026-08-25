@@ -31,6 +31,20 @@ import type {
   ToolDefinition,
 } from '@joinery/shared';
 import { ipc, isIpcAvailable } from '../ipc';
+
+/**
+ * A conversation as the sidebar list needs it: everything except the transcript.
+ *
+ * Named here rather than in `@joinery/shared` because it describes what this store keeps, not what
+ * the IPC boundary carries — main still answers with whole conversations.
+ */
+export type ConversationSummary = Omit<Conversation, 'messages'>;
+
+/** Drop the transcript. See the `conversations` field for why it must not be kept (J-63). */
+function summarise(conversation: Conversation): ConversationSummary {
+  const { messages: _messages, ...summary } = conversation;
+  return summary;
+}
 import { capabilitiesStore, selectVariantFor, type CapabilitiesStore } from './capabilities';
 import { connectionStore, selectProfileFor, type ConnectionStore } from './connection';
 import { diagnostics } from './diagnostics';
@@ -42,7 +56,17 @@ const TITLE_MAX_LENGTH = 50;
 export type ChatUiAction = NonNullable<ChatStreamChunk['uiAction']>;
 
 export interface ChatStoreState {
-  readonly conversations: readonly Conversation[];
+  /**
+   * The sidebar list: metadata only, deliberately WITHOUT `messages` (J-63).
+   *
+   * `listConversations` answers with whole conversations, transcripts included. Held as-is, that
+   * array is a snapshot taken once at load and never re-synced, while `applyChunk` patches the
+   * live `messages` beside it — so any future reader of `conversations[].messages` would render a
+   * transcript that stopped updating the moment a stream began. Nothing reads it today, which is
+   * exactly when to remove the trap rather than to add a sync nobody needs. The transcript has one
+   * source: `selectConversation`, which asks main.
+   */
+  readonly conversations: readonly ConversationSummary[];
   readonly activeConversationId: string | null;
   readonly messages: readonly ChatMessage[];
   readonly streaming: boolean;
@@ -123,11 +147,12 @@ function patchLastAssistantMessage(
  * callers can detect the miss) when no message carries that id.
  *
  * Addressing by id rather than by "the last assistant message" is not tidiness. A tool
- * confirmation outlives the stream that produced it: the main process sends the
- * `pendingConfirmation` chunk and then `done: true` (`chat-service.ts` — it breaks the agentic loop
- * to wait for the user), so the card sits in a *finished* message and any later message pushes it
- * out of last position. The composer refuses to send while a confirmation is pending
- * (`selectHasPendingConfirmation`), which is what stops that from happening at all — but "the
+ * confirmation can outlive the turn that produced it: the main process holds the turn open while it
+ * waits for the answer (J-61), but the card itself survives the turn ending — it is still in the
+ * transcript when the answer's result chunk lands, and a conversation reopened from `chat-history/`
+ * can show one with no stream behind it at all. So the card can sit in a *finished* message that any
+ * later message pushes out of last position. The composer refuses to send while a confirmation is
+ * pending (`selectHasPendingConfirmation`), which is what stops that from happening at all — but "the
  * decline silently patched a newer message" is exactly the class of bug a positional patch invites,
  * and a result chunk that arrives late has the same shape.
  *
@@ -232,8 +257,8 @@ export function createChatStore(deps: ChatStoreDeps, options: ChatStoreOptions =
       const toolResult = chunk.toolResult;
       if (toolResult) {
         set(state => {
-          // By id first: a confirmed tool's result arrives after `done: true`, so the card it belongs
-          // to is not necessarily in the last message any more.
+          // By id first: a confirmed tool's result arrives a whole confirmation later than the card
+          // that announced it, so the card it belongs to is not necessarily in the last message.
           const patched = patchToolCallById(state.messages, toolResult.id, () => toolResult);
           if (patched !== state.messages) return { messages: patched };
           // Auto-executed tools never announced themselves as a toolCall first, so there is nothing
@@ -290,7 +315,7 @@ export function createChatStore(deps: ChatStoreDeps, options: ChatStoreOptions =
             options.loadTools ? ipc().chat.getTools() : Promise.resolve<ToolDefinition[]>([]),
             ipc().chat.listConversations(),
           ]);
-          set({ tools, conversations });
+          set({ tools, conversations: conversations.map(summarise) });
 
           // A tab restored against an existing conversation loads its transcript.
           const activeId = get().activeConversationId;
@@ -308,7 +333,7 @@ export function createChatStore(deps: ChatStoreDeps, options: ChatStoreOptions =
         try {
           const conversation = await ipc().chat.createConversation();
           set(state => ({
-            conversations: [conversation, ...state.conversations],
+            conversations: [summarise(conversation), ...state.conversations],
             activeConversationId: conversation.id,
             messages: [],
             streamingContent: '',
@@ -549,7 +574,7 @@ export function createChatTabStore(initialConversationId?: string): ChatStore {
 
 export function selectActiveConversation(
   state: Pick<ChatStoreState, 'conversations' | 'activeConversationId'>
-): Conversation | null {
+): ConversationSummary | null {
   return state.conversations.find(c => c.id === state.activeConversationId) ?? null;
 }
 
@@ -560,13 +585,15 @@ export function selectHasConversations(state: Pick<ChatStoreState, 'conversation
 /**
  * Is a tool call in this conversation waiting on the user?
  *
- * The composer is gated on this as well as on `streaming`, because the two are not the same state and
- * the second does not cover the first: the main process sends the `pendingConfirmation` chunk and then
- * `done: true` (it breaks the agentic loop to wait), so while a confirmation is on screen
- * `streaming` is **false** and an ungated composer is fully live with a filled Send in it. Sending
- * then orphans the card — the local decline would patch a message that is no longer the one holding
- * the tool call, and the main process's own `confirmToolCall` looks the id up in the LAST assistant
- * message (`ChatService.findToolCall`), which the new turn has just displaced, so approving runs
+ * The composer is gated on this as well as on `streaming`, because the two are not the same state.
+ * They do overlap now: since J-61 the main process holds the turn open across a confirmation — the
+ * `pendingConfirmation` chunk goes out and `done: true` does not follow until the call is answered —
+ * so `streaming` is **true** while the card is on screen. But a pending card also reaches states with
+ * no stream behind it: one restored from `chat-history/` when the conversation is reopened, and one
+ * left armed after Stop (J-131). In those an ungated composer is fully live with a filled Send in it.
+ * Sending then orphans the card — the local decline would patch a message that is no longer the one
+ * holding the tool call, and the main process's own `confirmToolCall` looks the id up in the LAST
+ * assistant message (`ChatService.findToolCall`), which the new turn displaced, so approving runs
  * nothing. Since J-60 it at least answers `'no-such-tool-call'` and logs the miss instead of
  * returning silently, but nothing on screen says so — which is why the composer is gated here.
  *

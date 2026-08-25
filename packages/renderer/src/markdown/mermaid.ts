@@ -55,41 +55,73 @@ async function loadMermaid(theme: MermaidTheme): Promise<MermaidApi> {
  * Unavoidably imperative — mermaid renders against a live document. Called from an effect,
  * after the sanitized HTML has been committed.
  */
+/** One diagram to draw: its source, and the element the drawing replaces. */
+interface PendingDiagram {
+  readonly source: string;
+  readonly target: HTMLElement;
+}
+
+/**
+ * Everything under `root` that needs drawing for `theme` — the unrendered blocks, and the
+ * already-rendered diagrams drawn for a different one.
+ *
+ * The second half is J-40. Rendering replaces the `pre` with a div, so the source block is gone
+ * from the DOM: a re-run after a theme change used to match zero blocks and return early, leaving
+ * a dark diagram on an ivory canvas. The source is stamped onto the container precisely so the
+ * diagram can be drawn again, and the theme is stamped beside it so only diagrams that are
+ * actually out of date get redrawn.
+ */
+function pendingDiagrams(root: HTMLElement, theme: MermaidTheme): PendingDiagram[] {
+  const fresh: PendingDiagram[] = [];
+  for (const block of root.querySelectorAll<HTMLElement>('pre > code.language-mermaid')) {
+    const pre = block.parentElement;
+    if (pre !== null) fresh.push({ source: block.textContent ?? '', target: pre });
+  }
+
+  const stale: PendingDiagram[] = [];
+  for (const drawn of root.querySelectorAll<HTMLElement>('[data-mermaid-source]')) {
+    if (drawn.dataset.mermaidTheme === theme) continue;
+    stale.push({ source: drawn.dataset.mermaidSource ?? '', target: drawn });
+  }
+
+  // One cap across both: a message that redraws is not a licence to exceed the bound.
+  return [...fresh, ...stale].slice(0, MAX_DIAGRAMS_PER_MESSAGE);
+}
+
 export async function renderDiagramsIn(
   root: HTMLElement,
   theme: MermaidTheme
 ): Promise<readonly string[]> {
-  const blocks = Array.from(
-    root.querySelectorAll<HTMLElement>('pre > code.language-mermaid')
-  ).slice(0, MAX_DIAGRAMS_PER_MESSAGE);
-  if (blocks.length === 0) {
+  const pending = pendingDiagrams(root, theme);
+  if (pending.length === 0) {
     return [];
   }
 
   const mermaid = await loadMermaid(theme);
   const failures: string[] = [];
 
-  for (const [index, block] of blocks.entries()) {
-    const pre = block.parentElement;
-    if (pre === null) {
-      continue;
-    }
+  for (const [index, { source, target }] of pending.entries()) {
     const container = document.createElement('div');
+    // Stamped before the draw, so a diagram that FAILS still carries what it needs to be tried
+    // again under another theme rather than being stuck on its error state forever.
+    container.dataset.mermaidSource = source;
+    container.dataset.mermaidTheme = theme;
+
+    // The id mermaid prefixes its own CSS selectors with, held so the sanitizer can check that the
+    // emitted `<style>` really is confined to this diagram (J-25).
+    const diagramId = `diagram-${index}-${Date.now()}`;
     try {
-      const { svg } = await mermaid.render(
-        `diagram-${index}-${Date.now()}`,
-        block.textContent ?? ''
-      );
+      const { svg } = await mermaid.render(diagramId, source);
       container.className = 'mermaid-diagram';
-      container.innerHTML = sanitizeDiagramSvg(svg);
+      container.innerHTML = sanitizeDiagramSvg(svg, diagramId);
     } catch (error) {
       // A malformed diagram must degrade to readable source, not blank space.
       container.className = 'mermaid-error';
-      container.textContent = block.textContent ?? '';
+      container.textContent = source;
       const reason = error instanceof Error ? error.message : String(error);
       failures.push(`Diagram failed to render: ${reason}`);
     }
-    pre.replaceWith(container);
+    target.replaceWith(container);
   }
 
   return failures;

@@ -11,7 +11,7 @@ import type {
   RenameDatabaseOptions,
   DeleteDatabaseOptions,
 } from '@joinery/shared';
-import { SQLDialect } from './sql-dialect';
+import { SQLDialect, textOf } from './sql-dialect';
 import { TsqlBuilder } from '../../../utils/tsql-builder';
 
 export class MSSQLDialect extends SQLDialect {
@@ -25,6 +25,33 @@ export class MSSQLDialect extends SQLDialect {
   readonly supportsExtendedProperties = true;
   readonly supportsObjectComments = true;
   readonly supportsServerFileBrowsing = true;
+
+  /**
+   * `N'…'` — the national-character prefix, so a value with non-ASCII text compares as itself.
+   *
+   * Quote-doubling only: T-SQL has no backslash escape in any configuration, so doubling
+   * backslashes the way PostgreSQL needs would turn one backslash in the data into two in the
+   * predicate, and the lookup would miss the row (J-52).
+   */
+  override formatLiteral(value: unknown): string {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value === 'boolean') return value ? '1' : '0';
+
+    return `N'${textOf(value).replace(/'/g, "''")}'`;
+  }
+
+  /** `TOP` goes before the select list here, not `LIMIT` after the predicate. */
+  override selectOneByColumnSQL(ref: {
+    readonly schema: string;
+    readonly table: string;
+    readonly column: string;
+    readonly value: unknown;
+  }): string {
+    const where = `${this.quoteIdentifier(ref.column)} = ${this.formatLiteral(ref.value)}`;
+    return `SELECT TOP 1 * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where}`;
+  }
 
   quoteIdentifier(name: string): string {
     return TsqlBuilder.escapeIdentifier(name);

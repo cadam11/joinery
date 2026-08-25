@@ -13,20 +13,20 @@ on.
 
 ![The connection editor filled in for a SQL Server instance — engine, connection name, server and port, the authentication picker, and the encryption checkbox below them.](../../../assets/screenshots/connect-sql-server-dark.png)
 
-| Field                        | Default                   | Notes                                                                                                                      |
-| ---------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Database engine              | SQL Server                | Changing it resets the port and the authentication type, and replaces a username that is still another engine's convention |
-| Connection name              | —                         | A friendly name. Required to save; not required to test                                                                    |
-| Server                       | —                         | Hostname or IP. A pasted `host:port` is split across this field and Port — see below                                       |
-| Port                         | 1433                      |                                                                                                                            |
-| Authentication type          | SQL Server Authentication | Or Windows Authentication, or Microsoft Entra ID                                                                           |
-| Username / Password          | —                         | Collected for SQL Server Authentication only                                                                               |
-| Colour tag                   | none                      | Eight preset colours. The chosen colour paints a strip along the top of the status bar while that connection is active     |
-| Encrypt the connection       | on                        |                                                                                                                            |
-| Trust the server certificate | on                        |                                                                                                                            |
-| Timeout (seconds)            | 30                        | Emptying the field falls back to 30                                                                                        |
-| Default database             | blank → `master`          | Joinery substitutes `master` when the field is blank, so the greyed placeholder is what you actually get                   |
-| SSH tunnel                   | off                       | See [Connect over an SSH tunnel](../connect-ssh/)                                                                          |
+| Field                        | Default                   | Notes                                                                                                                                                                                                             |
+| ---------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database engine              | SQL Server                | Changing it resets the port and the authentication type, and replaces a username that is still another engine's convention                                                                                        |
+| Connection name              | —                         | A friendly name. Required to save; not required to test                                                                                                                                                           |
+| Server                       | —                         | Hostname or IP — IPv4, IPv6 (compressed, bracketed or with a `%zone`), or a hostname, underscores included so a Docker container name works. A pasted `host:port` is split across this field and Port — see below |
+| Port                         | 1433                      |                                                                                                                                                                                                                   |
+| Authentication type          | SQL Server Authentication | Or Windows Authentication, or Microsoft Entra ID                                                                                                                                                                  |
+| Username / Password          | —                         | Collected for SQL Server Authentication only                                                                                                                                                                      |
+| Colour tag                   | none                      | Eight preset colours. The chosen colour paints a strip along the top of the status bar while that connection is active                                                                                            |
+| Encrypt the connection       | on                        |                                                                                                                                                                                                                   |
+| Trust the server certificate | on                        |                                                                                                                                                                                                                   |
+| Timeout (seconds)            | 30                        | Emptying the field falls back to 30                                                                                                                                                                               |
+| Default database             | blank → `master`          | Joinery substitutes `master` when the field is blank, so the greyed placeholder is what you actually get                                                                                                          |
+| SSH tunnel                   | off                       | See [Connect over an SSH tunnel](../connect-ssh/)                                                                                                                                                                 |
 
 ### Server accepts a pasted host and port together
 

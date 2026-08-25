@@ -72,8 +72,23 @@ export function QueryHistoryDialog({ onDismiss, onLoad, onExecute }: QueryHistor
   /**
    * The debounced remote search. The cleanup is what makes it a debounce rather than a queue: a
    * keystroke inside the window cancels the pending call, so a burst of typing costs one round trip.
+   *
+   * **The first run is skipped** (J-121). This effect ran on mount with an empty box and fetched
+   * the whole history again 200ms later — a second identical IPC round trip on EVERY open, on top
+   * of the one the command handler had already made. It also made
+   * `query-history-host.spec.tsx` flaky at about one run in three: under full-suite load the test
+   * outlived the debounce window, so the second fetch landed before the assertion counted them.
+   *
+   * A ref rather than comparing `search` to `''`: typing and then clearing the box back to empty
+   * IS a real search, and must still reach the main process.
    */
+  const searchHasChanged = useRef(false);
   useEffect(() => {
+    if (!searchHasChanged.current) {
+      searchHasChanged.current = true;
+      return;
+    }
+
     const timer = setTimeout(() => {
       void useQueryHistoryStore.getState().search(search);
       setSelectedIndex(0);

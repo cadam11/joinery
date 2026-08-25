@@ -146,14 +146,100 @@ export function renderMarkdown(md: string): string {
  * model-authored CSS is known to reach here. Scoping or re-providing that CSS from
  * app styles is tracked as follow-up work.
  */
-export function sanitizeDiagramSvg(svg: string): string {
+export function sanitizeDiagramSvg(svg: string, scopeTo?: string): string {
   if (typeof svg !== 'string') {
     throw new TypeError(`sanitizeDiagramSvg expects a string, received ${typeof svg}`);
   }
-  return DOMPurify.sanitize(svg, {
+  const clean = DOMPurify.sanitize(svg, {
     USE_PROFILES: { svg: true, svgFilters: true },
     FORBID_TAGS: ['script', 'foreignObject'],
     FORBID_ATTR: ['xlink:href', 'href', 'formaction'],
     ALLOW_DATA_ATTR: false,
   });
+
+  return scopeTo === undefined ? clean : withScopedStyleOnly(clean, scopeTo);
+}
+
+/**
+ * Drop any `<style>` whose rules are not confined to `#${scopeTo}` (J-25).
+ *
+ * A `<style>` inside an inline SVG joins the DOCUMENT stylesheet set, so CSS that escapes the
+ * diagram restyles the whole app. It cannot simply be forbidden — every colour mermaid emits lives
+ * in that block — so this checks rather than strips: mermaid at `securityLevel: 'strict'` prefixes
+ * every selector with the diagram's own id, and a block that does not is not mermaid's.
+ *
+ * Defence in depth, not a live fix: no model-authored CSS is known to reach here. Mermaid rejected
+ * the `%%{init: themeCSS}%%` directive, a `classDef` brace escape and a `url()` payload when those
+ * were tried against it. This closes the path anyway, because "no known way in" is a statement
+ * about today's mermaid.
+ *
+ * **Fails closed.** A block the browser will not parse into rules is dropped rather than trusted —
+ * an unparseable stylesheet is exactly what a payload aiming at a parser quirk looks like, and the
+ * cost of being wrong is a colourless diagram rather than a restyled app.
+ */
+function withScopedStyleOnly(svg: string, scopeTo: string): string {
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const styles = Array.from(parsed.querySelectorAll('style'));
+  if (styles.length === 0) return svg;
+
+  for (const style of styles) {
+    if (!everyRuleIsScopedTo(style.textContent ?? '', scopeTo)) style.remove();
+  }
+  return new XMLSerializer().serializeToString(parsed.documentElement);
+}
+
+/**
+ * True when every selector in `css` is confined to `#${scopeTo}`.
+ *
+ * Parsing is the browser's, through a detached stylesheet: hand-rolling CSS parsing is how a
+ * scoping check gets fooled by a comment, a string or an `@media` block.
+ */
+function everyRuleIsScopedTo(css: string, scopeTo: string): boolean {
+  if (css.trim() === '') return true;
+
+  const holder = document.createElement('style');
+  holder.textContent = css;
+  document.head.append(holder);
+  try {
+    const rules = holder.sheet?.cssRules;
+    // No sheet, or a stylesheet that parsed to nothing while the text was not empty: fail closed.
+    if (rules === undefined || rules.length === 0) return false;
+    return Array.from(rules).every(rule => ruleIsScopedTo(rule, scopeTo));
+  } catch {
+    // Cross-origin or an environment without CSSOM. Fail closed for the same reason.
+    return false;
+  } finally {
+    holder.remove();
+  }
+}
+
+/**
+ * True when `selector` begins with `#${id}` AND the id ENDS there.
+ *
+ * The boundary is the whole point: `#d1-evil` starts with `#d1`, so a bare `startsWith` would
+ * admit any id that merely shares a prefix with the diagram's. A CSS identifier continues with
+ * letters, digits, `-`, `_` or an escape, so anything else — end of string, whitespace, a
+ * combinator, `.`, `#`, `[`, `:` — is a real end.
+ */
+function startsWithId(selector: string, id: string): boolean {
+  const prefix = `#${id}`;
+  if (!selector.startsWith(prefix)) return false;
+
+  const next = selector.charAt(prefix.length);
+  return next === '' || !/[\w\-\\]/.test(next);
+}
+
+/** One rule, and the grouping rules that can contain others. */
+function ruleIsScopedTo(rule: CSSRule, scopeTo: string): boolean {
+  const grouped = (rule as CSSGroupingRule).cssRules;
+  if (grouped !== undefined) {
+    return Array.from(grouped).every(inner => ruleIsScopedTo(inner, scopeTo));
+  }
+
+  const selector = (rule as CSSStyleRule).selectorText;
+  // A rule with no selector is an at-rule this check cannot reason about — `@font-face`,
+  // `@import`. Neither belongs in a diagram, so neither is allowed to pass.
+  if (typeof selector !== 'string') return false;
+
+  return selector.split(',').every(one => startsWithId(one.trim(), scopeTo));
 }

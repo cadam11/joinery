@@ -35,9 +35,14 @@ With a query tab in front, the assistant is sent:
 - the selected database,
 - **the SQL in that editor**.
 
-> **Careful** — the context is derived from the **active query tab**. With a chat _tab_ in front,
-> there is no active query tab, so there is no database context at all — and the context line says
-> so: _No database context — open a query tab._
+A **chat tab** carries the connection it was opened from, so it keeps that context with a chat tab
+in front — popping the panel out with **⧉** takes the panel's connection and database with it, and
+the palette's _Open chat tab_ uses the connection a new query tab would target. What a chat tab does
+not carry is **the SQL in an editor**: there is no editor in front of you, so there is none to send.
+
+> **Note** — a chat tab opened when nothing had a connection has no context, and the line says so:
+> _No database context — open a query tab._ It never implies a database the model was not told
+> about.
 
 ## Asking
 
@@ -57,7 +62,8 @@ something and it stays put; a **Jump to latest** button appears.
 
 Answers are rendered as Markdown, with syntax highlighting, mermaid diagrams and per-block copy
 buttons. Diagrams and copy buttons appear when a message **finishes** — a fence is unterminated for
-as long as it is being written.
+as long as it is being written. Diagrams already on screen are redrawn when you switch between the
+ink and ivory themes, so an old message's colours never disagree with the canvas under it.
 
 ## The model picker
 

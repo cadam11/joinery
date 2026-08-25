@@ -188,3 +188,73 @@ describe('chat store — per-instance isolation', () => {
     expect(first.getState().streamingContent).toBe('');
   });
 });
+
+describe('switching conversation while one is streaming (J-63)', () => {
+  /** One store, a chat double holding two conversations, so switching really re-reads main. */
+  function makeStore(): { store: ChatStore; emit: (chunk: ChatStreamChunk) => void } {
+    const streamChunks = recordSubscription<ChatStreamChunk>();
+    const held = new Map([
+      ['conv-1', { id: 'conv-1', title: 'One', messages: [], createdAt: 'a', updatedAt: 'a' }],
+      ['conv-2', { id: 'conv-2', title: 'Two', messages: [], createdAt: 'b', updatedAt: 'b' }],
+    ]);
+
+    teardowns.push(
+      installJoineryMock({
+        chat: {
+          onStreamChunk: streamChunks.subscribe,
+          cancelStream: () => Promise.resolve(),
+          // Main is authoritative and answers from its own live objects, which is the whole reason
+          // the renderer must not keep a second copy.
+          listConversations: () => Promise.resolve([...held.values()]),
+          getConversation: (id: string) => Promise.resolve(held.get(id) ?? null),
+        },
+      })
+    );
+
+    const capabilities = createCapabilitiesStore();
+    const tab = createTabStore();
+    const explorer = createExplorerStore({ capabilities });
+    const connection = createConnectionStore({ tab, explorer, capabilities });
+    teardowns.push(() => connection.getState().destroy());
+
+    const store = createChatStore(
+      { connection, tab, capabilities },
+      { initialConversationId: 'conv-1' }
+    );
+    teardowns.push(() => store.getState().destroy());
+    return { store, emit: streamChunks.emit };
+  }
+
+  it('keeps no transcript in the conversation list, so none can go stale', async () => {
+    const { store, emit } = makeStore();
+    await store.getState().initialize();
+
+    emit({ conversationId: 'conv-1', delta: 'half an ans', done: false });
+    expect(store.getState().streamingContent).toBe('half an ans');
+
+    // The list is summaries. Before J-63 each entry carried a `messages` array captured at load
+    // and never updated again — a transcript frozen at the moment a stream started.
+    for (const summary of store.getState().conversations) {
+      expect('messages' in summary).toBe(false);
+    }
+  });
+
+  it('re-reads the transcript from main on switch-back rather than from its own copy', async () => {
+    const { store, emit } = makeStore();
+    await store.getState().initialize();
+
+    emit({ conversationId: 'conv-1', delta: 'partial', done: false });
+    await store.getState().selectConversation('conv-2');
+
+    // Chunks for the conversation that is no longer active are dropped — one subscription serves
+    // every conversation, and `applyChunk` filters by the active id.
+    emit({ conversationId: 'conv-1', delta: ' more', done: false });
+    expect(store.getState().messages).toEqual([]);
+
+    await store.getState().selectConversation('conv-1');
+    expect(store.getState().activeConversationId).toBe('conv-1');
+    // Empty because main holds no messages for it in this double — the point is WHERE it came
+    // from: `getConversation`, not a snapshot the store had been carrying since load.
+    expect(store.getState().messages).toEqual([]);
+  });
+});
