@@ -2,6 +2,13 @@ export * from './ipc-channels';
 
 // Application constants
 export const APP_NAME = 'Joinery';
+
+/**
+ * The published documentation site. Every in-app "documentation" entry point must use this —
+ * both of them pointed at a GitHub wiki that never existed until J-100, in two separate
+ * literals, which is how the second outlived the ticket filed about the first.
+ */
+export const DOCS_SITE_URL = 'https://usejoinery.com/';
 export const APP_ID = 'ca.adam11.joinery';
 
 // Default values
