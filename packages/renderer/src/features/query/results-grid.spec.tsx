@@ -18,6 +18,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS } from '@joinery/shared';
+import { MAX_ROWS_SETTING_LABEL } from '../settings/settings-labels';
 import type { AppSettings, ExportOptions, ExportResult, ResultSet } from '@joinery/shared';
 
 import { dispatchCommand } from '../../commands';
@@ -354,6 +355,28 @@ describe('the counts', () => {
     expect(banner.textContent).toContain('showing first');
     expect(screen.getByTestId('results-displayed-count').textContent).toBe('10');
     expect(screen.getByTestId('results-row-count').textContent).toBe('40,000');
+  });
+
+  it('names the cap by the label the settings control actually shows (J-107)', async () => {
+    // The tooltip used to say "maximum rows to display" — the field name — while the control read
+    // "Maximum rows to fetch", so it named a setting the user could not find. Both now read the
+    // same constant, and this asserts the rendered text against that constant rather than against
+    // a transcription of it, which is the failure mode being guarded.
+    const { unmount } = mount(
+      resultSet({
+        rows: Array.from({ length: 10 }, (_, index) => ({ id: index, email: null })),
+        rowCount: 40_000,
+        truncated: true,
+      })
+    );
+    teardowns.push(unmount);
+
+    // Hovering is how the tooltip renders at all — its content is a prop until then.
+    await userEvent.hover(screen.getByTestId('results-truncated'));
+
+    const tip = await screen.findByRole('tooltip');
+    expect(tip.textContent).toContain(MAX_ROWS_SETTING_LABEL);
+    expect(tip.textContent).not.toContain('maximum rows to display');
   });
 
   it('reports a selection when the grid has one', async () => {
