@@ -256,6 +256,67 @@ describe('the stream across a confirmation (J-61)', () => {
     expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
   });
 
+  it('ends the turn and disarms the card when the user stops while it waits (J-131)', async () => {
+    // Stop has to be a real exit from the paused state. While paused there is no controller to
+    // abort — the loop already returned at the break — so a Stop that only aborted did nothing at
+    // all here, leaving the card armed for an approval that would resume a finished turn.
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-131');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+
+    service.stopStream(conversation.id, win as unknown as BrowserWindow);
+
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+    const saved = service.getConversation(conversation.id);
+    const card = [...(saved?.messages ?? [])]
+      .reverse()
+      .find(message => message.role === 'assistant')?.toolCalls?.[0];
+    expect(card?.pendingConfirmation).toBe(false);
+    expect(card?.error).toBe('Stopped by user');
+  });
+
+  it('refuses an approval that arrives after Stop, with no second terminal chunk (J-131)', async () => {
+    // The J-61 hang, from the other end: approving a card Stop left on screen used to start a
+    // continuation streaming into a message the renderer had already finalized.
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-131');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+    service.stopStream(conversation.id, win as unknown as BrowserWindow);
+
+    const outcome = await service.confirmToolCall(
+      conversation.id,
+      'tool-1',
+      true,
+      win as unknown as BrowserWindow
+    );
+
+    expect(outcome).toBe('already-resolved');
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+    // No continuation loop: the provider was asked exactly once, for the turn Stop ended.
+    expect(doubles.streams).toBe(1);
+  });
+
+  it('sends nothing when Stop arrives with no confirmation parked (J-131)', async () => {
+    // The other half of the pair: Stop on an ordinary turn stays the renderer's business, and a
+    // second terminal chunk here would finalize a message twice.
+    const conversation = service.createConversation('J-131');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'hello' },
+      win as unknown as BrowserWindow
+    );
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+
+    service.stopStream(conversation.id, win as unknown as BrowserWindow);
+
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+  });
+
   it('still ends a turn that never pauses', async () => {
     // The other half: with no confirmation in play the terminal chunk must still arrive, or every
     // ordinary answer would hang as "streaming" forever.

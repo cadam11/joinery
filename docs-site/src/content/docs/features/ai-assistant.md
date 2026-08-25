@@ -102,6 +102,10 @@ double-click cannot execute a DDL statement twice.
 **Cancel** is final. The cancelled card records the refusal, and approving the same request
 afterwards does nothing.
 
+The turn stays open while the card waits, so the composer's button is **Stop** rather than a
+disabled Send. Pressing it answers the request too: the card is marked _Stopped by user_, the
+composer comes back, and — as with Cancel — approving that request afterwards does nothing.
+
 > **Note** — the card does not invent a result. It reads as pending until the real result arrives,
 > whichever way you answered.
 
@@ -141,45 +145,46 @@ message that would be refused.
 <details>
 <summary>Where this page's facts come from</summary>
 
-| Claim                                                                  | Source                                                                                         |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| ⇧⌘I toggles the panel; the palette opens a chat tab                    | `packages/renderer/src/commands/catalogue.ts:533-550`, `features/chat/chat-commands.tsx:25-30` |
-| "Open this conversation as a tab" closes the panel first               | `packages/renderer/src/features/chat/chat-surface.tsx:210-215, 262-274`                        |
-| Every chat tab has its own store                                       | `packages/renderer/src/features/chat/chat-surface.tsx:11-17`                                   |
-| The context line reads the same source the message does                | `packages/renderer/src/features/chat/chat-surface.tsx:80-107`                                  |
-| Connection, database, engine, variant and the editor's SQL are sent    | `packages/renderer/src/state/chat.ts:403-423`                                                  |
-| Context derives from the active query tab, so a chat tab has none      | `packages/renderer/src/features/chat/chat-surface.tsx:83-87`, `state/chat.ts:406-409`          |
-| The exact "no database context" wording                                | `packages/renderer/src/features/chat/chat-surface.tsx:94-97`                                   |
-| Enter sends, Shift+Enter is a newline                                  | `packages/renderer/src/features/chat/chat-composer.tsx:348-353`                                |
-| The box grows and caps at about eight lines                            | `packages/renderer/src/features/chat/chat-composer.tsx:354-356`                                |
-| The four opening suggestions, verbatim                                 | `packages/renderer/src/features/chat/chat-transcript.tsx:42-51`                                |
-| The box is disabled and Send becomes Stop while streaming              | `packages/renderer/src/features/chat/chat-composer.tsx:282-283, 359-384`                       |
-| A stopped answer is marked in the transcript                           | `packages/renderer/src/state/chat.ts:159-168`                                                  |
-| Scroll only follows while pinned to the bottom; a Jump button appears  | `packages/renderer/src/features/chat/chat-transcript.tsx:4-14, 39-40`                          |
-| Mermaid and code-copy switch on when a message completes               | `packages/renderer/src/features/chat/chat-message.tsx:21-27`                                   |
-| Answers render through the sanitising markdown pipeline                | `packages/renderer/src/features/chat/chat-message.tsx:30-36`                                   |
-| Auto, and re-selecting a pinned model returns to Auto                  | `packages/renderer/src/features/chat/chat-composer.tsx:60-66, 222-256`                         |
-| The cost-tier picker appears only beside a pinned auto-router          | `packages/renderer/src/features/chat/chat-composer.tsx:104-106, 315-319`                       |
-| The two auto-router model names                                        | `packages/shared/src/types/ai.types.ts:54-57`                                                  |
-| It writes the same per-vendor setting the setup dialog edits           | `packages/renderer/src/features/chat/chat-surface.tsx:128-153`                                 |
-| The model picker is hidden when no vendor is enabled                   | `packages/renderer/src/features/chat/chat-composer.tsx:200-202, 312`                           |
-| A tool card shows name, duration and a status glyph                    | `packages/renderer/src/features/chat/tool-call-card.tsx:172-244`                               |
-| Table results are rendered as a table with a truncation line           | `packages/renderer/src/features/chat/tool-call-card.tsx:54-111`                                |
-| Non-tabular results are JSON, capped at 4,000 characters               | `packages/renderer/src/features/chat/tool-call-card.tsx:57-69`                                 |
-| A failure shows the tool's own error                                   | `packages/renderer/src/features/chat/tool-call-card.tsx:250-262`                               |
-| The confirmation names the tool, describes it, and shows the arguments | `packages/renderer/src/features/chat/tool-call-card.tsx:128-149`                               |
-| Run it and Cancel, and both disarm on the first click                  | `packages/renderer/src/features/chat/tool-call-card.tsx:114-126, 149-170`                      |
-| A repeat approval or decline is refused, and a cancel is final         | `packages/main/src/services/ai/chat-service.ts:335-406`                                        |
-| The composer's refusal sentence while a confirmation waits             | `packages/renderer/src/features/chat/chat-composer.tsx:325-329`                                |
-| The card stays pending until the real result lands                     | `packages/renderer/src/features/chat/tool-call-card.tsx:31-33`                                 |
-| The conversation list toggle and the new-conversation button           | `packages/renderer/src/features/chat/chat-surface.tsx:229-260`                                 |
-| The title is the first 50 characters of the first message              | `packages/renderer/src/state/chat.ts:39-40, 389-398`                                           |
-| Rename in place, and delete asks twice                                 | `packages/renderer/src/features/chat/conversation-list.tsx:20, 66-92`                          |
-| Conversations are held by the main process, one JSON file each         | `packages/main/src/services/ai/chat-service.ts:99-137`                                         |
-| The five UI actions the model can ask for                              | `packages/renderer/src/state/chat.ts:169-200`, `features/chat/chat-surface.tsx:186-193`        |
-| A query tab opened this way does not auto-execute unless asked         | `packages/renderer/src/state/chat.ts:180-190`                                                  |
-| Each surface consumes its own parked action                            | `packages/renderer/src/features/chat/chat-surface.tsx:26-31`                                   |
-| The no-provider empty state, its button and the placeholder            | `packages/renderer/src/features/chat/chat-transcript.tsx:64-85`, `chat-composer.tsx:340-346`   |
-| The gate is enabled-vendor-with-a-key, the same one main uses          | `packages/renderer/src/features/chat/chat-transcript.tsx:16-23`                                |
+| Claim                                                                  | Source                                                                                                 |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| ⇧⌘I toggles the panel; the palette opens a chat tab                    | `packages/renderer/src/commands/catalogue.ts:533-550`, `features/chat/chat-commands.tsx:25-30`         |
+| "Open this conversation as a tab" closes the panel first               | `packages/renderer/src/features/chat/chat-surface.tsx:210-215, 262-274`                                |
+| Every chat tab has its own store                                       | `packages/renderer/src/features/chat/chat-surface.tsx:11-17`                                           |
+| The context line reads the same source the message does                | `packages/renderer/src/features/chat/chat-surface.tsx:80-107`                                          |
+| Connection, database, engine, variant and the editor's SQL are sent    | `packages/renderer/src/state/chat.ts:403-423`                                                          |
+| Context derives from the active query tab, so a chat tab has none      | `packages/renderer/src/features/chat/chat-surface.tsx:83-87`, `state/chat.ts:406-409`                  |
+| The exact "no database context" wording                                | `packages/renderer/src/features/chat/chat-surface.tsx:94-97`                                           |
+| Enter sends, Shift+Enter is a newline                                  | `packages/renderer/src/features/chat/chat-composer.tsx:348-353`                                        |
+| The box grows and caps at about eight lines                            | `packages/renderer/src/features/chat/chat-composer.tsx:354-356`                                        |
+| The four opening suggestions, verbatim                                 | `packages/renderer/src/features/chat/chat-transcript.tsx:42-51`                                        |
+| The box is disabled and Send becomes Stop while streaming              | `packages/renderer/src/features/chat/chat-composer.tsx:282-283, 359-384`                               |
+| A stopped answer is marked in the transcript                           | `packages/renderer/src/state/chat.ts:207-217`                                                          |
+| Stop answers a waiting confirmation instead of leaving it armed        | `packages/renderer/src/state/chat.ts:178-205`, `packages/main/src/services/ai/chat-service.ts:216-254` |
+| Scroll only follows while pinned to the bottom; a Jump button appears  | `packages/renderer/src/features/chat/chat-transcript.tsx:4-14, 39-40`                                  |
+| Mermaid and code-copy switch on when a message completes               | `packages/renderer/src/features/chat/chat-message.tsx:21-27`                                           |
+| Answers render through the sanitising markdown pipeline                | `packages/renderer/src/features/chat/chat-message.tsx:30-36`                                           |
+| Auto, and re-selecting a pinned model returns to Auto                  | `packages/renderer/src/features/chat/chat-composer.tsx:60-66, 222-256`                                 |
+| The cost-tier picker appears only beside a pinned auto-router          | `packages/renderer/src/features/chat/chat-composer.tsx:104-106, 315-319`                               |
+| The two auto-router model names                                        | `packages/shared/src/types/ai.types.ts:54-57`                                                          |
+| It writes the same per-vendor setting the setup dialog edits           | `packages/renderer/src/features/chat/chat-surface.tsx:128-153`                                         |
+| The model picker is hidden when no vendor is enabled                   | `packages/renderer/src/features/chat/chat-composer.tsx:200-202, 312`                                   |
+| A tool card shows name, duration and a status glyph                    | `packages/renderer/src/features/chat/tool-call-card.tsx:172-244`                                       |
+| Table results are rendered as a table with a truncation line           | `packages/renderer/src/features/chat/tool-call-card.tsx:54-111`                                        |
+| Non-tabular results are JSON, capped at 4,000 characters               | `packages/renderer/src/features/chat/tool-call-card.tsx:57-69`                                         |
+| A failure shows the tool's own error                                   | `packages/renderer/src/features/chat/tool-call-card.tsx:250-262`                                       |
+| The confirmation names the tool, describes it, and shows the arguments | `packages/renderer/src/features/chat/tool-call-card.tsx:128-149`                                       |
+| Run it and Cancel, and both disarm on the first click                  | `packages/renderer/src/features/chat/tool-call-card.tsx:114-126, 149-170`                              |
+| A repeat approval or decline is refused, and a cancel is final         | `packages/main/src/services/ai/chat-service.ts:335-406`                                                |
+| The composer's refusal sentence while a confirmation waits             | `packages/renderer/src/features/chat/chat-composer.tsx:325-329`                                        |
+| The card stays pending until the real result lands                     | `packages/renderer/src/features/chat/tool-call-card.tsx:31-33`                                         |
+| The conversation list toggle and the new-conversation button           | `packages/renderer/src/features/chat/chat-surface.tsx:229-260`                                         |
+| The title is the first 50 characters of the first message              | `packages/renderer/src/state/chat.ts:39-40, 389-398`                                                   |
+| Rename in place, and delete asks twice                                 | `packages/renderer/src/features/chat/conversation-list.tsx:20, 66-92`                                  |
+| Conversations are held by the main process, one JSON file each         | `packages/main/src/services/ai/chat-service.ts:99-137`                                                 |
+| The five UI actions the model can ask for                              | `packages/renderer/src/state/chat.ts:169-200`, `features/chat/chat-surface.tsx:186-193`                |
+| A query tab opened this way does not auto-execute unless asked         | `packages/renderer/src/state/chat.ts:180-190`                                                          |
+| Each surface consumes its own parked action                            | `packages/renderer/src/features/chat/chat-surface.tsx:26-31`                                           |
+| The no-provider empty state, its button and the placeholder            | `packages/renderer/src/features/chat/chat-transcript.tsx:64-85`, `chat-composer.tsx:340-346`           |
+| The gate is enabled-vendor-with-a-key, the same one main uses          | `packages/renderer/src/features/chat/chat-transcript.tsx:16-23`                                        |
 
 </details>

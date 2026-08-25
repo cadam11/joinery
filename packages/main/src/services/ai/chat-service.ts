@@ -214,6 +214,46 @@ export class ChatService extends BaseSingleton {
   }
 
   /**
+   * The user pressed Stop. Aborts a live loop AND answers a confirmation the turn is parked on.
+   *
+   * Aborting alone is not an exit from the paused state (J-131): while the loop waits for an answer
+   * it has already returned, so `activeStreams` is empty and there is nothing to abort. The card
+   * stayed armed and approving it afterwards started a continuation streaming into a message the
+   * renderer had already finalized — the J-61 hang, reached from the other end.
+   */
+  stopStream(conversationId: string, mainWindow: BrowserWindow): void {
+    this.cancelStream(conversationId);
+    this.declineParkedToolCalls(conversationId, mainWindow);
+  }
+
+  /**
+   * Answer every tool call the conversation is parked on as "stopped by the user".
+   *
+   * Scoped to the last assistant message because that is exactly where `confirmToolCall` looks a
+   * card's id up: anything outside it is already unanswerable. Marking each id resolved is what
+   * makes a later approval land on the J-60 `'already-resolved'` branch, which stays silent — so
+   * the terminal chunk sent here is the turn's only one.
+   */
+  private declineParkedToolCalls(conversationId: string, mainWindow: BrowserWindow): void {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    const lastAssistant = [...conversation.messages].reverse().find(m => m.role === 'assistant');
+    const parked = (lastAssistant?.toolCalls ?? []).filter(tc => tc.pendingConfirmation === true);
+    if (parked.length === 0) return;
+
+    for (const toolCall of parked) {
+      this.markToolCallResolved(conversationId, toolCall.id);
+      toolCall.pendingConfirmation = false;
+      toolCall.confirmed = false;
+      toolCall.success = false;
+      toolCall.error = 'Stopped by user';
+    }
+    this.saveConversation(conversation);
+    this.endUnansweredTurn(conversationId, mainWindow);
+  }
+
+  /**
    * Abort all active streams (used during app shutdown)
    */
   abortAll(): void {
