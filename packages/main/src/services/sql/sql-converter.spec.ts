@@ -156,6 +156,41 @@ describe('SQLConverterService — failure handling', () => {
     expect(out.targetDialect).toBe('postgres');
   });
 
+  it('names the module in a ModuleNotFoundError instead of blaming the interpreter (J-119)', async () => {
+    // The empirical case from the ticket: a real traceback, whose `File "…"` line contains the
+    // substring `python` because the script lives in a folder called `python`. The old classifier
+    // matched on that substring and told the user to install Python 3, which they already had.
+    const traceback = [
+      'Python process exited with code 1:',
+      '  File "/Applications/Joinery.app/Contents/Resources/resources/python/sqlglot-server.py", line 8',
+      '    import fastapi',
+      "ModuleNotFoundError: No module named 'fastapi'",
+    ].join('\n');
+
+    const fake = new FakeClient({ startError: new Error(traceback) });
+    const out = await new SQLConverterService(fake).convert('SELECT 1', 'mssql', 'postgresql');
+
+    expect(out.error).toContain('fastapi');
+    expect(out.error).toMatch(/pip install/);
+    // The two wrong answers: "install Python", and the generic interpreter message.
+    expect(out.error).not.toMatch(/install Python 3/);
+    expect(out.error).not.toMatch(/suitable interpreter/);
+  });
+
+  it('reads a dotted module name out of the traceback', async () => {
+    const fake = new FakeClient({
+      startError: new Error("ModuleNotFoundError: No module named 'uvicorn.protocols'"),
+    });
+    const out = await new SQLConverterService(fake).convert('SELECT 1', 'mssql', 'postgresql');
+
+    // Asserting on the FIX, not on the module name: the raw traceback already contains the name,
+    // so a name-only assertion passes even with the classification removed. (It did.)
+    expect(out.error).toBe(
+      'SQL conversion could not import uvicorn.protocols, even though it looked installed. ' +
+        'Reinstall it: python3 -m pip install --force-reinstall uvicorn.protocols'
+    );
+  });
+
   it('explains a spawn failure that got past the probe', async () => {
     // With an injected client the probe is skipped — it describes this host's Python, and an
     // injected client is somebody else's transport. So this is the narrow case the fallback is
