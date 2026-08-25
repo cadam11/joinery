@@ -81,10 +81,12 @@ export interface ChatSurfaceProps {
  * What the model is told about the database, shown to the user.
  *
  * It reads the SAME source `sendMessage` does — `selectFocusedConnectionId`, which derives from the
- * **active query tab** — so this line cannot claim context the model does not get. That has a
- * consequence worth seeing rather than hiding: with a chat TAB in front, the active tab is not a
- * query tab, so there is no context at all. The line says so, and the fix (a chat tab remembering the
- * connection it was opened from) is a store change this task did not make.
+ * **active tab** — so this line cannot claim context the model does not get.
+ *
+ * That used to mean a chat TAB had none at all: focus derived from the active QUERY tab, and with a
+ * chat tab in front there is none. J-59 made a chat tab carry the connection it was opened from,
+ * the way every other tab type does, so this line now reads that instead of apologising for it.
+ * A tab opened with no context still says so.
  */
 function ChatContextLine() {
   const connectionId = useTabStore(selectFocusedConnectionId);
@@ -208,10 +210,19 @@ export function ChatSurface({ store, mode }: ChatSurfaceProps) {
   const stop = useCallback((): void => store.getState().cancelStream(), [store]);
 
   const popOutToTab = useCallback((): void => {
+    // Read BEFORE the panel closes and before the new tab becomes active: both change what the
+    // focus selectors answer, and the point is to carry the context the user was looking at into
+    // the tab (J-59). A panel with no context hands none on, which is correct.
+    const tabs = tabStore.getState();
+    const target = {
+      connectionId: selectFocusedConnectionId(tabs) ?? undefined,
+      databaseName: selectFocusedDatabaseName(tabs) ?? undefined,
+    };
+
     // Closing first, then opening: the tab takes the conversation with it, and leaving both on screen
     // would give one conversation two live instances writing the same transcript.
     store.getState().closePanel();
-    tabStore.getState().openChatTab(store.getState().activeConversationId ?? undefined);
+    tabStore.getState().openChatTab(store.getState().activeConversationId ?? undefined, target);
   }, [store]);
 
   return (

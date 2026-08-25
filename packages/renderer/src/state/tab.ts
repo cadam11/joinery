@@ -157,7 +157,14 @@ export interface TabStoreState {
     tableName?: string,
     schema?: string
   ) => string;
-  readonly openChatTab: (conversationId?: string) => string;
+  /**
+   * Opens a chat tab, optionally carrying the connection it was opened from (J-59) so the model
+   * gets database context on the surface built for a long conversation.
+   */
+  readonly openChatTab: (
+    conversationId?: string,
+    target?: { readonly connectionId?: string; readonly databaseName?: string }
+  ) => string;
   readonly showWelcome: () => void;
 
   readonly closeTabsForDatabase: (connectionId: string, databaseName: string) => void;
@@ -459,11 +466,18 @@ export function createTabStore(persistence: RendererStatePersistence = rendererS
       },
 
       // Each chat tab is an independent instance, so this never focuses an existing one.
-      openChatTab: conversationId =>
+      //
+      // `target` is the connection the tab was opened FROM, stored the way every other tab type
+      // stores it (J-59). Without it a chat tab had no database context at all: focus derived from
+      // the active query tab, and with a chat tab in front there is none — so the surface meant for
+      // the longer conversation was the one that could not see the database.
+      openChatTab: (conversationId, target) =>
         get().openTab({
           type: 'chat',
           title: 'AI Chat',
           icon: 'smart_toy',
+          ...(target?.connectionId === undefined ? {} : { connectionId: target.connectionId }),
+          ...(target?.databaseName === undefined ? {} : { databaseName: target.databaseName }),
           metadata: conversationId ? { conversationId } : undefined,
         }),
 
@@ -703,6 +717,23 @@ export const useTabStore = tabStore;
 export interface TabsSlice {
   readonly tabs: readonly Tab[];
   readonly activeTabId: string;
+}
+
+/**
+ * The database the most recent query tab on `connectionId` was looking at, if any.
+ *
+ * For the chat tab the command palette opens (J-59): it has no surface to inherit context from, so
+ * it takes the connection a user-driven action would target and the database that connection was
+ * last used with. Tab order is creation order, so the last match is the most recent.
+ */
+export function selectLastDatabaseFor(state: TabsSlice, connectionId: string): string | undefined {
+  for (let index = state.tabs.length - 1; index >= 0; index -= 1) {
+    const tab = state.tabs[index];
+    if (tab?.type === 'query' && tab.connectionId === connectionId && tab.databaseName) {
+      return tab.databaseName;
+    }
+  }
+  return undefined;
 }
 
 export function selectActiveTab(state: TabsSlice): Tab | null {

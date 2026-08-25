@@ -43,7 +43,12 @@ import type {
 } from '@joinery/shared';
 import { installJoineryMock, removeJoineryMock } from '../test/joinery-mock';
 import { createCapabilitiesStore, selectCapabilitiesFor, selectVariantFor } from './capabilities';
-import { createConnectionStore, type ConnectionStore } from './connection';
+import {
+  createConnectionStore,
+  selectFocusedConnectionId,
+  selectFocusedDatabaseName,
+  type ConnectionStore,
+} from './connection';
 import { setDiagnosticsSink, setNotifier, type Notifier } from './diagnostics';
 import { createExplorerStore, type ExplorerStore } from './explorer';
 import { createTabStore, type TabStore } from './tab';
@@ -619,5 +624,44 @@ describe('connection store — capabilities wiring', () => {
 
     expect(selectCapabilitiesFor(profileA.id)(capabilities.getState())).toEqual(FULL_CAPABILITIES);
     expect(selectVariantFor(profileA.id)(capabilities.getState())).toBeUndefined();
+  });
+});
+
+describe('where database context comes from (J-59)', () => {
+  /**
+   * Focus used to derive from the active QUERY tab and nothing else. The chat SIDE PANEL therefore
+   * had context — the query tab behind it was still active — while a chat TAB had none, and the
+   * model was asked about "your database" with no connection, no database and no engine. The tab
+   * is the surface a user opens for the LONGER conversation, so it was the weaker one.
+   */
+  function tabsWith(active: { type: string; connectionId?: string; databaseName?: string }) {
+    const tab = { id: 't1', title: 't', icon: 'i', ...active } as never;
+    return { tabs: [tab], activeTabId: 't1' } as never;
+  }
+
+  it('reads a query tab, as it always has', () => {
+    const state = tabsWith({ type: 'query', connectionId: 'c1', databaseName: 'sales' });
+    expect(selectFocusedConnectionId(state)).toBe('c1');
+    expect(selectFocusedDatabaseName(state)).toBe('sales');
+  });
+
+  it('reads a chat tab’s own target, which it could not before', () => {
+    const state = tabsWith({ type: 'chat', connectionId: 'c1', databaseName: 'sales' });
+    expect(selectFocusedConnectionId(state)).toBe('c1');
+    expect(selectFocusedDatabaseName(state)).toBe('sales');
+  });
+
+  it('still answers null for a chat tab opened without one', () => {
+    // Opening from a surface that had no context hands none on — and the context line says so
+    // rather than implying a database the model was never told about.
+    const state = tabsWith({ type: 'chat' });
+    expect(selectFocusedConnectionId(state)).toBeNull();
+    expect(selectFocusedDatabaseName(state)).toBeNull();
+  });
+
+  it('still answers null for a tab type that carries no connection', () => {
+    // Deliberately NOT widened to every tab type: a welcome tab has no target to speak for.
+    const state = tabsWith({ type: 'welcome' });
+    expect(selectFocusedConnectionId(state)).toBeNull();
   });
 });

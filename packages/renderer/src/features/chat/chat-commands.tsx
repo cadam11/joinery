@@ -20,12 +20,30 @@
 
 import { useCommand } from '../../commands';
 import { chatPanelStore } from '../../state/chat';
-import { tabStore } from '../../state/tab';
+import {
+  connectionStore,
+  selectFocusedConnectionId,
+  selectFocusedDatabaseName,
+} from '../../state/connection';
+import { selectLastDatabaseFor, tabStore } from '../../state/tab';
 
 export function ChatCommands() {
   useCommand('toggle-chat-panel', () => chatPanelStore.getState().togglePanel());
   useCommand('open-chat-tab', () => {
-    tabStore.getState().openChatTab();
+    // The palette entry has no surface to inherit from, so it takes the connection a user-driven
+    // action would target anyway — the same resolution ⌘N uses (J-59). Without it the tab opens
+    // with no database context at all.
+    const connection = connectionStore.getState();
+    const tabs = tabStore.getState();
+    const connectionId =
+      selectFocusedConnectionId(tabs) ?? connection.mostRecentConnectionId() ?? undefined;
+
+    tabStore.getState().openChatTab(undefined, {
+      connectionId,
+      databaseName:
+        selectFocusedDatabaseName(tabs) ??
+        (connectionId === undefined ? undefined : selectLastDatabaseFor(tabs, connectionId)),
+    });
   });
   return null;
 }
