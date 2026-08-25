@@ -116,11 +116,12 @@ describe('the engine option matrix', () => {
     expect(engineBackupOptions('mysql').extension).toBe('sql');
   });
 
-  it('offers only the two backup types the T-SQL builder honours', () => {
-    // Gap 4: `backupType: 'log'` fell through both arms of `tsql-builder.ts:126-130` and ran a FULL
-    // backup under a label promising a log backup. This is the assertion that keeps it out.
-    expect(BACKUP_TYPES.map(type => type.value)).toEqual(['full', 'differential']);
-    expect(BACKUP_TYPES.map(type => type.value)).not.toContain('log');
+  it('offers every backup type the T-SQL builder honours, log included', () => {
+    // Gap 4 (J-48a): `backupType: 'log'` used to fall through both arms of the builder's type
+    // branch and run a FULL backup — overwriting the destination — under a label promising a log
+    // backup, so this list deliberately stopped at Differential. The builder now emits
+    // `BACKUP LOG … WITH NOINIT`, so the label is true and the option is back.
+    expect(BACKUP_TYPES.map(type => type.value)).toEqual(['full', 'differential', 'log']);
   });
 
   it('defaults compression on where it exists and off where it does not', () => {
@@ -185,12 +186,23 @@ describe('the T-SQL preview', () => {
     expect(backupTsql(values(), 'sales')).not.toContain('DESCRIPTION');
   });
 
-  it('never emits a clause the builder cannot produce', () => {
-    // Gaps 2 and 3: `BackupRequest.copyOnly` is read by nothing, and `checksum` becomes a `verify`
-    // that `TsqlBuilder.backup` ignores. The Angular preview showed both.
+  it('never emits a clause this form cannot ask for', () => {
+    // J-48b and J-48c wired `copyOnly` and `checksum` through to the builder, so it CAN emit both
+    // now — but this form has no control for either, and a preview that showed a clause the run
+    // will not carry is the same lie in the other direction.
     const sql = backupTsql(values({ description: "it's nightly" }), 'sales');
     expect(sql).not.toContain('COPY_ONLY');
     expect(sql).not.toContain('CHECKSUM');
+  });
+
+  it('previews a log backup as BACKUP LOG that appends, matching what main runs', () => {
+    // J-48a: this label used to preview — and run — `BACKUP DATABASE … WITH INIT`, a full backup
+    // that overwrote the destination.
+    const sql = backupTsql(values({ backupType: 'log' }), 'sales');
+    expect(sql).toBe(
+      "BACKUP LOG [sales]\nTO DISK = N'C:\\Backups\\sales.bak'\nWITH NOINIT, COMPRESSION, STATS = 5;"
+    );
+    expect(sql).not.toContain('BACKUP DATABASE');
   });
 
   it('escapes the identifier and the two string literals the way the builder does', () => {

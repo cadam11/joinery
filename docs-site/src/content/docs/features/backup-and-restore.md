@@ -54,7 +54,8 @@ selected-or-default database. The sidebar's entries name the node you clicked.
 
 The form is short, and what it holds depends on the engine.
 
-**SQL Server** gets a **Backup type** picker (Full or Differential), a **Backup path on the server**
+**SQL Server** gets a **Backup type** picker (Full, Differential or Transaction log), a
+**Backup path on the server**
 with a browser over the server's own drives and directories, **Compress the backup**
 (`WITH COMPRESSION`), an optional **Description** stored in the backup header, a **Statement**
 preview, and a **Recent backups** list read from `msdb`.
@@ -187,7 +188,7 @@ the form rather than letting the restore reject it after you have worked through
 | The palette entries "Back up database" and "Restore database"                          | `packages/renderer/src/commands/catalogue.ts:489-505`                                             |
 | The menu bar's Database ▸ Backup… / Restore…                                           | `packages/main/src/menu.ts:300-313`                                                               |
 | Targetless entries resolve the most recent connection and its default database         | `packages/renderer/src/features/backup/backup-dialogs.tsx:1-20`                                   |
-| MSSQL's backup-type picker holds Full and Differential only                            | `packages/renderer/src/features/backup/backup-model.ts:79-85`                                     |
+| MSSQL's backup-type picker holds Full, Differential and Transaction log                | `packages/renderer/src/features/backup/backup-model.ts:79-90`                                     |
 | Which controls each engine gets, and the two format notes verbatim                     | `packages/renderer/src/features/backup/backup-model.ts:110-146`                                   |
 | Compression, description, preview and history are MSSQL-only                           | `packages/renderer/src/features/backup/backup-model.ts:87-108`                                    |
 | PG/MySQL keep no backup metadata, so there is no history to read                       | `packages/renderer/src/features/backup/backup-model.ts:97-101`                                    |

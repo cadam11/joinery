@@ -324,7 +324,11 @@ export interface JoineryAPI {
   };
 
   backup: {
-    start: (request: BackupRequest) => Promise<void>;
+    /**
+     * Resolves with the operation id. It was declared `Promise<void>` until J-48h while both
+     * handlers returned a string, so callers recovered it by inspecting the value at runtime.
+     */
+    start: (request: BackupRequest) => Promise<string>;
     cancel: (backupId: string) => Promise<void>;
     getHistory: (connectionId: string, databaseName?: string) => Promise<BackupHistoryEntry[]>;
     onProgress: (callback: (progress: BackupProgress) => void) => () => void;
@@ -333,7 +337,8 @@ export interface JoineryAPI {
   };
 
   restore: {
-    start: (request: RestoreRequest) => Promise<void>;
+    /** Resolves with the operation id — same correction as `backup.start` (J-48h). */
+    start: (request: RestoreRequest) => Promise<string>;
     cancel: (restoreId: string) => Promise<void>;
     getFileList: (
       connectionId: string,

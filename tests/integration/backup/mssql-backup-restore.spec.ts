@@ -203,6 +203,53 @@ describe('mssql backup/restore round-trip', () => {
     ]);
   }, 60_000);
 
+  // ── J-48a ──────────────────────────────────────────────────────────────────────────────────
+  //
+  // The bug this replaces: `backupType: 'log'` fell through both arms of the builder's type
+  // branch and picked up `INIT` with everything else, so it ran `BACKUP DATABASE … WITH INIT` —
+  // a FULL backup that OVERWROTE the destination — and reported success. A user taking a log
+  // backup onto the file holding their full backup destroyed it and was told it worked.
+  //
+  // Asserting on the emitted SQL would only restate the builder. This asks SQL Server what is
+  // actually in the file afterwards.
+  it('takes a real log backup that appends to the file instead of destroying what is in it', async () => {
+    const service = BackupRestoreService.getInstance();
+
+    const fullOpId = await service.startBackup({
+      connectionId,
+      database: sourceDb,
+      backupPath,
+      backupType: 'full',
+    });
+    const fullResult = await waitForOperation(ipcCapture, fullOpId);
+    expect(fullResult.success, `full backup failed: ${fullResult.error}`).toBe(true);
+
+    // A log backup needs something to have happened since the full one.
+    await withMssqlAdminPool(pool =>
+      pool.request().batch(`INSERT INTO [${sourceDb}].dbo.bar (id, label) VALUES (4, N'four');`)
+    );
+
+    const logOpId = await service.startBackup({
+      connectionId,
+      database: sourceDb,
+      backupPath, // deliberately the SAME file the full backup went to
+      backupType: 'log',
+    });
+    const logResult = await waitForOperation(ipcCapture, logOpId);
+    expect(logResult.success, `log backup failed: ${logResult.error}`).toBe(true);
+
+    // BackupType 1 = database, 2 = transaction log. Two sets, in order, is the whole claim:
+    // the full backup survived (it would be gone under INIT), and the second set is really a
+    // log backup rather than another full one wearing the label.
+    const header = await withMssqlAdminPool(pool =>
+      pool
+        .request()
+        .query<{ BackupType: number }>(`RESTORE HEADERONLY FROM DISK = N'${backupPath}'`)
+    );
+
+    expect(header.recordset.map(row => Number(row.BackupType))).toEqual([1, 2]);
+  }, 60_000);
+
   it('restores into a brand-new target database name', async () => {
     const service = BackupRestoreService.getInstance();
 

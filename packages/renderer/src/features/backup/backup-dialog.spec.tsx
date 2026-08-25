@@ -126,7 +126,10 @@ function installBridge(tools: CliDepsResult): Bridge {
   const installed: Bridge = {
     checkTools: vi.fn(() => Promise.resolve(tools)),
     recheckTools: vi.fn(() => Promise.resolve(TOOLS_PRESENT)),
-    start: vi.fn(() => Promise.resolve()),
+    // Resolves with an operation id, because every engine's `backup.start` handler does
+    // (`backup.ipc.ts:49`). This double used to resolve with `undefined`, faithfully modelling
+    // the preload declaration that was wrong (J-48h) rather than the handler that was right.
+    start: vi.fn(() => Promise.resolve('op-1')),
     getHistory: vi.fn(() => Promise.resolve(HISTORY)),
     getDefaultPaths: vi.fn(() => Promise.resolve(DEFAULT_PATHS)),
     showSaveDialog: vi.fn(() => Promise.resolve({ canceled: false, filePath: '/tmp/chosen.dump' })),
@@ -967,6 +970,13 @@ describe('one run at a time, across close and re-open', () => {
     const user = userEvent.setup();
     mountConsumer();
 
+    // Each start reports its own operation id, as every engine's handler really does — typed as
+    // such since J-48h. Before that the id was recovered by runtime inspection, so a run that
+    // began before its first progress event was unbound, and the module-level in-flight record
+    // was the only thing standing between run B and run A's completion. It still is; B is now
+    // also armed by its own id from the first tick.
+    bridge.start.mockResolvedValueOnce('op-a').mockResolvedValueOnce('op-b');
+
     // Run A, bound to op-a, then closed while it is still going.
     await startRun(user, 'orders_db', '/tmp/orders.dump');
     act(() => {
@@ -975,7 +985,7 @@ describe('one run at a time, across close and re-open', () => {
     await user.click(screen.getByTestId('backup-close'));
     await waitFor(() => expect(screen.queryByTestId('backup-dialog')).toBeNull());
 
-    // Run B, on a different database, so the record does not refuse it. It has no id of its own yet.
+    // Run B, on a different database, so the record does not refuse it.
     await startRun(user, DATABASE, '/tmp/sales.dump');
 
     // A finishes. Without the record this event would be the first one B ever saw, and B would report
