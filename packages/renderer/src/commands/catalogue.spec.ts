@@ -384,9 +384,11 @@ describe('the collision guard knows what the main process binds', () => {
 
   it('has the role-implied keystrokes in the registered set', () => {
     // Named spot-checks, so a table that degraded to all-empty arrays cannot pass the coverage test
-    // above and call it a day. ⌘R is the interesting one: `menu.ts` registers it TWICE (View ▸ Reload
-    // Window via `role: 'reload'` at menu.ts:349, and Server ▸ Refresh Object Explorer at menu.ts:252),
-    // so one of the two items is unreachable by keyboard. Pre-existing, main-process only — J-58.
+    // above and call it a day. ⌘R used to be the interesting one: `menu.ts` registered it TWICE —
+    // View ▸ Reload Window via `role: 'reload'`, and Server ▸ Refresh Object Explorer — so one of
+    // the two was unreachable by keyboard, and which one lost depended on construction order.
+    // J-58 dropped the role; ⌘R now belongs to the object explorer alone, and Reload Window is
+    // `role: 'forceReload'` at ⇧⌘R.
     expect(REGISTERED_KEYS.has(normalizeAccelerator('CmdOrCtrl+R'))).toBe(true);
     expect(REGISTERED_KEYS.has(normalizeAccelerator('Cmd+Shift+R'))).toBe(true);
     expect(REGISTERED_KEYS.has(normalizeAccelerator('Cmd+Option+I'))).toBe(true);

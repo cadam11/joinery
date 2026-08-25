@@ -49,9 +49,10 @@ test.describe('Joinery — the ways into AI setup', () => {
     await withJoineryReact(async ({ app, window }) => {
       const paths = await applicationMenuPaths(app);
 
-      // One item per menu that carries Settings — the macOS app menu and Edit — so neither platform's
-      // habitual place to look comes up empty. A count, not a `some`: dropping one of the two is the
-      // regression this exists to catch, and `some` would not notice.
+      // One AI Setup per menu that carries Settings, wherever that is: since J-97 the preferences
+      // block is gated on `!isMac`, so macOS has one copy (the app menu) and Windows/Linux have one
+      // (Edit) — never two, which is what J-97 fixed. A count, not a `some`: AI Setup drifting away
+      // from Settings is the regression this exists to catch, and `some` would not notice.
       const aiSetup = paths.filter(path => path.endsWith('▸ AI Setup...'));
       const settings = paths.filter(path => /▸ (Settings|Preferences)\.\.\.$/.test(path));
       expect(aiSetup).toHaveLength(settings.length);

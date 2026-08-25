@@ -10,13 +10,13 @@ dialog that does it.
 
 ## Opening it
 
-| Where                                                              |
-| ------------------------------------------------------------------ |
-| The **Joinery** menu ▸ **AI Setup...** — macOS only                |
-| The **Edit** menu ▸ **AI Setup...**, beside Settings / Preferences |
-| ⌘K ▸ **Set up AI**                                                 |
-| The settings dialog (⌘,) ▸ **AI** ▸ **Open AI setup**              |
-| The assistant's empty state ▸ **Set up AI**                        |
+| Where                                                                       |
+| --------------------------------------------------------------------------- |
+| The **Joinery** menu ▸ **AI Setup...** — macOS only                         |
+| The **Edit** menu ▸ **AI Setup...**, beside Preferences — Windows and Linux |
+| ⌘K ▸ **Set up AI**                                                          |
+| The settings dialog (⌘,) ▸ **AI** ▸ **Open AI setup**                       |
+| The assistant's empty state ▸ **Set up AI**                                 |
 
 It has no keyboard shortcut of its own — it is a rarely repeated configuration step, and the palette
 already covers the keyboard.
