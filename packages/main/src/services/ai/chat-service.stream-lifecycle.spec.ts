@@ -174,6 +174,88 @@ describe('the stream across a confirmation (J-61)', () => {
     expect(terminal[0]?.delta ?? '').toContain('cancelled');
   });
 
+  it('ends the turn when the conversation is gone before the answer', async () => {
+    // Deleting the conversation mid-pause leaves nobody to run the tool and nobody to send the
+    // terminal chunk. Without one the renderer streams forever: indicator on, composer locked.
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-61');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+    service.deleteConversation(conversation.id);
+
+    const outcome = await service.confirmToolCall(
+      conversation.id,
+      'tool-1',
+      true,
+      win as unknown as BrowserWindow
+    );
+
+    expect(outcome).toBe('no-such-conversation');
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+  });
+
+  it('ends the turn when the answer carries no tool call id', async () => {
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-61');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+
+    const outcome = await service.confirmToolCall(
+      conversation.id,
+      '',
+      true,
+      win as unknown as BrowserWindow
+    );
+
+    expect(outcome).toBe('no-such-tool-call');
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+  });
+
+  it('ends the turn when the card names a tool call that is not there', async () => {
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-61');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+
+    const outcome = await service.confirmToolCall(
+      conversation.id,
+      'tool-that-was-displaced',
+      true,
+      win as unknown as BrowserWindow
+    );
+
+    expect(outcome).toBe('no-such-tool-call');
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+  });
+
+  it('does not end the turn twice when the same answer arrives again', async () => {
+    // The J-60 guard's branch must stay silent: the first answer already owns the terminal chunk,
+    // and a second one here would cut a continuation that is still streaming.
+    pauseOnFirstStream();
+    const conversation = service.createConversation('J-61');
+    await service.sendMessage(
+      { conversationId: conversation.id, message: 'drop it' },
+      win as unknown as BrowserWindow
+    );
+    await service.confirmToolCall(conversation.id, 'tool-1', true, win as unknown as BrowserWindow);
+
+    const outcome = await service.confirmToolCall(
+      conversation.id,
+      'tool-1',
+      true,
+      win as unknown as BrowserWindow
+    );
+
+    expect(outcome).toBe('already-resolved');
+    expect(win.chunks.filter(chunk => chunk.done === true)).toHaveLength(1);
+  });
+
   it('still ends a turn that never pauses', async () => {
     // The other half: with no confirmation in play the terminal chunk must still arrive, or every
     // ordinary answer would hang as "streaming" forever.

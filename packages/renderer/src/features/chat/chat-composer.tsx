@@ -12,20 +12,22 @@
  *
  * 1. **A stream is open**: the button cancels it and the box is disabled — the Angular behaviour
  *    (`:321-329`).
- * 2. **A tool call is waiting on the user.** This one is NOT covered by the first, which is the trap:
- *    the main process sends the `pendingConfirmation` chunk and then `done: true`, because it breaks
- *    its agentic loop to wait for the answer — so `streaming` is false while the confirmation is on
- *    screen. An ungated composer is therefore fully live with a filled Send in it, and a message sent
- *    from it orphans the card (see `selectHasPendingConfirmation` in `state/chat.ts` for what breaks
- *    on both sides of the bridge). The box says which of the two buttons above it is waiting.
+ * 2. **A tool call is waiting on the user.** This one is NOT covered by the first, even though the
+ *    two now overlap: since J-61 the main process keeps the turn open across a confirmation — it
+ *    emits the `pendingConfirmation` chunk and withholds `done` until the call is answered — so
+ *    `streaming` is true while the card is on screen and gate 1 already disables the box. Gate 2 is
+ *    what makes that reliable rather than incidental, because a confirmation can outlive its stream
+ *    (a decline, or a card restored from history), and a message sent underneath one orphans the card
+ *    (see `selectHasPendingConfirmation` in `state/chat.ts` for what breaks on both sides of the
+ *    bridge). The box says which of the two buttons above it is waiting.
  *
  * Between them they are also what keeps HOUSE-RULES §5's "at most one filled oxide affordance per
  * visible surface" true with two filled buttons in the feature. **Send** is filled, because it is what
  * this surface is for; **Run it** on a tool confirmation is filled, because approving is what that card
- * is for. They cannot both be armed: while a confirmation is pending, Send is disabled and `Button`'s
- * disabled-`primary` treatment drops the fill entirely (`ui/button.tsx`), so the confirmation's Run it
- * is the only filled control on screen. (An earlier version of this comment claimed the composer showed
- * **Stop** throughout a confirmation. It does not — see above.)
+ * is for. They cannot both be armed. While the turn is open the composer renders **Stop** in Send's
+ * place, and Stop is `variant="outline"`; on the paths where a confirmation outlives its stream, Send
+ * is back but disabled, and `Button`'s disabled-`primary` treatment drops the fill entirely
+ * (`ui/button.tsx`). Either way the confirmation's Run it is the only filled control on screen.
  *
  * One deliberate difference from Angular: focus returns to the box when a stream **ends**, not on
  * every `streaming` read. The Angular effect fired on mount too and re-fired on any false read

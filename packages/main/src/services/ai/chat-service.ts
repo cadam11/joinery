@@ -326,6 +326,22 @@ export class ChatService extends BaseSingleton {
     return toolCall?.pendingConfirmation === false;
   }
 
+  /**
+   * Close out a turn that is parked on a confirmation nobody is going to answer.
+   *
+   * Since J-61 the agentic loop leaves the stream open when it pauses to ask, so the renderer holds
+   * `streaming: true` until a terminal chunk arrives. Every `confirmToolCall` branch that refuses to
+   * take the turn over is therefore the last chance to end it — without this the typing indicator
+   * runs forever and the composer never unlocks.
+   *
+   * An entry in `activeStreams` means a loop is still running for this conversation and will send
+   * its own terminal chunk, so this must stay silent: cutting it short is the very bug J-61 fixed.
+   */
+  private endUnansweredTurn(conversationId: string, mainWindow: BrowserWindow): void {
+    if (this.activeStreams.has(conversationId)) return;
+    this.sendChunk(mainWindow, { conversationId, done: true });
+  }
+
   /** The pending tool call an id names, looked up where the confirmation card's id can still reach. */
   private findToolCall(conversation: Conversation, toolCallId: string): ToolCallResult | undefined {
     const lastMsg = [...conversation.messages].reverse().find(m => m.role === 'assistant');
@@ -353,12 +369,14 @@ export class ChatService extends BaseSingleton {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
       log.warn(`Tool confirmation for unknown conversation ${conversationId}; ignoring`);
+      this.endUnansweredTurn(conversationId, mainWindow);
       return 'no-such-conversation';
     }
 
     // An empty id would collapse every unanswered call in the conversation onto one key.
     if (!toolCallId) {
       log.error(`Tool confirmation with an empty tool call id in ${conversationId}; refusing`);
+      this.endUnansweredTurn(conversationId, mainWindow);
       return 'no-such-tool-call';
     }
 
@@ -369,6 +387,8 @@ export class ChatService extends BaseSingleton {
         `Refusing repeat ${confirmed ? 'confirmation' : 'decline'} of tool call ${toolCallId} ` +
           `in conversation ${conversationId}: already answered`
       );
+      // Deliberately no terminal chunk: the answer that got here first owns ending this turn, and
+      // it may still be streaming the continuation right now.
       return 'already-resolved';
     }
 
@@ -394,6 +414,7 @@ export class ChatService extends BaseSingleton {
       // An orphaned card: a later turn displaced the assistant message holding the id. Nothing
       // was answered, so nothing is remembered — there is nothing here to run twice.
       log.warn(`Confirmed tool call ${toolCallId} is not in conversation ${conversationId}`);
+      this.endUnansweredTurn(conversationId, mainWindow);
       return 'no-such-tool-call';
     }
 
@@ -647,8 +668,9 @@ export class ChatService extends BaseSingleton {
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
 
-    // The turn ends here only if nothing is waiting on the user. `confirmToolCall` sends the
-    // terminal chunk for the paused case, on whichever branch it takes (J-61).
+    // The turn ends here only if nothing is waiting on the user. When it IS waiting, the terminal
+    // chunk is `confirmToolCall`'s to send: on the answered paths (declined, or executed and then
+    // this loop again), and on its refusal paths via `endUnansweredTurn` (J-61).
     if (!pausedForConfirmation) {
       this.sendChunk(mainWindow, {
         conversationId: conversation.id,
@@ -863,8 +885,9 @@ export class ChatService extends BaseSingleton {
     conversation.updatedAt = new Date().toISOString();
     this.saveConversation(conversation);
 
-    // The turn ends here only if nothing is waiting on the user. `confirmToolCall` sends the
-    // terminal chunk for the paused case, on whichever branch it takes (J-61).
+    // The turn ends here only if nothing is waiting on the user. When it IS waiting, the terminal
+    // chunk is `confirmToolCall`'s to send: on the answered paths (declined, or executed and then
+    // this loop again), and on its refusal paths via `endUnansweredTurn` (J-61).
     if (!pausedForConfirmation) {
       this.sendChunk(mainWindow, {
         conversationId: conversation.id,
