@@ -62,6 +62,12 @@ export interface ConversionResult {
   statements?: string[];
   warnings?: string[];
   error?: string;
+  /**
+   * Present only when the refusal was "this host cannot run the converter" (J-29). Carries the
+   * probe so the renderer can offer the same guided fix the backup dialogs give a missing
+   * `pg_dump`, instead of restating `error` and leaving the user to find the Prerequisites page.
+   */
+  pythonDeps?: PythonDepsResult;
 }
 
 // Map our engine names to sqlglot dialect names
@@ -215,7 +221,9 @@ export class SQLConverterService extends BaseSingleton {
       // path containing "python", so it must be matched before the Python check
       // or a packaging fault gets reported as a missing interpreter.
       let userError = errorMsg;
+      let pythonDeps: PythonDepsResult | undefined;
       if (err instanceof PythonUnavailableError) {
+        pythonDeps = err.deps;
         // Already the precise message: which interpreter names were tried, or which packages are
         // missing from the one that ran, and the command that fixes it (J-29).
         userError = errorMsg;
@@ -239,6 +247,7 @@ export class SQLConverterService extends BaseSingleton {
         sourceDialect: fromDialect,
         targetDialect: toDialect,
         error: userError,
+        ...(pythonDeps === undefined ? {} : { pythonDeps }),
       };
     }
   }

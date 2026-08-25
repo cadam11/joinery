@@ -25,7 +25,7 @@
  * rather than a thrown error, because "you are already on PostgreSQL" is information and not a fault.
  */
 
-import type { DatabaseEngine } from '@joinery/shared';
+import type { DatabaseEngine, PythonDepsResult } from '@joinery/shared';
 
 import { ipc } from '../../ipc';
 import { diagnostics } from '../../state/diagnostics';
@@ -49,7 +49,16 @@ export interface ConvertRequest {
 export type ConvertOutcome =
   | { readonly ok: true; readonly sql: string }
   /** `reason` is a sentence for the user. Nothing here throws. */
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      /**
+       * Present only when this host cannot run the converter at all (J-29). A setup problem with
+       * a guided fix, not a failed conversion — the caller shows the instructions view rather
+       * than the sentence.
+       */
+      readonly pythonSetup?: PythonDepsResult;
+    };
 
 /**
  * Convert `sql` from one dialect to another.
@@ -76,6 +85,10 @@ export async function convertSql(request: ConvertRequest): Promise<ConvertOutcom
       return {
         ok: false,
         reason: result.error ?? `Could not convert this SQL to ${ENGINE_LABELS[request.to]}.`,
+        // Structure, not a sentence. "This host cannot run the converter" is a setup problem with
+        // a guided fix, and the caller can only tell it apart from a transpile failure if the
+        // refusal says so in a field (J-29).
+        ...(result.pythonDeps === undefined ? {} : { pythonSetup: result.pythonDeps }),
       };
     }
     return { ok: true, sql: result.sql };

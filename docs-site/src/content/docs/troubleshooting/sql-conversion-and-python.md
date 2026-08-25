@@ -66,8 +66,8 @@ whatever was installed.
 over every other candidate. That is the same variable the integration suite uses.
 
 > **Note** — the probe result is cached for the lifetime of the app. If you install the packages
-> while Joinery is running, restart it (or reopen the conversion panel, which probes again on
-> start) rather than converting straight away.
+> while Joinery is running, press **Check again** in the setup dialog: that is what re-probes
+> without a restart.
 
 > **Careful** — Joinery inherits its PATH from the process that launched it. If you installed
 > Python after starting the app, restart it. On macOS, an app launched from the Dock does not

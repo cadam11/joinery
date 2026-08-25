@@ -113,6 +113,12 @@ export const IPC_CHANNELS = {
   },
 
   // Backup Operations
+  /** SQL-conversion Python probe (J-29). Mirrors the backup CLI-tools probe. */
+  PYTHON: {
+    CHECK: 'python:check',
+    RECHECK: 'python:recheck',
+  },
+
   BACKUP: {
     START: 'backup:start',
     CANCEL: 'backup:cancel',

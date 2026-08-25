@@ -25,9 +25,10 @@
  */
 
 import type { CliInstallInstructions, CliToolStatus } from '@joinery/shared';
-import { CircleCheck, CircleX, Copy, ExternalLink, RefreshCw, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleX, TriangleAlert } from 'lucide-react';
 
-import { Button, Icon, Spinner, Tooltip, cn } from '../../ui';
+import { Icon, cn } from '../../ui';
+import { SetupInstructions } from '../setup/setup-instructions';
 
 /** How an engine is written when it is being talked about rather than switched on. */
 const ENGINE_LABELS: Record<CliInstallInstructions['engine'], string> = {
@@ -107,95 +108,19 @@ export function MissingCliTools({
         </div>
       )}
 
-      {/* An ordered list, because the steps are a sequence and a screen reader should say so. The
-          numerals are the list's own, rendered as a pip per step rather than as a marker, so a step
-          with a command block still lines up. */}
-      <ol className="flex flex-col gap-3.5" data-testid="backup-tools-steps">
-        {instructions.steps.map((step, index) => (
-          <li key={step.description} className="flex items-start gap-3">
-            {/* A ruled pip, NOT a filled oxide one. HOUSE-RULES §5 allows one filled oxide affordance
-                per surface and a dialog is its own surface — the Re-check button spends it. Three filled
-                pips beside it was the first version, and the Task 12 gate's screenshots are where that
-                showed up as four oxide fills on one dialog. A step numeral is structure anyway, not an
-                affordance. */}
-            <span
-              aria-hidden="true"
-              className="flex size-5 shrink-0 items-center justify-center rounded-full border border-rule-strong font-mono text-2xs text-fg-muted tabular-nums"
-            >
-              {index + 1}
-            </span>
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <p className="text-md text-fg text-pretty">{step.description}</p>
-
-              {step.command === undefined ? null : (
-                <div className="flex items-center gap-1 rounded-sm border border-rule bg-canvas py-1.5 pr-1 pl-2">
-                  <code className="min-w-0 flex-1 font-mono text-sm break-all text-fg">
-                    {step.command}
-                  </code>
-                  <Tooltip content={copiedCommand === step.command ? 'Copied' : 'Copy'}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      iconOnly
-                      leadingIcon={copiedCommand === step.command ? CircleCheck : Copy}
-                      // A stable accessible name — it says what the button DOES, and it must not
-                      // change when the tick appears. `data-copied` carries the transient state
-                      // instead, which is what both tiers assert on: an `aria-label` that flipped
-                      // would be the wrong contract AND an assertion that passes before the click.
-                      aria-label={`Copy ${step.command}`}
-                      data-copied={copiedCommand === step.command ? 'true' : undefined}
-                      data-testid={`backup-tools-copy-${index}`}
-                      onClick={() => onCopyCommand(step.command ?? '')}
-                    />
-                  </Tooltip>
-                </div>
-              )}
-
-              {step.link === undefined ? null : (
-                /* A button, not an anchor: there is no navigable href here — the URL is handed to
-                   the host browser through `app.openExternal`. The Angular original used
-                   `href="javascript:void(0)"`, which is both a CSP violation waiting to happen and
-                   a link that a screen reader announces as navigable. */
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  leadingIcon={ExternalLink}
-                  className="self-start px-0"
-                  data-testid={`backup-tools-link-${index}`}
-                  onClick={() => onOpenLink(step.link?.url ?? '')}
-                >
-                  {step.link.label}
-                </Button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
-
-      {instructions.notes === undefined || instructions.notes.length === 0 ? null : (
-        <ul
-          className="flex flex-col gap-1 rounded-sm border-l-2 border-warning bg-surface p-3"
-          data-testid="backup-tools-notes"
-        >
-          {instructions.notes.map(note => (
-            <li key={note} className="text-sm text-fg-muted text-pretty">
-              {note}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="flex justify-end">
-        <Button
-          variant="primary"
-          leadingIcon={rechecking ? undefined : RefreshCw}
-          disabled={rechecking}
-          data-testid="missing-cli-tools-recheck"
-          onClick={onRecheck}
-        >
-          {rechecking ? <Spinner size="sm" label="Re-checking…" /> : 'Re-check'}
-        </Button>
-      </div>
+      <SetupInstructions
+        steps={instructions.steps}
+        notes={instructions.notes}
+        testIdPrefix="backup-tools"
+        recheckTestId="missing-cli-tools-recheck"
+        rechecking={rechecking}
+        onRecheck={onRecheck}
+        recheckLabel="Re-check"
+        recheckingLabel="Re-checking…"
+        onCopyCommand={onCopyCommand}
+        onOpenLink={onOpenLink}
+        copiedCommand={copiedCommand}
+      />
     </section>
   );
 }

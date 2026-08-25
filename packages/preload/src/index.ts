@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { IPC_CHANNELS, CHAT_IPC_CHANNELS } from '@joinery/shared';
 import type {
+  PythonDepsResult,
   ConnectionProfile,
   TestConnectionResult,
   DatabaseInfo,
@@ -253,7 +254,20 @@ export interface JoineryAPI {
       sql: string,
       fromEngine: string,
       toEngine: string
-    ) => Promise<{ success: boolean; sql: string; error?: string }>;
+    ) => Promise<{
+      success: boolean;
+      sql: string;
+      error?: string;
+      /** Present only when the refusal was "this host cannot run the converter" (J-29). */
+      pythonDeps?: PythonDepsResult;
+    }>;
+  };
+
+  /** The SQL-conversion Python probe (J-29), mirroring `backup.checkTools` / `recheckTools`. */
+  python: {
+    check: () => Promise<PythonDepsResult>;
+    /** Probes again, ignoring the cache — for after the user has installed the packages. */
+    recheck: () => Promise<PythonDepsResult>;
   };
 
   queryResults: {
@@ -690,6 +704,11 @@ const joineryAPI: JoineryAPI = {
     fetchFkRecord: request => ipcRenderer.invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, request),
     convertSql: (sql: string, fromEngine: string, toEngine: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.QUERY.CONVERT_SQL, sql, fromEngine, toEngine),
+  },
+
+  python: {
+    check: () => ipcRenderer.invoke(IPC_CHANNELS.PYTHON.CHECK),
+    recheck: () => ipcRenderer.invoke(IPC_CHANNELS.PYTHON.RECHECK),
   },
 
   queryResults: {
