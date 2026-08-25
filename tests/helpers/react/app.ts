@@ -176,10 +176,10 @@ export async function waitForShell(window: Page): Promise<void> {
  * helper states the precondition instead of working around it.
  */
 export async function dismissToasts(window: Page): Promise<void> {
-  await expect(
-    window.locator('[role="dialog"]'),
-    'dismissToasts cannot reach a toast while a modal dialog is open — close the dialog first'
-  ).toHaveCount(0);
+  // The modal precondition is gone with J-42: a toast over a dialog is clickable now, and the
+  // dialog no longer treats that click as a click outside itself. The assertion stays as a
+  // NARROWER one — it is still worth knowing which dialog is open when a toast refuses to go —
+  // but it no longer forbids the combination.
 
   const closeButton = window.locator('[data-sonner-toast] [data-close-button]').first();
   for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -187,7 +187,10 @@ export async function dismissToasts(window: Page): Promise<void> {
     await closeButton.click();
     await expect(closeButton).toBeHidden({ timeout: UI_TIMEOUT_MS });
   }
-  throw new Error('[joinery-actions-react] more than ten toasts refused to dismiss');
+  const openDialogs = await window.locator('[role="dialog"]').count();
+  throw new Error(
+    `[joinery-actions-react] more than ten toasts refused to dismiss (${openDialogs} dialog(s) open)`
+  );
 }
 
 /**

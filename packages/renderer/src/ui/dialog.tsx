@@ -78,11 +78,29 @@ export interface DialogContentProps extends ComponentPropsWithRef<typeof RadixDi
   readonly align?: DialogAlign;
 }
 
+/**
+ * The toaster is outside the dialog in the DOM and must not count as "outside" for dismissal.
+ *
+ * Restoring the toast's pointer events (J-42, `ui/toaster.tsx`) is only half a fix: with them back,
+ * clicking a toast's close button is a pointer-down outside the dialog content, so Radix's
+ * `onPointerDownOutside` fires and closes the dialog. Dismissing a toast would throw away a
+ * half-filled connection form — worse than the bug.
+ *
+ * The target has to come out of `detail.originalEvent`. These are CustomEvents dispatched AT the
+ * dialog content, so `event.target` is the dialog itself and a check against it would never match.
+ */
+function isFromToaster(event: CustomEvent<{ originalEvent: Event }>): boolean {
+  const target = event.detail.originalEvent.target;
+  return target instanceof Element && target.closest('[data-sonner-toaster]') !== null;
+}
+
 export function DialogContent({
   size = DEFAULT_SIZE,
   align = 'center',
   className,
   children,
+  onPointerDownOutside,
+  onInteractOutside,
   ...rest
 }: DialogContentProps) {
   return (
@@ -103,6 +121,16 @@ export function DialogContent({
           SIZE_CLASSES[size] ?? SIZE_CLASSES[DEFAULT_SIZE],
           className
         )}
+        // The caller's handler runs FIRST and keeps whatever it decided — this composes with it
+        // rather than replacing it, so a dialog with its own outside-dismiss rule keeps it.
+        onPointerDownOutside={event => {
+          onPointerDownOutside?.(event);
+          if (isFromToaster(event)) event.preventDefault();
+        }}
+        onInteractOutside={event => {
+          onInteractOutside?.(event);
+          if (isFromToaster(event)) event.preventDefault();
+        }}
         {...rest}
       >
         {children}

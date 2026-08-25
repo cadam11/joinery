@@ -28,7 +28,14 @@ import { setNotifier } from '../state/diagnostics';
 /** Matches the overlay surface — a toast is one, it just places itself. */
 const TOAST_CLASSES = cn(
   'flex w-full items-start gap-2 rounded-md border border-rule-strong bg-elevated p-3',
-  'text-base text-fg shadow-overlay'
+  'text-base text-fg shadow-overlay',
+  // Sonner ships `[data-sonner-toast] { pointer-events: auto }` for the case where something else
+  // has turned pointer events off on `<body>` — which Radix's `DismissableLayer` does for the life
+  // of any modal dialog. `unstyled: true` drops that rule along with sonner's colours, so a toast
+  // raised over a dialog was visible, legible, and completely inert: its close button could not be
+  // clicked and it could not be swiped away (J-42). `DialogContent` has the matching half — it
+  // refuses to treat a click on a toast as a click outside itself.
+  'pointer-events-auto'
 );
 
 export interface ToasterProps {
