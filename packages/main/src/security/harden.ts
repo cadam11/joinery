@@ -41,9 +41,11 @@ function forwardToOs(url: string, openExternal: (url: string) => Promise<void>):
 }
 
 /**
- * Install the `setWindowOpenHandler` and `will-navigate` guards on one `WebContents`.
+ * Install the `setWindowOpenHandler`, `will-navigate` and `will-redirect` guards on one
+ * `WebContents`.
  *
- * Called once per window, from `createMainWindow`.
+ * Prefer `installNavigationGuardsForEveryWindow` — this is exported for the tests and for a
+ * caller that holds a `WebContents` directly.
  */
 export function installNavigationGuards(
   contents: Electron.WebContents,
@@ -63,7 +65,11 @@ export function installNavigationGuards(
     return { action: 'deny' };
   });
 
-  contents.on('will-navigate', details => {
+  // `will-redirect` carries the same guarantee as `will-navigate` and none of its coverage: a
+  // server-side 30x is not a navigation the renderer initiated, so it never reaches the listener
+  // below. Neither loader can be redirected today — production is `file://` and dev talks only to
+  // the local Vite server — which is why J-22 could defer it. Both events get the same decision.
+  const guard = (details: Electron.Event<{ url: string }>): void => {
     const decision = decideNavigation(details.url, entry);
     if (decision.kind === 'allow') return;
 
@@ -73,6 +79,30 @@ export function installNavigationGuards(
     } else {
       log.warn(decision.reason);
     }
+  };
+
+  contents.on('will-navigate', guard);
+  contents.on('will-redirect', guard);
+}
+
+/**
+ * Guard every `WebContents` the app will ever create, including ones it does not create yet.
+ *
+ * J-22 installed the guards at the single `new BrowserWindow(...)` call site, which was correct
+ * and structurally fragile: a second window added later would carry the whole `window.joinery`
+ * preload bridge with no navigation protection, and nothing would fail to say so. Hooking
+ * `web-contents-created` makes coverage a property of the app rather than a thing each call site
+ * must remember.
+ *
+ * Register before the first window is created — `index.ts` does this inside `whenReady`, above
+ * `createMainWindow()`.
+ */
+export function installNavigationGuardsForEveryWindow(
+  electronApp: Electron.App,
+  options: NavigationGuardOptions
+): void {
+  electronApp.on('web-contents-created', (_event, contents) => {
+    installNavigationGuards(contents, options);
   });
 }
 

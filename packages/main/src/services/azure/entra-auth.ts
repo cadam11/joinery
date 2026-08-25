@@ -25,6 +25,7 @@ import {
   type ICachePlugin,
   type TokenCacheContext,
 } from '@azure/msal-node';
+import { openExternalSafely } from '../../security/open-external';
 import { createLogger } from '../../utils/logger';
 import { CredentialStore } from '../keychain/credential-store';
 
@@ -228,7 +229,10 @@ async function interactiveLoginViaLoopback(
       prompt: 'select_account',
     });
 
-    await shell.openExternal(authCodeUrl);
+    // MSAL builds this from the configured authority, so it is https today — but "today" is a
+    // property of a dependency's behaviour, not of this code, and it is the one URL here that is
+    // not a literal. It goes through the same allowlist as everything else (J-129).
+    await openExternalSafely(authCodeUrl, shell.openExternal);
     const code = await codePromise;
 
     const result = await client.acquireTokenByCode({

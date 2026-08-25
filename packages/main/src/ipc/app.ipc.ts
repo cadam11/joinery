@@ -6,7 +6,7 @@ import * as fs from 'fs/promises';
 import { app, shell, dialog } from 'electron';
 import { IPC_CHANNELS, type AppState, type TabState, type LayoutConfig } from '@joinery/shared';
 import { AppStateStore } from '../services/config/app-state';
-import { assertOpenableExternalUrl } from '../security/external-url';
+import { openExternalSafely } from '../security/open-external';
 import { safeHandle } from './safe-handle';
 
 export function registerAppHandlers(): void {
@@ -24,8 +24,7 @@ export function registerAppHandlers(): void {
   // to drive this channel. A refusal throws, which `safeHandle` logs and re-throws so the
   // renderer surfaces it — see `security/external-url.ts`.
   safeHandle(IPC_CHANNELS.APP.OPEN_EXTERNAL, async (_event, url: string): Promise<void> => {
-    assertOpenableExternalUrl(url);
-    await shell.openExternal(url);
+    await openExternalSafely(url, shell.openExternal);
   });
 
   // Show in folder

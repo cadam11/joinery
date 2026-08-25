@@ -2,8 +2,10 @@
  * Joinery - Main Process Entry Point
  */
 
-import { app, BrowserWindow } from 'electron';
-import { createMainWindow, installRendererSecurityPolicy } from './window';
+import { app, shell, BrowserWindow } from 'electron';
+import { createMainWindow, installRendererSecurityPolicy, resolveAppEntry } from './window';
+import { installNavigationGuardsForEveryWindow } from './security/harden';
+import { openExternalSafely } from './security/open-external';
 import { createMenu } from './menu';
 import { registerAllHandlers } from './ipc';
 import { createLogger } from './utils/logger';
@@ -56,6 +58,14 @@ if (!gotTheLock) {
     // headers, so it has to be on the session before the entry HTML is fetched. Pure string
     // building plus one listener registration — nothing here can block.
     installRendererSecurityPolicy();
+
+    // Navigation guards next, and app-wide rather than per window (J-129). `web-contents-created`
+    // fires during `new BrowserWindow`, so registering here — above `createMainWindow()` — covers
+    // the main window and every window added later, without a call site having to remember.
+    installNavigationGuardsForEveryWindow(app, {
+      entry: resolveAppEntry(),
+      openExternal: url => openExternalSafely(url, shell.openExternal),
+    });
 
     // Window next: Chromium spins up and loads the renderer in its own
     // processes while the rest of this tick runs. Handler registration

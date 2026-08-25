@@ -2,12 +2,12 @@
  * Window Management
  */
 
-import { BrowserWindow, screen, nativeTheme, session, shell } from 'electron';
+import { BrowserWindow, screen, nativeTheme, session } from 'electron';
 import * as path from 'path';
 import Store from 'electron-store';
 import { createTrailingDebounce } from './utils/trailing-debounce';
 import { buildContentSecurityPolicy } from './security/content-security-policy';
-import { installContentSecurityPolicy, installNavigationGuards } from './security/harden';
+import { installContentSecurityPolicy } from './security/harden';
 import type { AppEntry } from './security/navigation-guard';
 
 /**
@@ -138,18 +138,10 @@ export function createMainWindow(): BrowserWindow {
     }
   });
 
-  // Navigation guards before the load, not after: this window carries the preload bridge, so any
-  // document it holds inherits the whole `window.joinery` surface (J-22). Installed per window
-  // because they hang off `webContents`.
-  const entry: AppEntry = isDevelopment()
-    ? { kind: 'dev-server', url: DEV_SERVER_URL }
-    : { kind: 'file', path: RENDERER_INDEX };
-  installNavigationGuards(mainWindow.webContents, {
-    // Only ever reached with an https/http/mailto URL — the guard's decision functions share the
-    // allowlist in `security/external-url.ts` with the `app:open-external` IPC channel.
-    entry,
-    openExternal: url => shell.openExternal(url),
-  });
+  // No navigation-guard call here on purpose (J-129). The guards are installed app-wide from
+  // `index.ts` via `web-contents-created`, which fires while `new BrowserWindow` above is still
+  // constructing — so they are already on this window's `webContents`, and on any window added
+  // later without anyone remembering to wire it.
 
   // Load the app
   if (isDevelopment()) {
@@ -168,4 +160,16 @@ export function createMainWindow(): BrowserWindow {
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
+}
+
+/**
+ * Which document this build treats as "the app" — the one origin navigation is allowed to reach.
+ *
+ * Deterministic from the dev/prod flag, so the app-level guard hook in `index.ts` can resolve it
+ * once at startup rather than per window (J-129).
+ */
+export function resolveAppEntry(): AppEntry {
+  return isDevelopment()
+    ? { kind: 'dev-server', url: DEV_SERVER_URL }
+    : { kind: 'file', path: RENDERER_INDEX };
 }
