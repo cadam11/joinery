@@ -101,10 +101,12 @@ When it finishes, the same band states **Backup complete**, the elapsed time and
 written. A failure states the server's own message in the same place, with **Try again** beside
 Close.
 
-> **Note** — Joinery refuses to start a second operation against a database this window is already
-> backing up or restoring. Two dumps writing one archive corrupt it while both report success, and
-> there is no cancel to recover with, so the button is disabled and the band says which run is in the
-> way.
+> **Note** — Joinery refuses to start a second operation against a destination it is already
+> writing: a backup to a path a backup is already writing, or a restore into a database a restore
+> is already writing. Two dumps writing one archive corrupt it while both report success.
+> The window disables the button and the band says which run is in the way; the refusal itself is
+> enforced in the main process, so it holds across windows, across a reload, and for any other
+> caller — not just the dialog you started it from.
 
 ## Restoring
 

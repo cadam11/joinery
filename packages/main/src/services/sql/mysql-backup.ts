@@ -15,6 +15,7 @@ import type { BackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
+import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
 import { MetadataService } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
@@ -52,6 +53,13 @@ export class MySQLBackupService extends BaseSingleton {
     if (!profile) throw new Error('Connection profile not found');
 
     const password = await this.profileStore.getPassword(request.connectionId);
+
+    // Before anything is spawned: two dumps to one path corrupt the archive (J-48f).
+    OperationClaims.getInstance().claim(
+      backupDestinationKey(request.backupPath),
+      operationId,
+      `a backup of ${request.database}`
+    );
 
     const operation: MySQLBackupOperation = {
       id: operationId,
@@ -154,14 +162,6 @@ export class MySQLBackupService extends BaseSingleton {
 
     const password = await this.profileStore.getPassword(request.connectionId);
 
-    const operation: MySQLBackupOperation = {
-      id: operationId,
-      type: 'restore',
-      cancelled: false,
-      connectionId: request.connectionId,
-    };
-    this.activeOperations.set(operationId, operation);
-
     const targetDb = request.targetDatabase || 'restored_db';
 
     // Validate the target db name: backtick-quoting alone isn't enough
@@ -176,6 +176,24 @@ export class MySQLBackupService extends BaseSingleton {
         `Invalid target database name "${targetDb}". Use letters, digits, and underscores only.`
       );
     }
+
+    // Claimed after validation and before the operation is registered. Both orderings matter:
+    // an invalid name must not take a claim nothing will release, and a refused claim throws out
+    // of this method — an entry added first would sit in `activeOperations` forever. The
+    // validation throw above had that leak before J-48f moved the registration down here.
+    OperationClaims.getInstance().claim(
+      restoreTargetKey(request.connectionId, targetDb),
+      operationId,
+      `a restore into ${targetDb}`
+    );
+
+    const operation: MySQLBackupOperation = {
+      id: operationId,
+      type: 'restore',
+      cancelled: false,
+      connectionId: request.connectionId,
+    };
+    this.activeOperations.set(operationId, operation);
 
     // Don't pass targetDb as a positional arg — the mysql CLI verifies it
     // exists at connect time and errors out (ERROR 1049 (42000): Unknown
@@ -401,6 +419,10 @@ export class MySQLBackupService extends BaseSingleton {
    * Stop all operations (for app shutdown)
    */
   stopAllOperations(): void {
+    // The processes holding these claims are being stopped, so the claims go with them —
+    // otherwise a restart-free shutdown path would leave a destination locked (J-48f).
+    OperationClaims.getInstance().releaseAll();
+
     for (const [id, op] of this.activeOperations) {
       op.cancelled = true;
       if (op.pid !== undefined) killProcess(op.pid, id);
@@ -430,6 +452,10 @@ export class MySQLBackupService extends BaseSingleton {
     success: boolean,
     error?: string
   ): void {
+    // Every terminal path in this service comes through here, so the claim is released once
+    // rather than at each of the twelve call sites: a leaked claim locks the destination.
+    OperationClaims.getInstance().release(operationId);
+
     const channel =
       type === 'backup' ? IPC_CHANNELS.BACKUP.PROGRESS : IPC_CHANNELS.RESTORE.PROGRESS;
     const progress = operationProgressEvent(type, operationId, {

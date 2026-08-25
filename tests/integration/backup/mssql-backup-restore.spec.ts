@@ -44,6 +44,7 @@ vi.mock('@joinery/main/services/config/connection-profiles', () => ({
 
 import { BackupRestoreService } from '@joinery/main/services/sql/backup-restore';
 import { ConnectionPoolManager } from '@joinery/main/services/sql/connection-pool';
+import { OperationClaims } from '@joinery/main/services/sql/operation-claims';
 
 const SQLSERVER_DATA_DIR = '/var/opt/mssql/data';
 
@@ -123,6 +124,7 @@ describe('mssql backup/restore round-trip', () => {
     fakeProfiles.clear();
     fakePasswords.clear();
     BackupRestoreService.resetInstance();
+    OperationClaims.resetInstance();
     ConnectionPoolManager.resetInstance();
 
     sourceDb = freshDbName();
@@ -201,6 +203,41 @@ describe('mssql backup/restore round-trip', () => {
       { id: 2, label: 'two' },
       { id: 3, label: 'three' },
     ]);
+  }, 60_000);
+
+  // ── J-48f ──────────────────────────────────────────────────────────────────────────────────
+  //
+  // Two starts against one destination used to spawn two runs writing the same file: the archive
+  // is corrupt and BOTH report success. The renderer grew an in-flight record as a mitigation, but
+  // it is per window — it does not survive a reload and does not cover any other caller of
+  // `backup.start`. This asserts the refusal happens in main, and — just as important — that the
+  // destination is free again afterwards, because a leaked claim would lock it for the session.
+  it('refuses a second backup to a destination one is already writing, then frees it', async () => {
+    const service = BackupRestoreService.getInstance();
+
+    const firstOpId = await service.startBackup({
+      connectionId,
+      database: sourceDb,
+      backupPath,
+      backupType: 'full',
+    });
+
+    await expect(
+      service.startBackup({ connectionId, database: sourceDb, backupPath, backupType: 'full' })
+    ).rejects.toThrow(/already running/);
+
+    const firstResult = await waitForOperation(ipcCapture, firstOpId);
+    expect(firstResult.success, `first backup failed: ${firstResult.error}`).toBe(true);
+
+    // Released on completion, so the same path is usable again.
+    const secondOpId = await service.startBackup({
+      connectionId,
+      database: sourceDb,
+      backupPath,
+      backupType: 'full',
+    });
+    const secondResult = await waitForOperation(ipcCapture, secondOpId);
+    expect(secondResult.success, `second backup failed: ${secondResult.error}`).toBe(true);
   }, 60_000);
 
   // ── J-48a ──────────────────────────────────────────────────────────────────────────────────

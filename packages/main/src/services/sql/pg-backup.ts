@@ -13,6 +13,7 @@ import type { BackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
+import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
 import { MetadataService } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
@@ -49,6 +50,14 @@ export class PgBackupService extends BaseSingleton {
     if (!profile) throw new Error('Connection profile not found');
 
     const password = await this.profileStore.getPassword(request.connectionId);
+
+    // Before anything is spawned: two dumps to one path corrupt the archive and both report
+    // success (J-48f). Throws, which `safeHandle` serialises back to the renderer.
+    OperationClaims.getInstance().claim(
+      backupDestinationKey(request.backupPath),
+      operationId,
+      `a backup of ${request.database}`
+    );
 
     const operation: PgBackupOperation = {
       id: operationId,
@@ -96,6 +105,17 @@ export class PgBackupService extends BaseSingleton {
 
     const password = await this.profileStore.getPassword(request.connectionId);
 
+    const targetDb = request.targetDatabase || 'restored_db';
+
+    // Claimed BEFORE the operation is registered: a refused claim throws out of this method, and
+    // an entry added first would sit in `activeOperations` forever with nothing to remove it.
+    // Two `pg_restore --clean` runs into one database drop objects the other is still writing.
+    OperationClaims.getInstance().claim(
+      restoreTargetKey(request.connectionId, targetDb),
+      operationId,
+      `a restore into ${targetDb}`
+    );
+
     const operation: PgBackupOperation = {
       id: operationId,
       type: 'restore',
@@ -103,8 +123,6 @@ export class PgBackupService extends BaseSingleton {
       connectionId: request.connectionId,
     };
     this.activeOperations.set(operationId, operation);
-
-    const targetDb = request.targetDatabase || 'restored_db';
 
     const args = buildPgRestoreArgs(
       { server: profile.server, port: profile.port, username: profile.username },
@@ -259,6 +277,10 @@ export class PgBackupService extends BaseSingleton {
    * Stop all operations (for app shutdown)
    */
   stopAllOperations(): void {
+    // The processes holding these claims are being stopped, so the claims go with them —
+    // otherwise a restart-free shutdown path would leave a destination locked (J-48f).
+    OperationClaims.getInstance().releaseAll();
+
     for (const [id, op] of this.activeOperations) {
       op.cancelled = true;
       if (op.pid !== undefined) killProcess(op.pid, id);
@@ -326,6 +348,10 @@ export class PgBackupService extends BaseSingleton {
     success: boolean,
     error?: string
   ): void {
+    // Every terminal path in this service comes through here, which is why the claim is released
+    // here rather than at each of them: a leaked claim locks the destination for the session.
+    OperationClaims.getInstance().release(operationId);
+
     const channel =
       type === 'backup' ? IPC_CHANNELS.BACKUP.PROGRESS : IPC_CHANNELS.RESTORE.PROGRESS;
     const progress = operationProgressEvent(type, operationId, {
