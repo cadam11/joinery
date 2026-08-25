@@ -10,7 +10,7 @@ import type {
   RenameDatabaseOptions,
   DeleteDatabaseOptions,
 } from '@joinery/shared';
-import { SQLDialect } from './sql-dialect';
+import { SQLDialect, textOf } from './sql-dialect';
 
 export class PgDialect extends SQLDialect {
   readonly engine = 'postgresql' as const;
@@ -23,6 +23,33 @@ export class PgDialect extends SQLDialect {
   readonly supportsExtendedProperties = false; // PG uses COMMENT ON instead
   readonly supportsObjectComments = true; // PG supports COMMENT ON
   readonly supportsServerFileBrowsing = false;
+
+  /**
+   * `E'…'`, with backslashes doubled as well as quotes (J-52).
+   *
+   * With `standard_conforming_strings` off — the default before PostgreSQL 9.1, and still set that
+   * way in the wild — a backslash starts an escape inside an ordinary literal, so a value ending
+   * `\\` consumes the closing quote and the following `'` OPENS a new literal: the statement
+   * terminator then lands outside it. node-postgres sends this through the simple query protocol,
+   * which executes multiple statements per message, so an injected statement would run.
+   *
+   * `E'…'` is escape-string syntax in every configuration, which makes the escaping
+   * setting-independent: double the backslashes AND the quotes and the value is data whatever the
+   * server is set to. Refusing values containing backslashes would also be safe and would break
+   * ordinary data — a Windows path in a text column.
+   *
+   * This reasoning is the renderer's, from `features/query/fk-lookup.ts`, which had it first and
+   * whose SQL this replaces on the main side.
+   */
+  override formatLiteral(value: unknown): string {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+
+    const escaped = textOf(value).replace(/\\/g, '\\\\').replace(/'/g, "''");
+    return `E'${escaped}'`;
+  }
 
   quoteIdentifier(name: string): string {
     const escaped = name.replace(/"/g, '""');
