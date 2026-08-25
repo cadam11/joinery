@@ -103,8 +103,12 @@ double-click cannot execute a DDL statement twice.
 afterwards does nothing.
 
 The turn stays open while the card waits, so the composer's button is **Stop** rather than a
-disabled Send. Pressing it answers the request too: the card is marked _Stopped by user_, the
-composer comes back, and — as with Cancel — approving that request afterwards does nothing.
+disabled Send. Pressing it answers any request still waiting: those cards are marked _Stopped by
+user_, the composer comes back, and — as with Cancel — approving one of them afterwards does
+nothing.
+
+Stop does not reach back into work already under way. A tool you have approved runs to completion
+and records its real result; what Stop ends is the answer the assistant was going to write about it.
 
 > **Note** — the card does not invent a result. It reads as pending until the real result arrives,
 > whichever way you answered.
@@ -159,7 +163,7 @@ message that would be refused.
 | The four opening suggestions, verbatim                                 | `packages/renderer/src/features/chat/chat-transcript.tsx:42-51`                                        |
 | The box is disabled and Send becomes Stop while streaming              | `packages/renderer/src/features/chat/chat-composer.tsx:282-283, 359-384`                               |
 | A stopped answer is marked in the transcript                           | `packages/renderer/src/state/chat.ts:207-217`                                                          |
-| Stop answers a waiting confirmation instead of leaving it armed        | `packages/renderer/src/state/chat.ts:178-205`, `packages/main/src/services/ai/chat-service.ts:216-254` |
+| Stop answers a waiting confirmation instead of leaving it armed        | `packages/renderer/src/state/chat.ts:179-205`, `packages/main/src/services/ai/chat-service.ts:216-271` |
 | Scroll only follows while pinned to the bottom; a Jump button appears  | `packages/renderer/src/features/chat/chat-transcript.tsx:4-14, 39-40`                                  |
 | Mermaid and code-copy switch on when a message completes               | `packages/renderer/src/features/chat/chat-message.tsx:21-27`                                           |
 | Answers render through the sanitising markdown pipeline                | `packages/renderer/src/features/chat/chat-message.tsx:30-36`                                           |
@@ -174,7 +178,7 @@ message that would be refused.
 | A failure shows the tool's own error                                   | `packages/renderer/src/features/chat/tool-call-card.tsx:250-262`                                       |
 | The confirmation names the tool, describes it, and shows the arguments | `packages/renderer/src/features/chat/tool-call-card.tsx:128-149`                                       |
 | Run it and Cancel, and both disarm on the first click                  | `packages/renderer/src/features/chat/tool-call-card.tsx:114-126, 149-170`                              |
-| A repeat approval or decline is refused, and a cancel is final         | `packages/main/src/services/ai/chat-service.ts:335-406`                                                |
+| A repeat approval or decline is refused, and a cancel is final         | `packages/main/src/services/ai/chat-service.ts:408-484`                                                |
 | The composer's refusal sentence while a confirmation waits             | `packages/renderer/src/features/chat/chat-composer.tsx:325-329`                                        |
 | The card stays pending until the real result lands                     | `packages/renderer/src/features/chat/tool-call-card.tsx:31-33`                                         |
 | The conversation list toggle and the new-conversation button           | `packages/renderer/src/features/chat/chat-surface.tsx:229-260`                                         |

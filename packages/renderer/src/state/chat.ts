@@ -526,12 +526,15 @@ export function createChatStore(deps: ChatStoreDeps, options: ChatStoreOptions =
           .catch(error => diagnostics.warn('failed to cancel chat stream', error));
 
         // **The partial answer is finalized here, and only here.** Clearing `streamingContent`
-        // unmounts the tail, and the main process emits nothing at all on abort — no `done` chunk
-        // follows a cancel — so a cancel that only cleared the flags left the message marked
-        // `streaming: true` with an eternal typing indicator under it and the text the model had
-        // already produced thrown away. The content is read BEFORE the clear for that reason, and
-        // `stoppedContent` marks the truncation so the transcript does not read like a complete
-        // answer that happens to stop mid-sentence.
+        // unmounts the tail, and no partial text ever comes back from main on a stop: a `done`
+        // chunk may follow — `stopStream` sends one when it answers a parked confirmation, and an
+        // aborted loop sends its own — but a terminal chunk carries no content, and by the time it
+        // lands `streaming` is already false here, so it patches nothing. A cancel that only
+        // cleared the flags therefore left the message marked `streaming: true` with an eternal
+        // typing indicator under it and the text the model had already produced thrown away. The
+        // content is read BEFORE the clear for that reason, and `stoppedContent` marks the
+        // truncation so the transcript does not read like a complete answer that happens to stop
+        // mid-sentence.
         const partial = get().streamingContent;
         set(state => ({
           messages: disarmPendingToolCalls(
