@@ -87,10 +87,7 @@ export interface QueryResultHistoryFilter {
  * Sort options for result history
  */
 export type ResultHistorySortField =
-  | 'executedAt'
-  | 'executionTimeMs'
-  | 'totalRowCount'
-  | 'storageSizeBytes';
+  'executedAt' | 'executionTimeMs' | 'totalRowCount' | 'storageSizeBytes';
 export type ResultHistorySortOrder = 'asc' | 'desc';
 
 export interface ResultHistorySortOptions {

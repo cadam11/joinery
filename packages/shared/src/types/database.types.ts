@@ -5,14 +5,7 @@
 export type DatabaseState = 'online' | 'offline' | 'restoring' | 'recovering' | 'suspect';
 export type RecoveryModel = 'simple' | 'full' | 'bulk_logged';
 export type ObjectType =
-  | 'database'
-  | 'table'
-  | 'view'
-  | 'procedure'
-  | 'function'
-  | 'index'
-  | 'trigger'
-  | 'column';
+  'database' | 'table' | 'view' | 'procedure' | 'function' | 'index' | 'trigger' | 'column';
 
 export interface DatabaseInfo {
   name: string;

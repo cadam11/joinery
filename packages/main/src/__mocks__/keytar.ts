@@ -7,7 +7,11 @@ export async function getPassword(_service: string, account: string): Promise<st
   return store.get(account) ?? null;
 }
 
-export async function setPassword(_service: string, account: string, password: string): Promise<void> {
+export async function setPassword(
+  _service: string,
+  account: string,
+  password: string
+): Promise<void> {
   store.set(account, password);
 }
 
@@ -15,6 +19,8 @@ export async function deletePassword(_service: string, account: string): Promise
   return store.delete(account);
 }
 
-export async function findCredentials(_service: string): Promise<Array<{ account: string; password: string }>> {
+export async function findCredentials(
+  _service: string
+): Promise<Array<{ account: string; password: string }>> {
   return Array.from(store.entries()).map(([account, password]) => ({ account, password }));
 }

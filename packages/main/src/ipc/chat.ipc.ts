@@ -8,6 +8,9 @@ import { CHAT_IPC_CHANNELS } from '@joinery/shared';
 import type { ChatRequest } from '@joinery/shared';
 import { ChatService } from '../services/ai/chat-service';
 import { safeHandle } from './safe-handle';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('ChatIPC');
 
 export function registerChatHandlers(): void {
   const chatService = ChatService.getInstance();
@@ -41,7 +44,10 @@ export function registerChatHandlers(): void {
     if (!mainWindow) throw new Error('No window found');
     // Fire-and-forget — response comes via stream chunks
     chatService.sendMessage(request, mainWindow).catch(err => {
-      console.error('Chat message error:', err);
+      // Through the logger, so it reaches the Output panel like every other main-process failure.
+      // A `console.error` here was invisible to the user and to the log file (J-128).
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`Chat message failed: ${message}`);
     });
     return { started: true };
   });

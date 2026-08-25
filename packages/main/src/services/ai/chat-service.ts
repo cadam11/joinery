@@ -542,7 +542,10 @@ export class ChatService extends BaseSingleton {
             if (signal.aborted) return;
             iterationToolCalls.push(call);
           },
-          onComplete: () => {},
+          onComplete: () => {
+            // Nothing to do: this loop reacts to `onToolCall` and to the stream ending, and the
+            // caller's completion is signalled after the tool round-trip rather than here.
+          },
           onError: (error: Error) => {
             if (error.name !== 'AbortError') log.error('Stream error:', error);
           },
@@ -720,7 +723,10 @@ export class ChatService extends BaseSingleton {
             if (signal.aborted) return;
             iterationToolCalls.push(call);
           },
-          onComplete: () => {},
+          onComplete: () => {
+            // Nothing to do: this loop reacts to `onToolCall` and to the stream ending, and the
+            // caller's completion is signalled after the tool round-trip rather than here.
+          },
           onError: (error: Error) => {
             if (error.name !== 'AbortError') {
               log.error('Stream error:', error);

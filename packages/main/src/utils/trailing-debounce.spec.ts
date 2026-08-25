@@ -68,7 +68,13 @@ describe('createTrailingDebounce', () => {
   });
 
   it('rejects a non-positive wait', () => {
-    expect(() => createTrailingDebounce(() => {}, 0)).toThrow();
-    expect(() => createTrailingDebounce(() => {}, -5)).toThrow();
+    // The callback is never reached — the constructor throws on the wait — so it stays empty and
+    // says so, rather than pretending to be a subject of these assertions.
+    const unreached = (): void => {
+      throw new Error('the debounced callback should never run when construction throws');
+    };
+
+    expect(() => createTrailingDebounce(unreached, 0)).toThrow();
+    expect(() => createTrailingDebounce(unreached, -5)).toThrow();
   });
 });
