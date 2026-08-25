@@ -424,6 +424,13 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
 
   test('the SQL editor has a keyboard way out, which is what WCAG asks for (J-83)', async () => {
     await withJoineryReact(async ({ window }) => {
+      // A query tab is only openable from a live connection — `sidebar-new-query` stays disabled
+      // until one exists — so this test needs the same preamble as the other query-tab walks.
+      await createPostgresProfile(window, PROFILE);
+      await connectFromSidebar(window, PROFILE);
+      await selectDatabase(window, DATABASE);
+      await dismissToasts(window);
+
       await typeSql(window, 'SELECT 1');
 
       // Focus is in Monaco's input sink. Tab inserts a tab character here — correct for a SQL

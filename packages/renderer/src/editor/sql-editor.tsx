@@ -361,9 +361,9 @@ export function SqlEditor({
     //
     // Monaco binds Tab to "insert a tab character", which is right for a SQL editor and wrong for
     // a keyboard-only user: without an escape, focus cannot leave this control at all. Monaco ships
-    // exactly that escape as `editor.action.toggleTabFocusMode`, and its own ⌃M binding does not
-    // reach the editor in this app — the a11y walk tried it first and stayed trapped, which is
-    // recorded in `tests/e2e-react/a11y.spec.ts`.
+    // exactly that escape as `editor.action.toggleTabFocusMode`, but its own binding for it is
+    // ⌃⇧M on macOS and Ctrl+M elsewhere — two different keys for one behaviour, and the macOS one
+    // is not what a screen-reader user reaches for. This binds Control-M on both platforms.
     //
     // The modifier has to be chosen per platform, and the two Monaco constants do NOT mean what
     // their names suggest on both: `WinCtrl` is Control on macOS but the WINDOWS key on Windows,
@@ -377,14 +377,23 @@ export function SqlEditor({
     // tab-as-indent, and Monaco announces the state to assistive technology itself.
     const controlKey = IS_MAC ? monaco.KeyMod.WinCtrl : monaco.KeyMod.CtrlCmd;
     instance.addCommand(controlKey | monaco.KeyCode.KeyM, () => {
-      // `getAction` and not `trigger`, for the reason `runAction` above documents: `trigger`
-      // returns nothing for an id Monaco does not have, so a missing contribution would present
-      // as "⌃M does nothing" — which is indistinguishable from the trap this is here to remove.
-      const action = instance.getAction('editor.action.toggleTabFocusMode');
-      if (action === null) {
-        throw new Error('[SqlEditor] Monaco has no action "editor.action.toggleTabFocusMode"');
+      // `trigger` and NOT `getAction`, which is the opposite of `runAction` above and the one place
+      // in this file where that is correct. Monaco 0.56 registers this one with `registerAction2`,
+      // i.e. as a platform *command* rather than as an editor action, so `getAction` returns null
+      // for it and only the command path reaches it. Verified in
+      // `esm/vs/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js`.
+      //
+      // `trigger` returns nothing either way, so the "did it reach anything?" guard `runAction`
+      // gets from `getAction` is bought here by reading the mode back: a toggle that did not
+      // toggle is the silent failure this has to be loud about, because "⌃M does nothing" is
+      // indistinguishable from the trap it exists to remove.
+      const before = instance.getOption(monaco.editor.EditorOption.tabFocusMode);
+      instance.trigger('keyboard', 'editor.action.toggleTabFocusMode', null);
+      if (instance.getOption(monaco.editor.EditorOption.tabFocusMode) === before) {
+        throw new Error(
+          '[SqlEditor] "editor.action.toggleTabFocusMode" left tab focus mode unchanged'
+        );
       }
-      void action.run();
     });
 
     // Seed the caret readout so the status bar's Ln/Col is populated before the first keystroke.
