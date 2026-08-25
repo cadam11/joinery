@@ -167,15 +167,83 @@ describe('sanitizeDiagramSvg', () => {
     expect(svg).not.toMatch(/href=/i);
   });
 
-  it('DOCUMENTS A KNOWN LIMITATION: style survives', () => {
-    // A <style> inside an inline SVG joins the document stylesheet set, so CSS
-    // that escapes the diagram can restyle the whole app. It cannot be forbidden
-    // without losing every mermaid diagram colour. Mermaid at securityLevel
-    // 'strict' id-prefixes its selectors and rejects themeCSS/classDef escapes, so
-    // no model-authored CSS is known to reach here. This test exists so the
-    // limitation is visible and a future scoping fix has something to flip.
+  it('keeps a style block when no scope is asked for — the caller decides', () => {
+    // Unscoped is still the signature's default: `renderMarkdown`'s own sanitizing has no diagram
+    // id to check against. Only `mermaid.ts` knows the id, and only it passes one.
     const svg = sanitizeDiagramSvg('<svg><style>.x{fill:red}</style></svg>');
     expect(svg).toMatch(/<style/i);
+  });
+
+  // ── J-25: the limitation this file used to merely document ──────────────────────────────
+  //
+  // A <style> inside an inline SVG joins the DOCUMENT stylesheet set, so CSS that escapes the
+  // diagram restyles the whole app. It cannot be forbidden without losing every mermaid colour,
+  // so it is checked instead: mermaid at securityLevel 'strict' prefixes every selector with the
+  // diagram's own id, and a block that does not is not mermaid's.
+
+  it('keeps mermaid’s own CSS, which is prefixed with the diagram id', () => {
+    const svg = sanitizeDiagramSvg(
+      '<svg><style>#d1 .node rect{fill:red}#d1 .edge{stroke:blue}</style></svg>',
+      'd1'
+    );
+    expect(svg).toMatch(/<style/i);
+    expect(svg).toContain('fill:red');
+  });
+
+  it('drops CSS that reaches outside the diagram', () => {
+    const svg = sanitizeDiagramSvg('<svg><style>body{display:none}</style></svg>', 'd1');
+    expect(svg).not.toMatch(/<style/i);
+  });
+
+  it('drops a block where only SOME selectors are scoped', () => {
+    // The interesting shape: one legitimate-looking rule carrying one that is not. A check that
+    // looked at the first rule, or at `includes('#d1')`, would pass this.
+    const svg = sanitizeDiagramSvg(
+      '<svg><style>#d1 .node{fill:red} body{display:none}</style></svg>',
+      'd1'
+    );
+    expect(svg).not.toMatch(/<style/i);
+  });
+
+  it('drops a selector list where one member escapes', () => {
+    const svg = sanitizeDiagramSvg('<svg><style>#d1 .node, body{display:none}</style></svg>', 'd1');
+    expect(svg).not.toMatch(/<style/i);
+  });
+
+  it('looks inside a grouping rule rather than trusting its wrapper', () => {
+    const escaping = sanitizeDiagramSvg(
+      '<svg><style>@media screen{body{display:none}}</style></svg>',
+      'd1'
+    );
+    expect(escaping).not.toMatch(/<style/i);
+
+    const scoped = sanitizeDiagramSvg(
+      '<svg><style>@media screen{#d1 .node{fill:red}}</style></svg>',
+      'd1'
+    );
+    expect(scoped).toMatch(/<style/i);
+  });
+
+  it('refuses a rule whose scope it cannot reason about', () => {
+    // `@font-face` has no selector to check. Neither it nor `@import` belongs in a diagram.
+    const svg = sanitizeDiagramSvg(
+      '<svg><style>@font-face{font-family:x;src:url(data:,)}</style></svg>',
+      'd1'
+    );
+    expect(svg).not.toMatch(/<style/i);
+  });
+
+  it('fails closed on a block that will not parse into rules', () => {
+    // An unparseable stylesheet is what a payload aiming at a parser quirk looks like. The cost of
+    // being wrong here is a colourless diagram, not a restyled app.
+    const svg = sanitizeDiagramSvg('<svg><style>this is not css at all</style></svg>', 'd1');
+    expect(svg).not.toMatch(/<style/i);
+  });
+
+  it('does not mistake a longer id for the one it was given', () => {
+    // `#d1-evil` starts with `#d1`. Prefix checks that forget the boundary are a classic.
+    const svg = sanitizeDiagramSvg('<svg><style>#d1-evil{display:none}</style></svg>', 'd1');
+    expect(svg).not.toMatch(/<style/i);
   });
 });
 
