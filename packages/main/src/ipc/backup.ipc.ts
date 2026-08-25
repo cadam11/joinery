@@ -21,9 +21,36 @@ import { CliDepsService } from '../services/sql/cli-deps';
 import { ServerFilesystemService } from '../services/sql/server-filesystem';
 import { ConnectionPoolManager } from '../services/sql/connection-pool';
 import { safeHandle } from './safe-handle';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('BackupIPC');
 
 function getEngine(connectionId: string): string {
   return ConnectionPoolManager.getInstance().getEngineForProfile(connectionId);
+}
+
+/**
+ * Route a cancel to whichever engine owns the operation (J-48e / J-51g).
+ *
+ * The cancel channels carry an operation id and nothing else — no connection, so no engine — and
+ * both used to call the MSSQL service unconditionally. It does not hold the PostgreSQL or MySQL
+ * ids, so a cancel there stopped the progress readout and left `pg_dump` or `mysqldump` running to
+ * completion. Each service now reports whether the id was its own, so asking all three is exact
+ * rather than a guess, and a cancel that matched nobody is logged instead of reported as success.
+ */
+export async function cancelOperation(
+  services: {
+    readonly mssql: BackupRestoreService;
+    readonly pg: PgBackupService;
+    readonly mysql: MySQLBackupService;
+  },
+  operationId: string
+): Promise<void> {
+  if (services.pg.cancel(operationId)) return;
+  if (services.mysql.cancel(operationId)) return;
+  if (await services.mssql.cancel(operationId)) return;
+
+  log.warn(`Cancel requested for unknown operation ${operationId}: nothing was running under it.`);
 }
 
 export function registerBackupHandlers(): void {
@@ -54,8 +81,14 @@ export function registerBackupHandlers(): void {
   });
 
   // Cancel backup
+  const cancelServices = {
+    mssql: backupService,
+    pg: pgBackupService,
+    mysql: mysqlBackupService,
+  };
+
   safeHandle(IPC_CHANNELS.BACKUP.CANCEL, async (_event, operationId: string): Promise<void> => {
-    await backupService.cancel(operationId);
+    await cancelOperation(cancelServices, operationId);
   });
 
   // Read backup info (MSSQL only — PG uses file headers)
@@ -114,7 +147,7 @@ export function registerBackupHandlers(): void {
 
   // Cancel restore
   safeHandle(IPC_CHANNELS.RESTORE.CANCEL, async (_event, operationId: string): Promise<void> => {
-    await backupService.cancel(operationId);
+    await cancelOperation(cancelServices, operationId);
   });
 
   // Get backup history (MSSQL only — PG has no backup metadata tables)

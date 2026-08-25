@@ -21,6 +21,7 @@ import { TsqlBuilder } from '../../utils/tsql-builder';
 import { createLogger } from '../../utils/logger';
 import { ConnectionPoolManager } from './connection-pool';
 import { MetadataService } from './metadata';
+import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
 import { resolveReplaceExisting } from './backup-args';
 
 const log = createLogger('BackupRestore');
@@ -51,6 +52,14 @@ export class BackupRestoreService extends BaseSingleton {
   async startBackup(request: BackupRequest): Promise<string> {
     const operationId = request.backupId || uuidv4();
     const startTime = Date.now();
+
+    // Before the statement is built or run: two BACKUPs to one path is the same corrupting case
+    // the CLI engines have, and `WITH INIT` makes it destructive (J-48f).
+    OperationClaims.getInstance().claim(
+      backupDestinationKey(request.backupPath),
+      operationId,
+      `a backup of ${request.database}`
+    );
 
     // Track operation
     const operation: ActiveOperation = {
@@ -245,6 +254,18 @@ export class BackupRestoreService extends BaseSingleton {
     const operationId = request.restoreId || uuidv4();
     const startTime = Date.now();
 
+    // The same default the statement builder uses below, so the claim names the database that
+    // will actually be written rather than an absent request field.
+    const claimedTarget = request.targetDatabase || 'RestoredDatabase';
+
+    // Two RESTOREs into one database is the corrupting case here, and on this engine the second
+    // one can also fail outright against a database the first holds exclusive (J-48f / J-51g).
+    OperationClaims.getInstance().claim(
+      restoreTargetKey(request.connectionId, claimedTarget),
+      operationId,
+      `a restore into ${claimedTarget}`
+    );
+
     // Track operation
     const operation: ActiveOperation = {
       operationId,
@@ -351,15 +372,24 @@ export class BackupRestoreService extends BaseSingleton {
   }
 
   /**
-   * Cancel an operation
+   * Cancel an operation, as far as this engine allows.
+   *
+   * Returns whether this service owned `operationId`, so the IPC layer can tell a cancel that
+   * matched nothing from one that was handled (J-48e / J-51g).
+   *
+   * **What this does not do:** stop the server. A T-SQL `BACKUP`/`RESTORE` runs inside SQL Server,
+   * not in a process Joinery owns, so the only real cancellation is `KILL <spid>` — which aborts
+   * the session outright and, for a RESTORE, can leave the target database in RESTORING. Marking
+   * the operation cancelled stops the progress poll and the completion event; the server finishes
+   * the statement it was given. The PostgreSQL and MySQL paths, whose work is a child process this
+   * app spawned, really do stop.
    */
-  async cancel(operationId: string): Promise<void> {
+  async cancel(operationId: string): Promise<boolean> {
     const operation = this.activeOperations.get(operationId);
-    if (operation) {
-      operation.cancelled = true;
-      // Note: Actual cancellation of backup/restore is complex
-      // For now, we just mark it cancelled
-    }
+    if (!operation) return false;
+
+    operation.cancelled = true;
+    return true;
   }
 
   /**
@@ -465,6 +495,10 @@ export class BackupRestoreService extends BaseSingleton {
    * Stop an operation and cleanup
    */
   private stopOperation(operationId: string): void {
+    // Every terminal path in this service comes through here, which is why the claim is released
+    // here: a leaked claim locks the destination for the rest of the session.
+    OperationClaims.getInstance().release(operationId);
+
     const operation = this.activeOperations.get(operationId);
     if (operation) {
       if (operation.progressInterval) {
@@ -478,6 +512,10 @@ export class BackupRestoreService extends BaseSingleton {
    * Stop all active operations and clear their progress intervals (used during app shutdown)
    */
   stopAllOperations(): void {
+    // The processes holding these claims are being stopped, so the claims go with them —
+    // otherwise a restart-free shutdown path would leave a destination locked (J-48f).
+    OperationClaims.getInstance().releaseAll();
+
     for (const [id, operation] of this.activeOperations) {
       if (operation.progressInterval) {
         clearInterval(operation.progressInterval);
