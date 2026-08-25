@@ -15,13 +15,52 @@ import { ConnectionPoolManager } from './connection-pool';
 
 const log = createLogger('ServerFS');
 
+/** Which filesystem a server path belongs to. SQL Server runs on both (J-50). */
+export type ServerPathStyle = 'windows' | 'posix';
+
 /**
- * Validates and sanitizes a server filesystem path.
- * Rejects paths with SQL injection patterns.
+ * The style of an ABSOLUTE server path, or `null` when it is not one.
+ *
+ * Anchoring is the first half of the injection guard, not a formatting nicety: a value that is not
+ * rooted is not a path this app produced, and the browser only ever walks down from a drive or from
+ * `/`. Windows means a drive letter or a UNC prefix; POSIX means a leading slash.
+ */
+export function serverPathStyle(inputPath: string): ServerPathStyle | null {
+  if (/^[A-Za-z]:\\/.test(inputPath) || inputPath.startsWith('\\\\')) return 'windows';
+  if (inputPath.startsWith('/')) return 'posix';
+  return null;
+}
+
+/** The separator to build paths with, for a path of this style. */
+export function serverPathSeparator(style: ServerPathStyle): string {
+  return style === 'windows' ? '\\' : '/';
+}
+
+/**
+ * Validate and escape a server filesystem path (J-50).
+ *
+ * This is an injection guard: the value is interpolated into an `xp_dirtree` call, so what it
+ * REFUSES matters more than what it accepts. It used to accept Windows paths only, which meant
+ * SQL Server on Linux — `/var/opt/mssql/data`, the container this repo's own harness runs — could
+ * not be browsed at all, while the renderer's path helpers already handled POSIX correctly.
+ *
+ * Widening it kept every existing refusal and added two:
+ *
+ * - **A POSIX path may not contain a backslash.** Legal in a Linux filename, never produced by
+ *   this app, and a mixed-separator path is the shape a caller confusing the two styles would
+ *   send. Refusing is cheap; guessing is not.
+ * - **No `..` segment, in either style.** The renderer computes a parent by slicing, so nothing
+ *   legitimate emits one — which makes a `..` arriving here a sign the caller is not the app.
  */
 function sanitizeServerPath(inputPath: string): string {
-  // Must look like a valid Windows path (drive letter or UNC)
-  if (!/^[A-Za-z]:\\|^\\\\/.test(inputPath)) {
+  const style = serverPathStyle(inputPath);
+  if (style === null) {
+    throw new Error(`Invalid server path: ${inputPath}`);
+  }
+  if (style === 'posix' && inputPath.includes('\\')) {
+    throw new Error(`Invalid server path: ${inputPath}`);
+  }
+  if (inputPath.split(/[\\/]/).includes('..')) {
     throw new Error(`Invalid server path: ${inputPath}`);
   }
   // Reject semicolons, SQL comments, and other injection patterns
@@ -31,6 +70,9 @@ function sanitizeServerPath(inputPath: string): string {
   // Escape single quotes for N-string literals
   return inputPath.replace(/'/g, "''");
 }
+
+/** Exposed for the spec: the guard is the interesting part of this module. */
+export const sanitizeServerPathForTest = sanitizeServerPath;
 
 /**
  * Validates a SQL Server identifier (database name, etc.)
@@ -107,8 +149,12 @@ export class ServerFilesystemService extends BaseSingleton {
     path: string,
     includeFiles = true
   ): Promise<ServerFileEntry[]> {
-    // Normalize path - ensure it ends with backslash for directories
-    const normalizedPath = path.endsWith('\\') ? path : `${path}\\`;
+    // Normalise with the separator the path itself is written in — hardcoding a backslash here was
+    // the other half of "SQL Server on Linux cannot be browsed" (J-50). An unrooted path has no
+    // style; let the sanitizer be the one that refuses it, so there is one place that does.
+    const style = serverPathStyle(path);
+    const separator = style === null ? '\\' : serverPathSeparator(style);
+    const normalizedPath = path.endsWith(separator) ? path : `${path}${separator}`;
     const safePath = sanitizeServerPath(normalizedPath);
 
     // xp_dirtree parameters: path, depth (0=recursive), include_files (1=yes)

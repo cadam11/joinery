@@ -44,7 +44,7 @@ can be reached through one, and the pool is opened against the tunnel's local en
 | Capability                        | SQL Server                                           | PostgreSQL              | MySQL                 |
 | --------------------------------- | ---------------------------------------------------- | ----------------------- | --------------------- |
 | Backup and restore                | T-SQL `BACKUP` / `RESTORE`                           | `pg_dump`/`pg_restore`  | `mysqldump`/`mysql`   |
-| Browse the server's filesystem    | Yes                                                  | No                      | No                    |
+| Browse the server's filesystem    | Yes — on Windows and Linux hosts alike               | No                      | No                    |
 | Execution plans                   | `SET STATISTICS PROFILE ON` — **runs the statement** | `EXPLAIN (FORMAT JSON)` | `EXPLAIN FORMAT=JSON` |
 | Object comments                   | Extended properties                                  | `COMMENT ON`            | DDL comments          |
 | Windows authentication            | Yes                                                  | No                      | No                    |
