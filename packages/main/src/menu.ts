@@ -3,6 +3,7 @@
  */
 
 import { Menu, app, shell, BrowserWindow } from 'electron';
+import { DOCS_SITE_URL } from '@joinery/shared';
 
 export function createMenu(): void {
   const isMac = process.platform === 'darwin';
@@ -405,7 +406,7 @@ export function createMenu(): void {
         {
           label: 'Joinery Documentation',
           click: async () => {
-            await shell.openExternal('https://github.com/cadam11/joinery/wiki');
+            await shell.openExternal(DOCS_SITE_URL);
           },
         },
         {

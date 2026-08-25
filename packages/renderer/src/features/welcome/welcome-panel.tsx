@@ -33,7 +33,7 @@
  */
 
 import { ArrowRight, ArrowUpRight, BookOpen, GitBranch, Server, Sparkles } from 'lucide-react';
-import type { ConnectionProfile } from '@joinery/shared';
+import { DOCS_SITE_URL, type ConnectionProfile } from '@joinery/shared';
 
 import { dispatchCommand, handlerCount } from '../../commands';
 import { ipc, isIpcAvailable } from '../../ipc';
@@ -453,7 +453,7 @@ function GettingStarted() {
 
 // ── Footer ─────────────────────────────────────────────────────────────────────────────────
 
-const DOCS_URL = 'https://github.com/cadam11/joinery/wiki';
+const DOCS_URL = DOCS_SITE_URL;
 const REPO_URL = 'https://github.com/cadam11/joinery';
 
 /**

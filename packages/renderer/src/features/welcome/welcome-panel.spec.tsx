@@ -286,10 +286,7 @@ describe('the welcome tab', () => {
     await userEvent.click(screen.getByTestId('welcome-docs'));
     await userEvent.click(screen.getByTestId('welcome-github'));
 
-    expect(opened).toEqual([
-      'https://github.com/cadam11/joinery/wiki',
-      'https://github.com/cadam11/joinery',
-    ]);
+    expect(opened).toEqual(['https://usejoinery.com/', 'https://github.com/cadam11/joinery']);
     expect(document.querySelectorAll('a[href]')).toHaveLength(0);
   });
 });
