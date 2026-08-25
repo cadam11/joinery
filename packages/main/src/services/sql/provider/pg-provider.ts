@@ -88,7 +88,12 @@ export class PgProvider extends DatabaseProvider {
       };
     } finally {
       if (testPool) {
-        await testPool.end().catch(() => {});
+        // Not swallowed: a pool that will not close is worth a line, even on a path that has
+        // already produced its answer. The empty catch here predates the lint gap (J-128).
+        await testPool.end().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          log.debug(`Closing the PostgreSQL test pool failed: ${message}`);
+        });
       }
     }
   }

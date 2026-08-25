@@ -73,8 +73,12 @@ jobs:
       # packages that declare a `lint` task, and today that is this one — main, preload,
       # shared and cli have none (plans/rebrand/FOLLOW-UPS.md items 6 and 14). Widen to
       # the root script once they do.
-      - name: Lint renderer
-        run: pnpm --filter @joinery/renderer run lint
+      # Every package, not just the renderer. `main`, `shared` and `preload` had no `lint` script
+      # at all until J-128, so turbo had nothing to run for them and CI linted one package out of
+      # four — while type-checking all four. The pre-commit hook did lint them, which is why the
+      # gap stayed invisible: it only opened on a branch that reached CI without passing the hook.
+      - name: Lint every package
+        run: pnpm run lint
 
       - name: Run tests with coverage
         run: pnpm run test:coverage

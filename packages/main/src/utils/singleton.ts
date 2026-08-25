@@ -9,8 +9,12 @@ const _globalObjectStore: Map<string, unknown> = new Map();
 type SingletonClass<T> = (abstract new (...args: never[]) => T) & { name: string };
 
 export abstract class BaseSingleton {
-  // Constructor is public but class is abstract, so direct instantiation is prevented
-  constructor() {}
+  // Public but the class is abstract, so direct instantiation is still prevented. Declared rather
+  // than omitted because subclasses call `super()`, and an implicit constructor would make the
+  // chain invisible at the call site.
+  constructor() {
+    // Nothing to initialise: the instance lives in `_globalObjectStore`, not in this base.
+  }
 
   /**
    * Gets the singleton instance of the class

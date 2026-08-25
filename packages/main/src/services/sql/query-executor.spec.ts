@@ -71,11 +71,15 @@ describe('QueryExecutor', () => {
     });
 
     it('returns true for CREATE FUNCTION', () => {
-      expect(requiresFirstInBatch('CREATE FUNCTION dbo.MyFunc() RETURNS INT AS BEGIN RETURN 1 END')).toBe(true);
+      expect(
+        requiresFirstInBatch('CREATE FUNCTION dbo.MyFunc() RETURNS INT AS BEGIN RETURN 1 END')
+      ).toBe(true);
     });
 
     it('returns true for CREATE TRIGGER', () => {
-      expect(requiresFirstInBatch('CREATE TRIGGER MyTrig ON dbo.T AFTER INSERT AS BEGIN END')).toBe(true);
+      expect(requiresFirstInBatch('CREATE TRIGGER MyTrig ON dbo.T AFTER INSERT AS BEGIN END')).toBe(
+        true
+      );
     });
 
     it('returns false for SELECT', () => {
@@ -110,7 +114,9 @@ describe('QueryExecutor', () => {
     });
 
     it('returns null for complex queries', () => {
-      const result = parseSimpleSelect('SELECT * FROM dbo.Users u JOIN dbo.Orders o ON u.id = o.userId');
+      const result = parseSimpleSelect(
+        'SELECT * FROM dbo.Users u JOIN dbo.Orders o ON u.id = o.userId'
+      );
       expect(result).toBeNull();
     });
 

@@ -8,7 +8,9 @@
     "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/index.js && tsc --emitDeclarationOnly",
     "watch": "esbuild src/index.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist/index.js --watch",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts --max-warnings 0",
+    "lint:fix": "eslint src --ext .ts --fix"
   },
   "dependencies": {
     "@joinery/shared": "workspace:*"

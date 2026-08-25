@@ -46,7 +46,9 @@ vi.mock('./tool-registry', () => ({
       getTool: (name: string) => ({ name, requiresConfirmation: true }),
       getTools: () => [],
       getToolsForAPI: () => [],
-      setEditorContent: () => {},
+      setEditorContent: () => {
+        // The double records nothing: no assertion in this file reads the editor content.
+      },
     }),
   },
 }));

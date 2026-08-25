@@ -12,6 +12,10 @@
  * to import from unit-tested code.
  */
 
+/* eslint-disable no-console -- This module is the one place allowed to reach the console.
+   `no-console` exists to route every message through `createLogger`, so that it lands in the
+   Output panel as well as the terminal; the four calls below are what makes that true. Disabling
+   the rule anywhere else would be the bug it is guarding against (J-128). */
 import type { LogEntry } from '@joinery/shared';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
