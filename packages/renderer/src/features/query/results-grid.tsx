@@ -67,6 +67,7 @@ import {
 import type { CopyFormat, ExportFormat, ResultSet } from '@joinery/shared';
 
 import { dispatchCommand, useCommand } from '../../commands';
+import { MAX_ROWS_SETTING_LABEL } from '../settings/settings-labels';
 import { ipc, isIpcAvailable } from '../../ipc';
 import { diagnostics, notify } from '../../state/diagnostics';
 import { selectEffectiveTheme, selectGridSettings, useSettingsStore } from '../../state/settings';
@@ -488,7 +489,10 @@ export const ResultsGrid = memo(function ResultsGrid({
         <p className="flex shrink-0 items-baseline gap-3 font-mono text-2xs tracking-eyebrow text-fg-muted uppercase">
           {truncated ? (
             <Tooltip
-              content={`Capped by your “maximum rows to display” setting — the full result was ${totalRows.toLocaleString()} rows`}
+              // The setting's own label, imported rather than transcribed: this string used to say
+              // "maximum rows to display" — the field name — while the control said "Maximum rows
+              // to fetch", so the tooltip named a setting the user could not find (J-107).
+              content={`Capped by your “${MAX_ROWS_SETTING_LABEL}” setting — the full result was ${totalRows.toLocaleString()} rows`}
             >
               {/* Amber marks the caution; the words stay `text-fg`. `--color-warning` measures 4.40:1
                   on `bg-chrome` under ivory — fine for a 14px icon (3:1 for non-text UI) and short of

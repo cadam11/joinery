@@ -45,6 +45,7 @@ import type { AppSettings, CopyFormat, ExecuteScope, ThemePreference } from '@jo
 
 import { Button, Icon, Select, SelectItem, Switch, cn } from '../../ui';
 import { selectHasConfiguredVendors, useAIStore } from '../../state/ai';
+import { MAX_ROWS_SETTING_LABEL } from './settings-labels';
 import {
   selectConfirmedCtrlEExecute,
   editorPrefsStore,
@@ -320,7 +321,7 @@ export function QueryGroup() {
           draws, and the grid's "showing N of M" line is where a user sees it bite. */}
       <NumberSetting
         testId="settings-query-max-rows"
-        label="Maximum rows to fetch"
+        label={MAX_ROWS_SETTING_LABEL}
         hint="Larger result sets are truncated, and the grid says so."
         value={query.maxRowsToDisplay}
         min={100}
