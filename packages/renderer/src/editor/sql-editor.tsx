@@ -102,21 +102,37 @@ export type EditorActionId =
 const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
 
 /**
- * The when-clause that ties a keybinding rule to ONE editor: Monaco's `CodeEditorWidget` publishes
- * `editorId` on the context key service it scopes to its own DOM node
- * (`codeEditorWidget.js:1624`), and the keybinding resolver evaluates a rule's when-clause against
- * the context of whatever currently has focus (`keybindingResolver.js:281-296`). So a rule carrying
- * this clause is inert unless focus is inside that editor — which is exactly the scoping Monaco's
- * own `addAction` applies to every rule it registers (`standaloneCodeEditor.js:110`).
+ * The when-clause that ties a keybinding rule to ONE editor.
  *
- * The id is asserted rather than trusted because the clause is a STRING: Monaco generates
- * `editor-<n>`, and anything carrying a quote or a space would parse into a rule that silently never
- * matches — a keybinding that does nothing, which is the failure mode this whole file is careful
- * about.
+ * Three facts make it work, all in Monaco 0.56:
+ *
+ *  - `CodeEditorWidget` scopes a context key service to its own DOM element
+ *    (`codeEditorWidget.js:211` — `contextKeyService.createScoped(this._domElement)`) and publishes
+ *    `editorId` on it (`:1624`). Scoped to the element is the load-bearing half: the key is
+ *    invisible from any other editor's subtree;
+ *  - the keybinding service resolves the context from the element the keydown actually landed on
+ *    (`abstractKeybindingService.js:190` → `contextKeyService.getContext(target)`, which walks up
+ *    the DOM), so the context is the FOCUSED editor's;
+ *  - the resolver skips any rule whose when-clause does not match it
+ *    (`keybindingResolver.js:281-296`).
+ *
+ * Which is exactly the scoping Monaco's own `addAction` applies to every rule it registers
+ * (`standaloneCodeEditor.js:109`).
+ *
+ * The id is asserted rather than trusted because the clause is a STRING that Monaco parses back:
+ * anything carrying a quote or a space would deserialize into a rule that silently never matches —
+ * a keybinding that does nothing, which is the failure mode this whole file is careful about. The
+ * character class has to admit Monaco's REAL id format, which is `getEditorType() + ':' + n`, i.e.
+ * `vs.editor.ICodeEditor:1` (`codeEditorWidget.js:290-295`, `editorCommon.js:9`;
+ * `StandaloneCodeEditor` does not override `getId`). An earlier assertion here omitted the colon and
+ * therefore rejected every editor Monaco can build — it threw out of the mount effect, after
+ * `create` had already run, so no query tab could open and the editor leaked with it. The unit
+ * double now emits the real format, which is what makes this assertion testable rather than
+ * decorative.
  */
 function editorScope(instance: monaco.editor.IStandaloneCodeEditor): string {
   const editorId = instance.getId();
-  if (!/^[\w.-]+$/.test(editorId)) {
+  if (!/^[\w.:-]+$/.test(editorId)) {
     throw new Error(`[SqlEditor] cannot scope keybindings to editor id "${editorId}"`);
   }
   return `editorId == '${editorId}'`;
@@ -396,7 +412,7 @@ export function SqlEditor({
      *
      * The blast radius is editors and only editors: the standalone keybinding service listens for
      * keydown on each editor's container element rather than on the window
-     * (`standaloneServices.js:259-268`), so these keys never fired from the results grid or the
+     * (`standaloneServices.js:259-268`, per editor at `:293`), so these keys never fired from the results grid or the
      * sidebar, before this change or after it. What changes is WHICH editor answers.
      *
      * The module-level pair below is the same two registrations, with both handles kept:
@@ -414,10 +430,11 @@ export function SqlEditor({
     const keybindings: monaco.IDisposable[] = [];
     const bindKey = (name: string, keybinding: number, run: () => void): void => {
       const commandId = `joinery.sqlEditor.${instance.getId()}.${name}`;
-      keybindings.push(
-        monaco.editor.addCommand({ id: commandId, run }),
-        monaco.editor.addKeybindingRule({ keybinding, command: commandId, when: scope })
-      );
+      const command = monaco.editor.addCommand({ id: commandId, run });
+      const rule = monaco.editor.addKeybindingRule({ keybinding, command: commandId, when: scope });
+      // Pushed in the order they must be UNdone: the rule names the command, so the rule goes first
+      // and no state exists in which a resolvable rule points at an id that is no longer registered.
+      keybindings.push(rule, command);
     };
 
     // ⌘E / ⌃E. `menu.ts` registers Query ▸ Execute with `registerAccelerator: false` precisely so

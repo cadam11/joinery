@@ -36,7 +36,13 @@ const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
 const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35, KeyM: 43 };
 
 interface FakeEditor {
-  /** Monaco's own per-editor id (`editor-1`, `editor-2`, …), and the value of its `editorId` key. */
+  /**
+   * Monaco's own per-editor id, and the value of its `editorId` context key. The format is
+   * `getEditorType() + ':' + n` — i.e. **`vs.editor.ICodeEditor:1`**, colon included
+   * (`codeEditorWidget.js:290-295`, `editorCommon.js:9`; `StandaloneCodeEditor` does not override
+   * `getId`). Spelling it any other way here is not a harmless simplification: this double invented
+   * `editor-<n>` once, and a component-side assertion that rejected every REAL id shipped green.
+   */
   id: string;
   /** Set by `dispose()`. Monaco keeps the object alive and inert; so does this. */
   disposed: boolean;
@@ -88,7 +94,10 @@ const state = {
   commandRegistry: new Map<string, () => void>(),
   /** The global dynamic keybinding list, in registration order. */
   rules: [] as KeybindingRule[],
-  /** Monaco numbers editors from a module counter; so does the double, so ids are unique. */
+  /**
+   * Monaco numbers editors from a module-global `++EDITOR_ID` (`codeEditorWidget.js:194`); so does
+   * the double, so ids are unique per mount here as they are there.
+   */
   nextEditorId: 1,
   /** Monaco's `LAST_GENERATED_COMMAND_ID`, for the ids `addCommand` invents. */
   nextDynamicCommandId: 1,
@@ -134,7 +143,7 @@ function addRules(rules: KeybindingRule[]): { dispose: () => void } {
 }
 
 /** The only when-clause shape this double understands: Monaco's own per-editor scope. */
-const EDITOR_ID_WHEN = /^editorId == '([\w.-]+)'$/;
+const EDITOR_ID_WHEN = /^editorId == '([\w.:-]+)'$/;
 
 function whenMatches(when: string | null, focused: FakeEditor): boolean {
   // No when-clause means the rule matches EVERY context this service can be dispatched in — which
@@ -154,7 +163,7 @@ function whenMatches(when: string | null, focused: FakeEditor): boolean {
  *
  * The focused editor is required rather than optional because the standalone keybinding service
  * listens for keydown on each editor's own container element and nowhere else
- * (`standaloneServices.js:259-268`), so there is no such thing as a dispatch from outside every
+ * (`standaloneServices.js:259-268`, per editor at `:293`), so there is no such thing as a dispatch from outside every
  * editor. A rule can therefore only ever be resolved against SOME editor's context — the question
  * this file is about is whether it is the right one.
  *
@@ -182,7 +191,7 @@ function makeEditor(): FakeEditor {
       state.disposedSubscriptions += 1;
     },
   };
-  const id = `editor-${state.nextEditorId++}`;
+  const id = `vs.editor.ICodeEditor:${state.nextEditorId++}`;
   const editor: FakeEditor = {
     id,
     disposed: false,
@@ -596,7 +605,11 @@ describe('keybindings', () => {
  * of a closed tab keep resolving, and because the resolver walks the list backwards, the newest rule
  * wins whatever has focus: the survivor's own binding never gets a look in.
  *
- * The two symptoms below are the same defect seen from either side of an unmount.
+ * Which half of the fix each case pins, stated because it is easy to get wrong: with the SCOPE in
+ * place a stale rule can never match a surviving editor's context, so a test that only presses a key
+ * in the survivor stays green with the disposal deleted. Every case below that is named for a closed
+ * tab therefore also asserts that nothing of it remains in the global list — the leak is the ticket's
+ * actual concern, and structural assertions are the only thing that can see it.
  */
 describe('keybinding lifetime', () => {
   const EXECUTE_KEY = KEY_MOD.CtrlCmd | KEY_CODE.KeyE;
@@ -614,16 +627,25 @@ describe('keybinding lifetime', () => {
     for (const id of commandIds) expect(state.commandRegistry.has(id)).toBe(false);
   });
 
-  it('does not let a closed tab’s ⌃M answer for the tab that is still open', () => {
-    // The ticket's scenario: two query tabs, close the second, press ⌃M in the first. The dead
-    // editor's `trigger` returns at its null `_modelData`, so the mode never moves and the J-83
-    // guard reports a perfectly healthy build as broken — a spurious throw on the one keystroke a
-    // trapped keyboard user has left.
+  it('drops a closed tab’s ⌃M rule, and leaves the survivor’s working', () => {
+    // The ticket's scenario: two query tabs, close the second, press ⌃M in the first. Before the
+    // fix the dead tab's rule was newest and unscoped, so it answered; its `trigger` returned at
+    // its null `_modelData`, the mode never moved, and J-83's guard reported a perfectly healthy
+    // build as broken — a spurious throw on the one keystroke a trapped keyboard user has left.
     mount();
     const survivorEditor = lastEditor();
     const closed = mount();
+    const closedEditor = lastEditor();
     closed.view.unmount();
 
+    // The disposal half. Not implied by the press below: a rule scoped to a dead editor could not
+    // have matched the survivor's context anyway, so only looking in the list can see the leak.
+    const closedTabRules = state.rules.filter(
+      rule => rule.when !== null && rule.when.includes(closedEditor.id)
+    );
+    expect(closedTabRules).toEqual([]);
+
+    // The scope half, and the symptom the ticket is named for.
     expect(() => press(TAB_FOCUS_KEY, survivorEditor)).not.toThrow();
     expect(state.tabFocusMode).toBe(true);
   });
@@ -644,7 +666,7 @@ describe('keybinding lifetime', () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it('leaves a closed tab’s execute keys unresolvable', () => {
+  it('unregisters a closed tab’s execute commands, and never runs its callbacks', () => {
     // The ⌘E half of the ⌃M case above, and the reason this is worth more than tidiness: a stale
     // rule that still resolves runs a CLOSED tab's callbacks — the gate, the connection, the tab
     // state, all belonging to a panel React has already torn down.
@@ -652,10 +674,18 @@ describe('keybinding lifetime', () => {
     mount();
     const survivorEditor = lastEditor();
     const closed = mount({ onExecuteShortcut });
+    const closedEditor = lastEditor();
     closed.view.unmount();
 
-    press(EXECUTE_KEY, survivorEditor);
+    // The disposal half: the command entries go too, not just the rules that name them. Four left,
+    // all the survivor's.
+    expect([...state.commandRegistry.keys()].filter(id => id.includes(closedEditor.id))).toEqual(
+      []
+    );
+    expect(state.commandRegistry.size).toBe(4);
 
+    // The scope half: whatever the list still held, the closed tab's handler must not run.
+    press(EXECUTE_KEY, survivorEditor);
     expect(onExecuteShortcut).not.toHaveBeenCalled();
   });
 });
