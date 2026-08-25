@@ -15,7 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LogEntry } from '@joinery/shared';
 import { onLogEntry } from '../utils/logger';
-import { installContentSecurityPolicy, installNavigationGuards, SECURITY_LOG_TAG } from './harden';
+import {
+  installContentSecurityPolicy,
+  installNavigationGuards,
+  installNavigationGuardsForEveryWindow,
+  SECURITY_LOG_TAG,
+} from './harden';
 import type { AppEntry } from './navigation-guard';
 
 const FILE_ENTRY: AppEntry = { kind: 'file', path: '/app/dist/browser/index.html' };
@@ -28,21 +33,28 @@ type WillNavigateListener = (details: Electron.Event<{ url: string }>) => void;
 interface FakeWebContents {
   readonly windowOpen: () => WindowOpenHandler;
   readonly willNavigate: () => WillNavigateListener;
+  readonly willRedirect: () => WillNavigateListener;
   readonly contents: Electron.WebContents;
 }
 
 function fakeWebContents(): FakeWebContents {
   let windowOpen: WindowOpenHandler | undefined;
-  let willNavigate: WillNavigateListener | undefined;
+  const listeners = new Map<string, WillNavigateListener>();
 
   const contents = {
     setWindowOpenHandler(handler: WindowOpenHandler) {
       windowOpen = handler;
     },
     on(event: string, listener: WillNavigateListener) {
-      if (event === 'will-navigate') willNavigate = listener;
+      listeners.set(event, listener);
       return contents;
     },
+  };
+
+  const listener = (event: string): WillNavigateListener => {
+    const registered = listeners.get(event);
+    if (!registered) throw new Error(`no ${event} listener was registered`);
+    return registered;
   };
 
   return {
@@ -50,11 +62,32 @@ function fakeWebContents(): FakeWebContents {
       if (!windowOpen) throw new Error('setWindowOpenHandler was never called');
       return windowOpen;
     },
-    willNavigate: () => {
-      if (!willNavigate) throw new Error('no will-navigate listener was registered');
-      return willNavigate;
-    },
+    willNavigate: () => listener('will-navigate'),
+    willRedirect: () => listener('will-redirect'),
     contents: contents as unknown as Electron.WebContents,
+  };
+}
+
+/** Just enough `app` to capture the one hook `installNavigationGuardsForEveryWindow` registers. */
+function fakeApp(): {
+  readonly createContents: (contents: Electron.WebContents) => void;
+  readonly app: Electron.App;
+} {
+  let created: ((event: unknown, contents: Electron.WebContents) => void) | undefined;
+
+  const app = {
+    on(event: string, listener: (event: unknown, contents: Electron.WebContents) => void) {
+      if (event === 'web-contents-created') created = listener;
+      return app;
+    },
+  };
+
+  return {
+    createContents: contents => {
+      if (!created) throw new Error('no web-contents-created listener was registered');
+      created({}, contents);
+    },
+    app: app as unknown as Electron.App,
   };
 }
 
@@ -265,5 +298,82 @@ describe('installContentSecurityPolicy', () => {
     const fake = fakeSession();
     installContentSecurityPolicy(fake.session, "default-src 'self'");
     expect(fake.respond({}).cancel).toBeUndefined();
+  });
+});
+
+describe('installNavigationGuards — will-redirect', () => {
+  it('cancels a server-side redirect to a blocked URL and records the reason', () => {
+    const openExternal = vi.fn(async () => undefined);
+    const fake = fakeWebContents();
+    installNavigationGuards(fake.contents, { entry: FILE_ENTRY, openExternal });
+
+    const event = navigationEvent('file:///etc/passwd');
+    fake.willRedirect()(event);
+
+    expect(event.prevented()).toBe(true);
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(securityEntries().map(e => e.level)).toEqual(['warn']);
+  });
+
+  it('cancels a redirect off-origin and hands the URL to the OS browser instead', () => {
+    const openExternal = vi.fn(async () => undefined);
+    const fake = fakeWebContents();
+    installNavigationGuards(fake.contents, { entry: FILE_ENTRY, openExternal });
+
+    const event = navigationEvent('https://example.com/');
+    fake.willRedirect()(event);
+
+    expect(event.prevented()).toBe(true);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://example.com/');
+  });
+
+  it('lets a redirect that lands back on the entry document through', () => {
+    const openExternal = vi.fn(async () => undefined);
+    const fake = fakeWebContents();
+    installNavigationGuards(fake.contents, { entry: FILE_ENTRY, openExternal });
+
+    const event = navigationEvent(`file://${FILE_ENTRY.path}`);
+    fake.willRedirect()(event);
+
+    expect(event.prevented()).toBe(false);
+    expect(securityEntries()).toEqual([]);
+  });
+});
+
+describe('installNavigationGuardsForEveryWindow', () => {
+  it('guards a window created later, with nobody remembering to wire it', () => {
+    const openExternal = vi.fn(async () => undefined);
+    const electronApp = fakeApp();
+    installNavigationGuardsForEveryWindow(electronApp.app, { entry: FILE_ENTRY, openExternal });
+
+    // The second window J-129 exists to protect: created after startup, wired by nothing.
+    const second = fakeWebContents();
+    electronApp.createContents(second.contents);
+
+    const event = navigationEvent('file:///etc/passwd');
+    second.willNavigate()(event);
+    expect(event.prevented()).toBe(true);
+
+    const redirect = navigationEvent('https://example.com/');
+    second.willRedirect()(redirect);
+    expect(redirect.prevented()).toBe(true);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://example.com/');
+
+    expect(second.windowOpen()({ url: 'https://example.com/' } as Electron.HandlerDetails)).toEqual(
+      { action: 'deny' }
+    );
+  });
+
+  it('guards every window, not just the first', () => {
+    const openExternal = vi.fn(async () => undefined);
+    const electronApp = fakeApp();
+    installNavigationGuardsForEveryWindow(electronApp.app, { entry: FILE_ENTRY, openExternal });
+
+    for (const fake of [fakeWebContents(), fakeWebContents(), fakeWebContents()]) {
+      electronApp.createContents(fake.contents);
+      const event = navigationEvent('file:///etc/passwd');
+      fake.willNavigate()(event);
+      expect(event.prevented()).toBe(true);
+    }
   });
 });

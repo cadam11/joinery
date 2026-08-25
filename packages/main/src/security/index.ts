@@ -18,9 +18,11 @@ export {
 export {
   installContentSecurityPolicy,
   installNavigationGuards,
+  installNavigationGuardsForEveryWindow,
   type NavigationGuardOptions,
   SECURITY_LOG_TAG,
 } from './harden';
+export { type ExternalOpener, openExternalSafely } from './open-external';
 export {
   type AppEntry,
   decideNavigation,

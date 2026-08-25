@@ -5,6 +5,26 @@
 import { Menu, app, shell, BrowserWindow } from 'electron';
 import { DOCS_SITE_URL } from '@joinery/shared';
 
+import { openExternalSafely } from './security/open-external';
+import { createLogger } from './utils/logger';
+
+const log = createLogger('Menu');
+
+/**
+ * Open a menu link through the scheme allowlist (J-129).
+ *
+ * Electron does not await a menu click, so the rejection has to be handled here rather than
+ * escaping as an unhandled promise. Every URL below is a hard-coded literal, so a refusal means
+ * one of them was edited into something the allowlist rejects — a build-time mistake that should
+ * be loud in the Output panel, not silent.
+ */
+function openMenuLink(url: string): void {
+  openExternalSafely(url, shell.openExternal).catch(error => {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error(`Refused to open a menu link: ${message}`);
+  });
+}
+
 export function createMenu(): void {
   const isMac = process.platform === 'darwin';
 
@@ -405,8 +425,8 @@ export function createMenu(): void {
       submenu: [
         {
           label: 'Joinery Documentation',
-          click: async () => {
-            await shell.openExternal(DOCS_SITE_URL);
+          click: () => {
+            openMenuLink(DOCS_SITE_URL);
           },
         },
         {
@@ -420,23 +440,21 @@ export function createMenu(): void {
         { type: 'separator' },
         {
           label: 'Report Issue...',
-          click: async () => {
-            await shell.openExternal('https://github.com/cadam11/joinery/issues');
+          click: () => {
+            openMenuLink('https://github.com/cadam11/joinery/issues');
           },
         },
         { type: 'separator' },
         {
           label: 'T-SQL Reference',
-          click: async () => {
-            await shell.openExternal(
-              'https://docs.microsoft.com/en-us/sql/t-sql/language-reference'
-            );
+          click: () => {
+            openMenuLink('https://docs.microsoft.com/en-us/sql/t-sql/language-reference');
           },
         },
         {
           label: 'SQL Server Documentation',
-          click: async () => {
-            await shell.openExternal('https://docs.microsoft.com/en-us/sql/sql-server/');
+          click: () => {
+            openMenuLink('https://docs.microsoft.com/en-us/sql/sql-server/');
           },
         },
       ],
