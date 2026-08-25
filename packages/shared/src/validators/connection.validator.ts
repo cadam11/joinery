@@ -220,6 +220,92 @@ export function validateConnectionName(name: string): ValidationResult {
 }
 
 /**
+ * A DNS-style hostname, with one deliberate departure from the RFC: an underscore inside a label.
+ *
+ * Underscores are illegal in public DNS and legal in Docker container names, which is how
+ * containers address each other on a user-defined network — `joinery_test_postgres`, and anything
+ * Compose generates by default. Joinery's own Docker panel pre-fills the connection editor with a
+ * container name, so refusing them meant refusing a value the app itself had just supplied (J-41).
+ *
+ * Not in the first or last position, the same rule `-` already had.
+ */
+function isHostname(candidate: string): boolean {
+  return /^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?)*$/.test(
+    candidate
+  );
+}
+
+/**
+ * An IPv6 literal — compressed, bracketed, or carrying a zone id.
+ *
+ * By structure rather than by one pattern, which the ticket asks for and which is the right call:
+ * a single regex covering `::`, an embedded IPv4 tail and a `%zone` suffix is unreadable and
+ * traditionally wrong at the edges. The old pattern accepted only the fully-expanded eight-group
+ * form plus the literal `::1`, so `2001:db8::1` — the normal way an address is written — was
+ * refused. `form-model.ts`'s `splitHostPort` deliberately preserves exactly these forms, so the
+ * splitter handed the validator a correct value which the validator then rejected: two parts of
+ * one package disagreeing (J-41).
+ */
+function isIpv6(candidate: string): boolean {
+  // Bracketed form, as it appears in a URL. Both brackets or neither.
+  const startsBracketed = candidate.startsWith('[');
+  const endsBracketed = candidate.endsWith(']');
+  if (startsBracketed !== endsBracketed) return false;
+  const unbracketed = startsBracketed ? candidate.slice(1, -1) : candidate;
+
+  // A link-local address can carry one zone id: `fe80::1%en0`.
+  const zoneParts = unbracketed.split('%');
+  if (zoneParts.length > 2) return false;
+  const [address = '', zone] = zoneParts;
+  if (zone !== undefined && zone.length === 0) return false;
+
+  return hasIpv6Groups(address);
+}
+
+/** 1–4 hex digits, which is what one IPv6 group is. */
+function isIpv6Group(group: string): boolean {
+  return /^[0-9a-fA-F]{1,4}$/.test(group);
+}
+
+/**
+ * The group arithmetic, with `::` standing in for one or more zero groups.
+ *
+ * A trailing dotted-quad (`::ffff:192.0.2.1`) occupies two groups, which is why the count is
+ * computed rather than compared to a fixed list of shapes.
+ */
+function hasIpv6Groups(address: string): boolean {
+  if (address.includes(':::')) return false;
+
+  const halves = address.split('::');
+  if (halves.length > 2) return false;
+  const compressed = halves.length === 2;
+
+  const [head = '', tail = ''] = halves;
+  const headGroups = head === '' ? [] : head.split(':');
+  const tailGroups = tail === '' ? [] : tail.split(':');
+  const groups = [...headGroups, ...tailGroups];
+  if (groups.length === 0) return compressed; // `::` on its own is the unspecified address
+
+  // Only the very last group may be a dotted-quad, and it counts as two.
+  const last = groups[groups.length - 1] ?? '';
+  const endsWithIpv4 = last.includes('.');
+  if (endsWithIpv4 && !isIpv4Literal(last)) return false;
+
+  const hexGroups = endsWithIpv4 ? groups.slice(0, -1) : groups;
+  if (!hexGroups.every(isIpv6Group)) return false;
+
+  const occupied = hexGroups.length + (endsWithIpv4 ? 2 : 0);
+  // Compression must stand for at least one group, so a compressed address cannot already be full.
+  return compressed ? occupied <= 7 : occupied === 8;
+}
+
+/** The dotted-quad tail form, octet range included. */
+function isIpv4Literal(candidate: string): boolean {
+  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(candidate)) return false;
+  return candidate.split('.').every(octet => Number(octet) <= 255);
+}
+
+/**
  * Validate a server hostname or IP address
  */
 export function validateServer(server: string): ValidationResult {
@@ -232,13 +318,9 @@ export function validateServer(server: string): ValidationResult {
 
   const trimmed = server.trim();
 
-  // Check for valid hostname or IP
-  const hostnameRegex =
-    /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
-  const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^localhost$/i;
 
-  if (!hostnameRegex.test(trimmed) && !ipv4Regex.test(trimmed) && !ipv6Regex.test(trimmed)) {
+  if (!isHostname(trimmed) && !ipv4Regex.test(trimmed) && !isIpv6(trimmed)) {
     errors.push('Invalid server hostname or IP address');
   }
 

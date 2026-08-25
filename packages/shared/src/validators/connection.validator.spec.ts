@@ -62,6 +62,63 @@ describe('Connection Validators', () => {
       expect(result.valid).toBe(false);
       expect(result.errors).toContain('Invalid IP address: octets must be 0-255');
     });
+
+    // ── J-41 ────────────────────────────────────────────────────────────────────────────
+    //
+    // Two shapes Joinery legitimately connects to were refused, and the React connection editor
+    // is the first surface that ENFORCES these validators — so profiles the Angular renderer
+    // could save, the React one would not.
+
+    describe('IPv6, which was accepted only fully expanded', () => {
+      it.each([
+        ['2001:db8:85a3:0:0:8a2e:370:7334', 'the eight-group form that always worked'],
+        ['2001:db8::1', 'zero-compression, the normal way one is written'],
+        ['::1', 'loopback'],
+        ['::', 'the unspecified address'],
+        ['[::1]', 'bracketed, as it appears in a URL'],
+        ['[2001:db8::1]', 'bracketed and compressed'],
+        ['fe80::1%en0', 'link-local with a zone id'],
+        ['[fe80::1%en0]', 'both at once'],
+        ['::ffff:192.0.2.1', 'an IPv4-mapped address, whose tail counts as two groups'],
+      ])('accepts %s — %s', address => {
+        expect(validateServer(address).valid).toBe(true);
+      });
+
+      it.each([
+        ['2001:db8::1::2', 'two compressions — the position becomes ambiguous'],
+        ['2001:db8:::1', 'three colons'],
+        ['1:2:3:4:5:6:7:8:9', 'nine groups'],
+        ['1:2:3:4:5:6:7', 'seven groups, uncompressed'],
+        ['12345::1', 'a group of five hex digits'],
+        ['2001:db8::zz', 'a group that is not hex'],
+        ['[::1', 'one bracket'],
+        ['::1]', 'the other bracket'],
+        ['fe80::1%', 'a zone id that is empty'],
+        ['fe80::1%en0%en1', 'two zone ids'],
+        ['::ffff:192.0.2.256', 'an embedded IPv4 with an octet out of range'],
+        ['::ffff:192.0.2.1:1', 'a dotted-quad that is not the last group'],
+      ])('rejects %s — %s', address => {
+        expect(validateServer(address).valid).toBe(false);
+      });
+
+      it('rejects a compressed address that is already full', () => {
+        // `::` must stand for at least one group, so eight explicit groups leaves it nothing.
+        expect(validateServer('1:2:3:4:5:6:7:8::').valid).toBe(false);
+      });
+    });
+
+    describe('underscored hostnames, which Docker generates', () => {
+      it.each(['joinery_test_postgres', 'my_pg_1', 'a_b.c_d'])('accepts %s', host => {
+        // Illegal in public DNS, legal in a Docker container name — and Joinery's own Docker panel
+        // pre-fills the connection editor with one, so refusing them refused the app's own value.
+        expect(validateServer(host).valid).toBe(true);
+      });
+
+      it.each(['_leading', 'trailing_', '-leading', 'trailing-'])('rejects %s', host => {
+        // Same rule `-` already had: not first, not last.
+        expect(validateServer(host).valid).toBe(false);
+      });
+    });
   });
 
   describe('validatePort', () => {
