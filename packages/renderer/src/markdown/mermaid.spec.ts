@@ -102,3 +102,71 @@ describe('renderDiagramsIn', () => {
     expect(mermaid.initialize.mock.calls[1]?.[0]).toMatchObject({ theme: 'neutral' });
   });
 });
+
+describe('redrawing when the theme changes (J-40)', () => {
+  it('draws an already-rendered diagram again under the new theme', async () => {
+    const root = mount(['graph TD; A-->B;']);
+    await renderDiagramsIn(root, 'dark');
+    expect(mermaid.render).toHaveBeenCalledTimes(1);
+
+    // The source block is gone — replaced by the diagram — which is why a re-run used to match
+    // nothing and leave a dark diagram on an ivory canvas.
+    expect(root.querySelector('pre > code.language-mermaid')).toBeNull();
+
+    await renderDiagramsIn(root, 'neutral');
+
+    expect(mermaid.render).toHaveBeenCalledTimes(2);
+    expect(mermaid.render.mock.calls[1]?.[1]).toBe('graph TD; A-->B;');
+    expect(mermaid.initialize).toHaveBeenLastCalledWith(
+      expect.objectContaining({ theme: 'neutral' })
+    );
+    expect(root.querySelector<HTMLElement>('.mermaid-diagram')?.dataset.mermaidTheme).toBe(
+      'neutral'
+    );
+  });
+
+  it('leaves a diagram alone when the theme has not moved', async () => {
+    const root = mount(['graph TD; A-->B;']);
+    await renderDiagramsIn(root, 'dark');
+
+    const failures = await renderDiagramsIn(root, 'dark');
+
+    expect(failures).toEqual([]);
+    expect(mermaid.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('redraws a diagram that FAILED under the old theme, rather than stranding it', async () => {
+    mermaid.render.mockRejectedValueOnce(new Error('bad shape'));
+    const root = mount(['graph TD; A-->B;']);
+
+    const first = await renderDiagramsIn(root, 'dark');
+    expect(first).toHaveLength(1);
+    expect(root.querySelector('.mermaid-error')?.textContent).toBe('graph TD; A-->B;');
+
+    // The error container carries the source too, so the next theme gets a real attempt.
+    const second = await renderDiagramsIn(root, 'neutral');
+
+    expect(second).toEqual([]);
+    expect(root.querySelector('.mermaid-diagram')).not.toBeNull();
+    expect(root.querySelector('.mermaid-error')).toBeNull();
+  });
+
+  it('keeps one cap across fresh and redrawn diagrams together', async () => {
+    const root = mount(Array.from({ length: 12 }, (_, index) => `graph TD; A${index}-->B;`));
+    await renderDiagramsIn(root, 'dark');
+    expect(mermaid.render).toHaveBeenCalledTimes(12);
+
+    // 12 already drawn, 12 more fresh: 24 candidates, capped at 20.
+    root.insertAdjacentHTML(
+      'beforeend',
+      Array.from(
+        { length: 12 },
+        (_, index) => `<pre><code class="language-mermaid">graph TD; C${index}-->D;</code></pre>`
+      ).join('')
+    );
+    mermaid.render.mockClear();
+
+    await renderDiagramsIn(root, 'neutral');
+    expect(mermaid.render).toHaveBeenCalledTimes(20);
+  });
+});

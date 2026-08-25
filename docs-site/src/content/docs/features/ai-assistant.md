@@ -57,7 +57,8 @@ something and it stays put; a **Jump to latest** button appears.
 
 Answers are rendered as Markdown, with syntax highlighting, mermaid diagrams and per-block copy
 buttons. Diagrams and copy buttons appear when a message **finishes** — a fence is unterminated for
-as long as it is being written.
+as long as it is being written. Diagrams already on screen are redrawn when you switch between the
+ink and ivory themes, so an old message's colours never disagree with the canvas under it.
 
 ## The model picker
 
