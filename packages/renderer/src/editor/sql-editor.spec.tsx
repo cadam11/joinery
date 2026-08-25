@@ -17,12 +17,18 @@ import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings } from '@joinery/shared';
 import { DEFAULT_SETTINGS } from '@joinery/shared';
+import { IS_MAC } from '../utils/platform';
 
 // ── The double ─────────────────────────────────────────────────────────────────────────────
 
 /** Monaco's `KeyMod`/`KeyCode` bit values, so a binding assertion reads as the keystroke it is. */
 const KEY_MOD = { CtrlCmd: 2048, Shift: 1024, Alt: 512, WinCtrl: 256 };
-const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35 };
+/** Control-M, spelled the way the component spells it for this platform. */
+const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
+// Monaco's real values (`monaco-editor/esm/vs/editor/editor.api.d.ts`). `KeyM` was missing until
+// J-83, so the component's new binding resolved to `modifier | undefined` and the guard below read
+// a bare modifier — an incomplete double reporting a keystroke nobody bound.
+const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35, KeyM: 43 };
 
 interface FakeEditor {
   getValue: ReturnType<typeof vi.fn>;
@@ -356,13 +362,33 @@ describe('keybindings', () => {
     expect(onExecute).toHaveBeenCalledTimes(2);
   });
 
-  it('binds exactly three keystrokes and nothing else', () => {
+  it('binds exactly four keystrokes and nothing else', () => {
+    // The fourth is J-83's Control-M, `editor.action.toggleTabFocusMode` — the editor's only way
+    // out for a keyboard user. Which modifier constant carries Control depends on the platform:
+    // `WinCtrl` is Control on macOS and the WINDOWS key on Windows, while `CtrlCmd` is ⌘ on macOS
+    // and Control elsewhere. jsdom reports no macOS, so `IS_MAC` is false here and the component
+    // binds `CtrlCmd` — the expectation is computed the same way rather than hardcoded, because
+    // hardcoding either constant would pass on one platform and lie on the other.
     mount();
     expect([...state.commands.keys()].sort((a, b) => a - b)).toEqual(
-      [KEY_CODE.F5, KEY_MOD.CtrlCmd | KEY_CODE.Enter, KEY_MOD.CtrlCmd | KEY_CODE.KeyE].sort(
-        (a, b) => a - b
-      )
+      [
+        KEY_CODE.F5,
+        KEY_MOD.CtrlCmd | KEY_CODE.Enter,
+        KEY_MOD.CtrlCmd | KEY_CODE.KeyE,
+        TAB_FOCUS_KEY,
+      ].sort((a, b) => a - b)
     );
+  });
+
+  it('the fourth one toggles tab-focus mode, which is the whole point of it', () => {
+    // Through `getAction`, not `trigger`: `trigger` swallows an unknown id, so a Monaco build
+    // without that contribution would present as "⌃M does nothing" — indistinguishable from the
+    // trap. The editor's `runAction` handle already learned this; the binding follows it.
+    mount();
+    state.commands.get(TAB_FOCUS_KEY)?.();
+
+    expect(lastEditor().getAction).toHaveBeenCalledWith('editor.action.toggleTabFocusMode');
+    expect(state.action.run).toHaveBeenCalledOnce();
   });
 });
 

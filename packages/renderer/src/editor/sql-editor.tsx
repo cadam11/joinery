@@ -87,7 +87,8 @@ export type EditorActionId =
   | 'actions.find'
   | 'editor.action.startFindReplaceAction'
   | 'editor.action.gotoLine'
-  | 'editor.action.commentLine';
+  | 'editor.action.commentLine'
+  | 'editor.action.toggleTabFocusMode';
 
 export interface SqlEditorProps {
   /** Seeds the document once, on mount. Later changes are ignored — the editor owns the text. */
@@ -376,7 +377,14 @@ export function SqlEditor({
     // tab-as-indent, and Monaco announces the state to assistive technology itself.
     const controlKey = IS_MAC ? monaco.KeyMod.WinCtrl : monaco.KeyMod.CtrlCmd;
     instance.addCommand(controlKey | monaco.KeyCode.KeyM, () => {
-      instance.trigger('joinery:a11y', 'editor.action.toggleTabFocusMode', null);
+      // `getAction` and not `trigger`, for the reason `runAction` above documents: `trigger`
+      // returns nothing for an id Monaco does not have, so a missing contribution would present
+      // as "⌃M does nothing" — which is indistinguishable from the trap this is here to remove.
+      const action = instance.getAction('editor.action.toggleTabFocusMode');
+      if (action === null) {
+        throw new Error('[SqlEditor] Monaco has no action "editor.action.toggleTabFocusMode"');
+      }
+      void action.run();
     });
 
     // Seed the caret readout so the status bar's Ln/Col is populated before the first keystroke.
