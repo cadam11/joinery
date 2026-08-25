@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -187,5 +187,97 @@ describe('Dialog — the PLAN §2.9 shape', () => {
     const dialog = await openDialog();
 
     expect(dialog.className).toContain('rounded-md');
+  });
+});
+
+describe('a toast raised over an open dialog (J-42)', () => {
+  /**
+   * The two halves have to be tested together. Restoring the toast's pointer events is what makes
+   * its close button clickable; the dialog's outside-dismiss guard is what stops that click from
+   * throwing away a half-filled form. Either alone is a regression.
+   */
+  function ToastOverDialog({ onOpenChange }: { readonly onOpenChange: (open: boolean) => void }) {
+    return (
+      <div>
+        <Dialog open onOpenChange={onOpenChange}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Connection</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <Input label="Server" name="server" />
+            </DialogBody>
+          </DialogContent>
+        </Dialog>
+        {/* Sonner's own container, which lives outside the dialog in the DOM.
+
+            The inline `pointerEvents` stands in for the `pointer-events-auto` class the real
+            `Toaster` carries: jsdom loads no Tailwind, so the class alone would leave this element
+            inheriting the `pointer-events: none` Radix puts on `<body>` — which is the bug itself,
+            and would make the click unperformable rather than testable. That the class is present
+            is asserted in `toaster.spec.tsx`; what is asserted HERE is what the dialog does with a
+            click that reaches a toast. */}
+        <section data-sonner-toaster="" style={{ pointerEvents: 'auto' }}>
+          <div data-sonner-toast="">
+            <button type="button" data-testid="toast-close">
+              Dismiss
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  it('does not close the dialog when the toast is clicked', async () => {
+    // Covers the POINTER path only, and either of `DialogContent`'s two guards satisfies it on its
+    // own — I checked by removing each. `onInteractOutside` is kept as well because it is the
+    // umbrella event Radix documents for a dialog that is not modal; no test here reaches that,
+    // and a focus-based one does not, because `FocusScope` pulls focus back into a modal first.
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ToastOverDialog onOpenChange={onOpenChange} />);
+
+    await user.click(screen.getByTestId('toast-close'));
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('still closes on a click that really is outside', async () => {
+    // The guard must be narrow: a click on the scrim is one of the three documented ways a dialog
+    // is dismissed, and a fix that suppressed outside-dismiss generally would have taken it away.
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ToastOverDialog onOpenChange={onOpenChange} />);
+
+    await user.click(screen.getByTestId('dialog-scrim'));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps a caller’s own outside handler rather than replacing it', async () => {
+    const onPointerDownOutside = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <div>
+        <Dialog open onOpenChange={vi.fn()}>
+          <DialogContent onPointerDownOutside={onPointerDownOutside}>
+            <DialogHeader>
+              <DialogTitle>Connection</DialogTitle>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+        <section data-sonner-toaster="" style={{ pointerEvents: 'auto' }}>
+          <button type="button" data-testid="toast-close">
+            Dismiss
+          </button>
+        </section>
+      </div>
+    );
+
+    await user.click(screen.getByTestId('toast-close'));
+
+    // It still runs — the guard composes with it, and only adds a `preventDefault` afterwards.
+    expect(onPointerDownOutside).toHaveBeenCalledOnce();
   });
 });
