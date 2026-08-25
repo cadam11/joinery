@@ -194,7 +194,10 @@ export function installChatDouble(options: ChatDoubleOptions = {}): ChatDouble {
       },
       confirmTool: async (_conversationId: string, toolCallId: string, confirmed: boolean) => {
         confirmations.push({ toolCallId, confirmed });
-        return { confirmed };
+        // The reply main sends (J-60). Always the first-answer outcome: the store ignores the value,
+        // and the card disarms, so no spec here drives the `'already-resolved'` refusal —
+        // `packages/main/src/services/ai/chat-service.confirm-tool.spec.ts` owns that.
+        return { confirmed, outcome: confirmed ? 'executed' : 'declined' };
       },
       cancelStream: async (conversationId: string) => {
         cancels.push(conversationId);

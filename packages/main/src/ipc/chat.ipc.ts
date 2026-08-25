@@ -51,8 +51,15 @@ export function registerChatHandlers(): void {
     async (event, conversationId: string, toolCallId: string, confirmed: boolean) => {
       const mainWindow = BrowserWindow.fromWebContents(event.sender);
       if (!mainWindow) throw new Error('No window found');
-      await chatService.confirmToolCall(conversationId, toolCallId, confirmed, mainWindow);
-      return { confirmed };
+      // The outcome rides back so a refused repeat is visible to the renderer rather than
+      // indistinguishable from the run that did happen (J-60).
+      const outcome = await chatService.confirmToolCall(
+        conversationId,
+        toolCallId,
+        confirmed,
+        mainWindow
+      );
+      return { confirmed, outcome };
     }
   );
 

@@ -26,11 +26,11 @@
  *
  * ── Approving is armed once ────────────────────────────────────────────────────────────────
  *
- * `ChatService.confirmToolCall` has no already-confirmed guard: a second approval executes the tool a
- * second time and starts a second agentic loop, which for `execute_ddl` means two DROP TABLEs from one
- * double-click. So the card disarms both buttons on the first click. It does NOT invent a result — the
- * card still reads as pending until the real `toolResult` chunk lands, which is the same rule the store
- * follows for the approve path.
+ * `ChatService.confirmToolCall` refuses a repeat approval outright (J-60): it used to run the tool a
+ * second time and start a second agentic loop, which for `execute_ddl` meant two DROP TABLEs from one
+ * double-click. Main is the authority; the card still disarms both buttons on the first click, so the
+ * second click is never sent. It does NOT invent a result — the card still reads as pending until the
+ * real `toolResult` chunk lands, which is the same rule the store follows for the approve path.
  *
  * Expansion is LOCAL state, not a `Set` in the surface (`expandedTools` in Angular). A shared set
  * changes identity on every toggle, which re-renders every message in the transcript to open one

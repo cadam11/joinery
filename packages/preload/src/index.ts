@@ -65,6 +65,7 @@ import type {
   // Chat types
   ChatRequest,
   ChatStreamChunk,
+  ConfirmToolCallOutcome,
   Conversation,
   ToolDefinition,
   // Server file system types
@@ -307,7 +308,7 @@ export interface JoineryAPI {
       conversationId: string,
       toolCallId: string,
       confirmed: boolean
-    ) => Promise<{ confirmed: boolean }>;
+    ) => Promise<{ confirmed: boolean; outcome: ConfirmToolCallOutcome }>;
     cancelStream: (conversationId: string) => Promise<{ cancelled: boolean }>;
     onStreamChunk: (callback: (chunk: ChatStreamChunk) => void) => () => void;
   };

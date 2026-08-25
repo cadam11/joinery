@@ -15,6 +15,7 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatStreamChunk,
+  ConfirmToolCallOutcome,
   Conversation,
   ToolCallResult,
   OpenRouterCostTier,
@@ -78,6 +79,12 @@ export class ChatService extends BaseSingleton {
   private chunkCoalescers = new WeakMap<BrowserWindow, StreamCoalescer>();
   /** Stores the latest editor content per conversation so tools can access it */
   private editorContent: Map<string, string> = new Map();
+  /**
+   * Tool-call ids already confirmed or declined, per conversation (J-60). Main is the authority
+   * on this, not the renderer's disarmed card: the IPC message can be replayed, sent by a second
+   * window, or sent twice by a store bug, and a second confirm used to mean a second execution.
+   */
+  private resolvedToolCalls: Map<string, Set<string>> = new Map();
   private storageDir: string;
 
   constructor() {
@@ -170,7 +177,23 @@ export class ChatService extends BaseSingleton {
   deleteConversation(id: string): boolean {
     this.cancelStream(id);
     this.deleteConversationFile(id);
+    this.forgetResolvedToolCalls(id);
     return this.conversations.delete(id);
+  }
+
+  /**
+   * Drop the confirmed/declined tool-call ids remembered for a conversation. Called when the
+   * conversation goes away — the ids can never be quoted at us again, so keeping them would be
+   * pure growth. The saved `pendingConfirmation: false` on each tool call is the durable record;
+   * this map is only the fast path.
+   */
+  forgetResolvedToolCalls(conversationId: string): void {
+    this.resolvedToolCalls.delete(conversationId);
+  }
+
+  /** How many resolved ids are being remembered for a conversation. Diagnostics and the J-60 bound. */
+  resolvedToolCallCount(conversationId: string): number {
+    return this.resolvedToolCalls.get(conversationId)?.size ?? 0;
   }
 
   renameConversation(id: string, title: string): Conversation | null {
@@ -261,30 +284,139 @@ export class ChatService extends BaseSingleton {
     }
   }
 
+  /** Per conversation, past which the oldest remembered id is evicted. See `markToolCallResolved`. */
+  static readonly MAX_RESOLVED_TOOL_CALLS_PER_CONVERSATION = 200;
+
   /**
-   * Confirm a pending tool call, then continue the agentic loop
+   * Remember a tool-call id as answered, oldest-out past the cap.
+   *
+   * The cap is what keeps a long-lived conversation from growing this map without limit. Eviction
+   * cannot re-open an execution: `isToolCallResolved` also reads the saved
+   * `pendingConfirmation: false` on the tool call itself, which outlives anything evicted here.
+   */
+  private markToolCallResolved(conversationId: string, toolCallId: string): void {
+    let resolved = this.resolvedToolCalls.get(conversationId);
+    if (!resolved) {
+      resolved = new Set<string>();
+      this.resolvedToolCalls.set(conversationId, resolved);
+    }
+    resolved.add(toolCallId);
+
+    // A Set iterates in insertion order, so `values().next()` is the oldest id. Bounded: every
+    // pass deletes one entry, so the size strictly decreases toward the cap.
+    while (resolved.size > ChatService.MAX_RESOLVED_TOOL_CALLS_PER_CONVERSATION) {
+      const oldest = resolved.values().next();
+      if (oldest.done) break;
+      resolved.delete(oldest.value);
+    }
+  }
+
+  /**
+   * True when this tool call has already been confirmed or declined. Two independent records, so
+   * neither alone has to be perfect: the bounded in-memory set, and the tool call's own saved
+   * state (`pendingConfirmation: false`, which both answer paths write).
+   */
+  private isToolCallResolved(
+    conversationId: string,
+    toolCallId: string,
+    toolCall: ToolCallResult | undefined
+  ): boolean {
+    if (this.resolvedToolCalls.get(conversationId)?.has(toolCallId)) return true;
+    // Strict `=== false`: an auto-executed call leaves this undefined, and it never needed an answer.
+    return toolCall?.pendingConfirmation === false;
+  }
+
+  /** The pending tool call an id names, looked up where the confirmation card's id can still reach. */
+  private findToolCall(conversation: Conversation, toolCallId: string): ToolCallResult | undefined {
+    const lastMsg = [...conversation.messages].reverse().find(m => m.role === 'assistant');
+    return lastMsg?.toolCalls?.find(tc => tc.id === toolCallId);
+  }
+
+  /**
+   * Confirm (or decline) a pending tool call, then continue the agentic loop.
+   *
+   * Answering the same tool call twice is refused outright (J-60). Before that guard existed, a
+   * replayed or double-sent confirm ran the tool a second time and started a second agentic loop
+   * over the same conversation — which for `execute_ddl` is two DROP TABLEs from one user intent,
+   * and which also overwrote `activeStreams`, orphaning the first loop's abort controller. The
+   * renderer disarms its card on the first click, but that is a courtesy; this is the authority.
+   *
+   * Returns what it did, so a refusal is visible to the caller instead of an indistinguishable
+   * silent return.
    */
   async confirmToolCall(
     conversationId: string,
     toolCallId: string,
     confirmed: boolean,
     mainWindow: BrowserWindow
-  ): Promise<void> {
+  ): Promise<ConfirmToolCallOutcome> {
     const conversation = this.conversations.get(conversationId);
-    if (!conversation) return;
+    if (!conversation) {
+      log.warn(`Tool confirmation for unknown conversation ${conversationId}; ignoring`);
+      return 'no-such-conversation';
+    }
+
+    // An empty id would collapse every unanswered call in the conversation onto one key.
+    if (!toolCallId) {
+      log.error(`Tool confirmation with an empty tool call id in ${conversationId}; refusing`);
+      return 'no-such-tool-call';
+    }
+
+    const toolCall = this.findToolCall(conversation, toolCallId);
+
+    if (this.isToolCallResolved(conversationId, toolCallId, toolCall)) {
+      log.warn(
+        `Refusing repeat ${confirmed ? 'confirmation' : 'decline'} of tool call ${toolCallId} ` +
+          `in conversation ${conversationId}: already answered`
+      );
+      return 'already-resolved';
+    }
 
     if (!confirmed) {
+      // Marked before anything else, so a confirm racing this decline finds it answered.
+      this.markToolCallResolved(conversationId, toolCallId);
+      if (toolCall) {
+        toolCall.pendingConfirmation = false;
+        toolCall.confirmed = false;
+        toolCall.success = false;
+        toolCall.error = 'Cancelled by user';
+        this.saveConversation(conversation);
+      }
       this.sendChunk(mainWindow, {
         conversationId,
         delta: '\n\nTool call cancelled by user.',
         done: true,
       });
-      return;
+      return 'declined';
     }
 
-    const lastMsg = [...conversation.messages].reverse().find(m => m.role === 'assistant');
-    const toolCall = lastMsg?.toolCalls?.find(tc => tc.id === toolCallId);
-    if (!toolCall) return;
+    if (!toolCall) {
+      // An orphaned card: a later turn displaced the assistant message holding the id. Nothing
+      // was answered, so nothing is remembered — there is nothing here to run twice.
+      log.warn(`Confirmed tool call ${toolCallId} is not in conversation ${conversationId}`);
+      return 'no-such-tool-call';
+    }
+
+    // Claimed synchronously, BEFORE the first await below: two confirms arriving back to back are
+    // two separate turns of this event loop, and only the first may get past the guard above.
+    this.markToolCallResolved(conversationId, toolCallId);
+
+    await this.runConfirmedToolCall(conversation, toolCall, mainWindow);
+    return 'executed';
+  }
+
+  /**
+   * Run an approved tool call, publish its result, and continue the agentic loop over it.
+   *
+   * Split out of `confirmToolCall` unchanged when the J-60 guard was added, so the decision of
+   * whether to run stays readable apart from the running. Only ever reached once per tool call.
+   */
+  private async runConfirmedToolCall(
+    conversation: Conversation,
+    toolCall: ToolCallResult,
+    mainWindow: BrowserWindow
+  ): Promise<void> {
+    const conversationId = conversation.id;
 
     // Execute the confirmed tool
     const start = Date.now();

@@ -419,9 +419,10 @@ describe('the tool-confirmation flow', () => {
   });
 
   it('runs a confirmed tool ONCE, however fast the button is clicked twice', async () => {
-    // `ChatService.confirmToolCall` has no already-confirmed guard: a second approval runs the tool
-    // again and starts a second agentic loop. For `execute_ddl` that is two DROP TABLEs from one
-    // double-click, so the card is armed once and both buttons disarm on the first click.
+    // A second approval used to run the tool again and start a second agentic loop. For `execute_ddl`
+    // that was two DROP TABLEs from one double-click. `ChatService.confirmToolCall` now refuses the
+    // repeat itself (J-60, `chat-service.confirm-tool.spec.ts`); this side of the boundary keeps the
+    // card armed once, so the second click never becomes an IPC message at all.
     const { store } = await mount();
     await pendingConfirmation(store);
 

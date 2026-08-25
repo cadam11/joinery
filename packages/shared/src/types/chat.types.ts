@@ -138,6 +138,17 @@ export interface ChatStreamChunk {
 }
 
 /**
+ * What the main process did with a tool confirmation (J-60).
+ *
+ * Main, not the renderer, is the authority on whether a pending tool call has already been
+ * answered: `already-resolved` is a repeat confirm or decline that was refused outright — the tool
+ * did NOT run a second time. Lives here because it crosses the IPC boundary as the
+ * `chat:confirm-tool` reply.
+ */
+export type ConfirmToolCallOutcome =
+  'executed' | 'declined' | 'already-resolved' | 'no-such-conversation' | 'no-such-tool-call';
+
+/**
  * Chat IPC Channels
  */
 export const CHAT_IPC_CHANNELS = {

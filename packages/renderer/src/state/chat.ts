@@ -566,8 +566,9 @@ export function selectHasConversations(state: Pick<ChatStoreState, 'conversation
  * `streaming` is **false** and an ungated composer is fully live with a filled Send in it. Sending
  * then orphans the card — the local decline would patch a message that is no longer the one holding
  * the tool call, and the main process's own `confirmToolCall` looks the id up in the LAST assistant
- * message (`chat-service.ts:245`), which the new turn has just displaced, so approving does nothing
- * at all and says nothing about it.
+ * message (`ChatService.findToolCall`), which the new turn has just displaced, so approving runs
+ * nothing. Since J-60 it at least answers `'no-such-tool-call'` and logs the miss instead of
+ * returning silently, but nothing on screen says so — which is why the composer is gated here.
  *
  * Cheap by shape rather than by memoisation: the scan stops at the first pending call, and `messages`
  * only changes once per message or tool event — never per token.
