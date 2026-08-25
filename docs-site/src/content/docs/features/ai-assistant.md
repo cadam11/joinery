@@ -89,9 +89,12 @@ does**, shows the exact arguments, and offers **Run it** and **Cancel**.
 While a confirmation is on screen the composer refuses new messages and says why: _Answer the tool
 request above — run it or cancel it — before sending another message._
 
-Both buttons disarm on the first click. There is no already-confirmed guard on the other side of the
-bridge, so a double-click would otherwise run the tool twice — which for a DDL tool means the same
-statement executed twice.
+Both buttons disarm on the first click, and a tool call is answered once: an approval that arrives
+for a tool call you have already run — or already cancelled — is refused rather than run again. So a
+double-click cannot execute a DDL statement twice.
+
+**Cancel** is final. The cancelled card records the refusal, and approving the same request
+afterwards does nothing.
 
 > **Note** — the card does not invent a result. It reads as pending until the real result arrives,
 > whichever way you answered.
@@ -160,7 +163,7 @@ message that would be refused.
 | A failure shows the tool's own error                                   | `packages/renderer/src/features/chat/tool-call-card.tsx:250-262`                               |
 | The confirmation names the tool, describes it, and shows the arguments | `packages/renderer/src/features/chat/tool-call-card.tsx:128-149`                               |
 | Run it and Cancel, and both disarm on the first click                  | `packages/renderer/src/features/chat/tool-call-card.tsx:114-126, 149-170`                      |
-| Why a second approval would run the tool twice                         | `packages/renderer/src/features/chat/tool-call-card.tsx:27-33`                                 |
+| A repeat approval or decline is refused, and a cancel is final         | `packages/main/src/services/ai/chat-service.ts:335-406`                                        |
 | The composer's refusal sentence while a confirmation waits             | `packages/renderer/src/features/chat/chat-composer.tsx:325-329`                                |
 | The card stays pending until the real result lands                     | `packages/renderer/src/features/chat/tool-call-card.tsx:31-33`                                 |
 | The conversation list toggle and the new-conversation button           | `packages/renderer/src/features/chat/chat-surface.tsx:229-260`                                 |
