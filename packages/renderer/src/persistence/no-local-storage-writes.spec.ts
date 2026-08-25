@@ -45,8 +45,21 @@ function isProductionSource(path: string): boolean {
   return !path.includes('.spec.') && !path.startsWith('../test/');
 }
 
-/** `index.html`'s pre-mount script reads the same keys and must stay a reader. Not a module. */
+/**
+ * The pre-mount script reads the same keys and must stay a reader. Not a module — and, since
+ * J-22, not inline in `index.html` either: production ships `script-src 'self'`, which no inline
+ * script satisfies, so it moved to `public/theme-boot.js`. Same code, same rules, new home.
+ */
 const preMountScript = Object.values(
+  import.meta.glob<string>('../../public/theme-boot.js', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  })
+);
+
+/** The entry HTML, which must now carry no storage access of its own at all. */
+const entryHtml = Object.values(
   import.meta.glob<string>('../../index.html', { query: '?raw', import: 'default', eager: true })
 );
 
@@ -129,7 +142,7 @@ describe('no code path may write a localStorage key', () => {
     expect(filesMatching(ALIASING)).toEqual([]);
   });
 
-  it('keeps the pre-mount script in index.html a reader, of the mirror only', () => {
+  it('keeps the pre-mount script a reader, of the mirror only', () => {
     // It runs before any module and duplicates the mirror read, so it is outside the glob above and
     // would otherwise never be checked at all.
     expect(preMountScript).toHaveLength(1);
@@ -146,6 +159,14 @@ describe('no code path may write a localStorage key', () => {
     const read = (key: string): boolean => html.includes(`'${key}'`);
     expect(read(THEME_MIRROR_KEY)).toBe(true);
     expect(read('joinery-settings')).toBe(false);
+  });
+
+  it('leaves no storage access behind in the entry HTML itself', () => {
+    // The script moved out of `index.html` for the CSP (J-22). This asserts the move was a move
+    // and not a copy: a leftover inline reader there would be invisible to every other check in
+    // this file, since the glob above only reaches `public/theme-boot.js` now.
+    expect(entryHtml).toHaveLength(1);
+    expect(entryHtml[0] ?? '').not.toMatch(/localStorage/);
   });
 
   it('writes a React-owned key, not one of the Angular six', () => {

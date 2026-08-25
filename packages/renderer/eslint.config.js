@@ -142,6 +142,12 @@ export default tseslint.config(
     files: ['vite.config.ts', 'eslint.config.js'],
     languageOptions: { globals: globals.node },
   },
+  // `public/theme-boot.js` — the pre-mount theme script, which J-22 moved out of `index.html`
+  // so production's `script-src 'self'` could cover it. It runs before the bundle exists, so
+  // `state/diagnostics` is not reachable from it and `console.warn` is its only way to be
+  // non-silent about blocked storage. It is also plain ES5 in a copied-verbatim asset, not a
+  // module: nothing here imports, and nothing may import it.
+  { files: ['public/**/*.js'], rules: { 'no-console': 'off' } },
   // The three bans, and the ORDER AND SHAPE OF THESE THREE BLOCKS IS LOAD-BEARING.
   //
   // `no-restricted-syntax` options do NOT merge across flat-config objects: for a given

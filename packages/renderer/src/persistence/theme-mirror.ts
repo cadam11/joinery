@@ -33,8 +33,17 @@
  * dead from the second boot on. The cost of dropping it is one boot: a profile migrating from the
  * Angular app paints the default canvas until `hydrate()` writes the mirror (`state/settings.ts`),
  * and every boot after that is flash-free. Keeping a read of a key the same PR deletes, to buy one
- * frame once, is not worth the second source of truth. `index.html`'s inline copy of this read was
+ * frame once, is not worth the second source of truth. The pre-mount copy of this read was
  * shortened to match.
+ *
+ * ── Where the pre-mount copy lives now (J-22) ────────────────────────────────────────────────
+ *
+ * `packages/renderer/public/theme-boot.js`, loaded by a `<script src>` in `index.html` rather than
+ * written inline there. Nothing about the timing or the trade above changed — it is still a
+ * classic, parser-blocking `<head>` script that runs before the module bundle — but the main
+ * process now ships a Content-Security-Policy whose production `script-src` is `'self'`, and an
+ * inline script does not satisfy that. The `sha256-` escape hatch was tried and MEASURED not to
+ * work over `file://`; `public/theme-boot.js` records the measurement.
  */
 
 import type { ThemePreference } from '@joinery/shared';

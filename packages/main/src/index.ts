@@ -3,7 +3,7 @@
  */
 
 import { app, BrowserWindow } from 'electron';
-import { createMainWindow } from './window';
+import { createMainWindow, installRendererSecurityPolicy } from './window';
 import { createMenu } from './menu';
 import { registerAllHandlers } from './ipc';
 import { createLogger } from './utils/logger';
@@ -52,7 +52,12 @@ if (!gotTheLock) {
 
   // App ready
   app.whenReady().then(() => {
-    // Window first: Chromium spins up and loads the renderer in its own
+    // The CSP is the one thing that must precede the window (J-22): it is applied to response
+    // headers, so it has to be on the session before the entry HTML is fetched. Pure string
+    // building plus one listener registration — nothing here can block.
+    installRendererSecurityPolicy();
+
+    // Window next: Chromium spins up and loads the renderer in its own
     // processes while the rest of this tick runs. Handler registration
     // happens in the same synchronous tick, so no renderer invoke can
     // arrive before it completes.

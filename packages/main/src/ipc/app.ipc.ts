@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import { app, shell, dialog } from 'electron';
 import { IPC_CHANNELS, type AppState, type TabState, type LayoutConfig } from '@joinery/shared';
 import { AppStateStore } from '../services/config/app-state';
+import { assertOpenableExternalUrl } from '../security/external-url';
 import { safeHandle } from './safe-handle';
 
 export function registerAppHandlers(): void {
@@ -16,8 +17,14 @@ export function registerAppHandlers(): void {
     return app.getVersion();
   });
 
-  // Open external URL
+  // Open external URL.
+  //
+  // `shell.openExternal` hands the string to the OS URL handler, so the scheme is checked first
+  // (J-22): `url` is whatever the renderer sent, and a link in model-authored markdown is enough
+  // to drive this channel. A refusal throws, which `safeHandle` logs and re-throws so the
+  // renderer surfaces it — see `security/external-url.ts`.
   safeHandle(IPC_CHANNELS.APP.OPEN_EXTERNAL, async (_event, url: string): Promise<void> => {
+    assertOpenableExternalUrl(url);
     await shell.openExternal(url);
   });
 

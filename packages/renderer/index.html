@@ -12,50 +12,12 @@
     <meta name="theme-color" content="#171817" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f2efe7" media="(prefers-color-scheme: light)" />
 
-    <script>
-      /* Pre-mount theme resolution. The audit (PROPOSAL §1.6) documented a three-stage
-         flash — white, then dark, then light — because the Angular renderer only wrote
-         data-theme after it bootstrapped. Writing it here, synchronously, before the
-         bundle is even requested, is the fix.
-
-         Task 5 moved settings into main-process AppState, which is reachable only over
-         async IPC — no use at all to a <head> script. So the settings store mirrors the
-         theme preference, and nothing else, into one small React-owned localStorage key.
-         This reader is the mirror's only consumer.
-
-         Task 24 dropped the second half of this read: the Angular `joinery-settings`
-         object used to be the fallback, for a user whose one-shot migration had not run
-         yet. The migration now DELETES that key once it has lifted it, so the fallback
-         would be live for at most one boot. See src/persistence/theme-mirror.ts.
-
-         Deliberately duplicated from src/persistence/theme-mirror.ts: that module cannot
-         run before the bundle loads, which is the entire point of this script. Keep the
-         two in step — the mirror module documents the whole decision. */
-      (function () {
-        var isPreference = function (value) {
-          return value === 'system' || value === 'light' || value === 'dark';
-        };
-        var read = function (key) {
-          try {
-            return window.localStorage.getItem(key);
-          } catch (error) {
-            /* Storage blocked outright. Not fatal — 'system' is a correct answer — but
-               never silent. */
-            console.warn('[joinery] could not read localStorage key ' + key + ':', error);
-            return null;
-          }
-        };
-
-        var mirrored = read('joinery:theme-preference');
-        var preference = 'system';
-        if (isPreference(mirrored)) {
-          preference = mirrored;
-        } else if (mirrored != null) {
-          console.warn('[joinery] ignoring unrecognised persisted theme:', mirrored);
-        }
-        document.documentElement.setAttribute('data-theme', preference);
-      })();
-    </script>
+    <!-- Pre-mount theme resolution, in a file rather than inline so that production's
+         `script-src 'self'` covers it with no exception (J-22). Classic, non-async and
+         non-defer, so it still blocks the parser and still runs before the deferred module
+         bundle below — which is the whole reason it exists. `public/theme-boot.js`
+         documents the decision and the measurement behind it. -->
+    <script src="/theme-boot.js"></script>
 
     <style>
       /* Critical canvas. Covers the one window the script above cannot: HTML parsed,

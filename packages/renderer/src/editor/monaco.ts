@@ -43,9 +43,17 @@
  * same-directory asset. Monaco also needs `style-src 'unsafe-inline'` (it injects its theme as a
  * `<style>` element) and `font-src 'self'` (codicon.ttf). Monaco itself needs neither `unsafe-eval`
  * nor `connect-src`. The two violations the spike's candidate policy DID report belong to this app,
- * not to Monaco: `index.html`'s pre-mount theme script needs a hash or a nonce, and zod 4 probes
- * `Function('')` once behind a lazy getter to decide whether it may JIT (it catches the failure and
- * falls back, so a CSP costs one console report and nothing else).
+ * not to Monaco: `index.html`'s pre-mount theme script, and zod 4 probing `Function('')` once
+ * behind a lazy getter to decide whether it may JIT (it catches the failure and falls back, so a
+ * CSP costs one console report and nothing else).
+ *
+ * **The CSP shipped in J-22** grants exactly the above (`packages/main/src/security/
+ * content-security-policy.ts`), and its production `script-src` is `'self'` alone. The spike's
+ * suggestion that the pre-mount script "needs a hash or a nonce" did not survive contact: the hash
+ * route was implemented and measured NOT to work over `file://`, so that script moved out of
+ * `index.html` into `packages/renderer/public/theme-boot.js` instead, where `'self'` covers it. The
+ * `blob:` worker and the `data:`/`blob:` images are asserted live in `tests/e2e-react/
+ * security.spec.ts`; the `'self'` worker is not, because it needs a DB connection to mount.
  *
  * ── The entry point ────────────────────────────────────────────────────────────────────────
  *
