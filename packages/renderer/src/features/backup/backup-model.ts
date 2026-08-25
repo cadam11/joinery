@@ -17,19 +17,19 @@
  *     `mysql-backup.ts` never reads `backupType`, so all three PostgreSQL options and the single
  *     MySQL one produced byte-identical dumps. Here the format is stated as a fact
  *     (`formatNote`), not offered as a choice.
- *  2. **MSSQL "Copy-Only" was inert.** `tsql-builder.ts:126-130` emits `COPY_ONLY` only for
- *     `backupType === 'full_copy_only'`, which is not a member of the `BackupType` union the
- *     dialog can produce, and `BackupRequest.copyOnly` is never read by anything. Dropped.
- *  3. **MSSQL "Checksum" was inert.** `backup-restore.ts:71` maps it to `verify`, and
- *     `TsqlBuilder.backup` never reads `verify`. Dropped.
- *  4. **MSSQL "Transaction Log Backup" ran a FULL backup.** `backupType: 'log'` falls through
- *     both arms of `tsql-builder.ts:126-130`, so it emitted `BACKUP DATABASE … WITH INIT` — a
- *     full backup overwriting the file, offered under a label promising a log backup. That is
- *     worse than not offering it, so `BACKUP_TYPES` stops at Differential.
+ *  2. **MSSQL "Copy-Only" was inert**, and **3. "Checksum" was inert** — `copyOnly` was read by
+ *     nothing anywhere, and `checksum` arrived at the builder as a `verify` it never read. Both
+ *     are wired now (J-48b, J-48c), so the fields work for any caller of `backup.start`; the two
+ *     checkboxes are still absent from this form, which is a UI decision rather than a lie.
+ *  4. **MSSQL "Transaction Log Backup" ran a FULL backup.** `backupType: 'log'` fell through both
+ *     arms of the builder's type branch and picked up `INIT`, so it emitted
+ *     `BACKUP DATABASE … WITH INIT` — a full backup *overwriting* the destination — under a label
+ *     promising a log backup. **Fixed in J-48a**: the builder now emits `BACKUP LOG … WITH NOINIT`,
+ *     which appends rather than discarding the chain, so the option is offered again below.
  *
- * All four are main-process gaps, filed as **J-48** (items a–d). Reproducing the controls would have
- * reproduced exactly the class of bug PLAN.md 0.4 exists to kill: an affordance indistinguishable
- * from a working one.
+ * Item 1 remains open (J-48d). The rest are closed. Reproducing a control before its engine gap
+ * was closed would have reproduced exactly the class of bug PLAN.md 0.4 exists to kill: an
+ * affordance indistinguishable from a working one.
  */
 
 import type {
@@ -82,6 +82,9 @@ export function destinationIsServerSide(engine: DatabaseEngine): boolean {
 export const BACKUP_TYPES: readonly { readonly value: BackupType; readonly label: string }[] = [
   { value: 'full', label: 'Full backup' },
   { value: 'differential', label: 'Differential backup' },
+  // Back only since J-48a. Before that this label promised a log backup and ran a full one that
+  // overwrote the destination file.
+  { value: 'log', label: 'Transaction log backup' },
 ];
 
 /** Which controls an engine gets, and what they are called. One record, read by the markup. */
@@ -193,16 +196,21 @@ export function backupTsql(values: BackupFormValues, databaseName: string): stri
   const name = quoteIdentifier(databaseName, 'mssql');
   const path = escapeSqlString(values.backupPath === '' ? '<path>' : values.backupPath);
 
+  const isLog = values.backupType === 'log';
+
   const withOptions: string[] = [];
   if (values.backupType === 'differential') withOptions.push('DIFFERENTIAL');
-  withOptions.push('INIT');
+  // `NOINIT` for a log backup: it appends to the file instead of discarding the chain already in
+  // it. Transcribed from `TsqlBuilder.backup`, which is the statement main actually runs.
+  withOptions.push(isLog ? 'NOINIT' : 'INIT');
   if (values.compression) withOptions.push('COMPRESSION');
   if (values.description !== '') {
     withOptions.push(`DESCRIPTION = N'${escapeSqlString(values.description)}'`);
   }
   withOptions.push('STATS = 5');
 
-  return `BACKUP DATABASE ${name}\nTO DISK = N'${path}'\nWITH ${withOptions.join(', ')};`;
+  const verb = isLog ? 'BACKUP LOG' : 'BACKUP DATABASE';
+  return `${verb} ${name}\nTO DISK = N'${path}'\nWITH ${withOptions.join(', ')};`;
 }
 
 /** `TsqlBuilder.escapeString` — doubling is the only escape a T-SQL literal needs. */

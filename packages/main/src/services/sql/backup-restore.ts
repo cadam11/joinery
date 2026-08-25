@@ -68,7 +68,10 @@ export class BackupRestoreService extends BaseSingleton {
       destinationPath: request.backupPath,
       backupType: request.backupType,
       compression: request.compression ?? false,
-      verify: request.checksum ?? false,
+      // Both of these reached the builder and were dropped on the floor before J-48: `checksum`
+      // arrived as a `verify` the builder never read, and `copyOnly` was read by nothing anywhere.
+      checksum: request.checksum ?? false,
+      copyOnly: request.copyOnly ?? false,
       description: request.description,
     });
 

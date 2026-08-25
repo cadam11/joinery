@@ -271,13 +271,18 @@ export function BackupDialog({
     // arrives on `onProgress`. A rejection here means it never started at all, which is a terminal
     // failure for this attempt.
     start.mutate([request], {
-      onSuccess: started => {
-        // `backup.start` is declared `Promise<void>` in preload, but every engine's handler returns
-        // the operation id (`backup.ipc.ts:49`) — so the id is recovered by inspection rather than by
-        // type, and the dialog carries on binding from the first event if it is ever absent. Fixing
-        // the preload declaration is J-48 item h.
-        const id: unknown = started;
-        if (typeof id !== 'string' || id === '') return;
+      onSuccess: id => {
+        // The declaration says `Promise<string>` since J-48h, so the id arrives typed rather than
+        // recovered by inspection. The check stays and is now loud: a type is a claim about the
+        // handler, and binding an empty id would detach the run from its own progress events —
+        // the dialog would sit on "starting" forever with the dump still going.
+        if (typeof id !== 'string' || id === '') {
+          diagnostics.error(
+            'the backup started without an operation id',
+            new Error(`backup.start resolved with ${typeof id}`)
+          );
+          return;
+        }
         setActionPhase(previous => (previous === null ? null : bindRunId(previous, id)));
         run.onBound(id);
       },

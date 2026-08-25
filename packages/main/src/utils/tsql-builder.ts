@@ -17,7 +17,10 @@ export interface BackupTsqlOptions {
   destinationPath: string;
   backupType: BackupType | 'full_copy_only';
   compression: boolean;
-  verify: boolean;
+  /** Emits `WITH CHECKSUM`, so the server validates pages as it writes them. */
+  checksum: boolean;
+  /** Emits `COPY_ONLY`, leaving the differential base and the log chain untouched. */
+  copyOnly?: boolean;
   description?: string;
 }
 
@@ -113,26 +116,44 @@ export class TsqlBuilder {
   }
 
   /**
-   * Generate BACKUP DATABASE statement
+   * Generate the `BACKUP DATABASE` — or `BACKUP LOG` — statement for `options`.
+   *
+   * `'log'` used to fall through both arms of the type branch and pick up `INIT` like everything
+   * else, so a requested transaction-log backup ran as a FULL backup that *overwrote* the
+   * destination, and reported success (J-48a). A user taking a log backup onto the file holding
+   * their full backup destroyed it.
+   *
+   * Hence the two rules below that are not cosmetic:
+   * - a log backup is `BACKUP LOG`, never `BACKUP DATABASE`;
+   * - a log backup appends (`NOINIT`). Log backups form a chain, and `INIT` would discard every
+   *   backup already in the file — which is the destructive half of the original bug.
    */
   static backup(options: BackupTsqlOptions): string {
     const dbName = this.escapeIdentifier(options.databaseName);
     const path = this.escapeString(options.destinationPath);
+    const isLog = options.backupType === 'log';
 
-    let sql = `BACKUP DATABASE ${dbName}\nTO DISK = N'${path}'\nWITH`;
+    const verb = isLog ? 'BACKUP LOG' : 'BACKUP DATABASE';
+    let sql = `${verb} ${dbName}\nTO DISK = N'${path}'\nWITH`;
 
     const withOptions: string[] = [];
 
-    if (options.backupType === 'full_copy_only') {
+    // COPY_ONLY is legal for a full or a log backup and meaningless for a differential, which is
+    // why the union carries `full_copy_only` as well as the flag: the two spellings agree here.
+    if (options.copyOnly === true || options.backupType === 'full_copy_only') {
       withOptions.push('COPY_ONLY');
     } else if (options.backupType === 'differential') {
       withOptions.push('DIFFERENTIAL');
     }
 
-    withOptions.push('INIT'); // Overwrite existing file
+    withOptions.push(isLog ? 'NOINIT' : 'INIT');
 
     if (options.compression) {
       withOptions.push('COMPRESSION');
+    }
+
+    if (options.checksum) {
+      withOptions.push('CHECKSUM');
     }
 
     if (options.description) {
