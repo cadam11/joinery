@@ -25,6 +25,13 @@ export interface QualifiedName {
 /**
  * Abstract SQL dialect — subclassed per database engine.
  */
+/** A non-primitive value as the text a literal will carry. */
+export function textOf(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  return String(value);
+}
+
 export abstract class SQLDialect {
   abstract readonly engine: DatabaseEngine;
 
@@ -50,6 +57,40 @@ export abstract class SQLDialect {
   /** Escape a string literal value (caller wraps in quotes) */
   escapeString(value: string): string {
     return value.replace(/'/g, "''");
+  }
+
+  /**
+   * A JavaScript value as a literal this engine will read as DATA (J-52).
+   *
+   * Separate from `escapeString`, which only doubles quotes and leaves the caller to add them.
+   * That is not enough for every engine — see `PgDialect`'s override — and the values reaching
+   * this one come from result-set cells rather than from Joinery's own strings.
+   *
+   * The default is the ANSI shape: quote-doubling, and `1`/`0` for booleans.
+   */
+  formatLiteral(value: unknown): string {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value === 'boolean') return value ? '1' : '0';
+
+    return `'${this.escapeString(textOf(value))}'`;
+  }
+
+  /**
+   * A single-row lookup by one column's value.
+   *
+   * The row cap is the engine-specific part — `TOP` before the list, `LIMIT` after the predicate —
+   * which is why this is the dialect's job rather than a caller's template.
+   */
+  selectOneByColumnSQL(ref: {
+    readonly schema: string;
+    readonly table: string;
+    readonly column: string;
+    readonly value: unknown;
+  }): string {
+    const where = `${this.quoteIdentifier(ref.column)} = ${this.formatLiteral(ref.value)}`;
+    return `SELECT * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where} LIMIT 1`;
   }
 
   // ── SQL generation helpers ──────────────────────────────────

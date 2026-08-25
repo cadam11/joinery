@@ -7,7 +7,10 @@ import * as fs from 'fs';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { SQLConverterService, type ConversionResult } from '../services/sql/sql-converter';
 import { PythonDepsService } from '../services/sql/python-deps';
+import { getDialect } from '../services/sql/dialect';
+import { ConnectionPoolManager } from '../services/sql/connection-pool';
 import type {
+  DatabaseEngine,
   PythonDepsResult,
   QueryRequest,
   QueryResult,
@@ -173,15 +176,22 @@ export function registerQueryHandlers(): void {
     IPC_CHANNELS.QUERY.FETCH_FK_RECORD,
     async (_event, request: FkRecordRequest): Promise<FkRecordResult> => {
       try {
-        // Escape identifiers by doubling any brackets
-        const schema = request.schema.replace(/\]/g, ']]');
-        const table = request.table.replace(/\]/g, ']]');
-        const column = request.column.replace(/\]/g, ']]');
+        // Through the dialect, not a T-SQL template (J-52). This built
+        // `SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'v'` for EVERY engine — bracket delimiters,
+        // `TOP` and the `N''` prefix are all T-SQL, so on PostgreSQL and MySQL the purpose-built
+        // bridge member was a syntax error and the renderer had to generate its own SQL instead.
+        const dialect = getDialect(
+          ConnectionPoolManager.getInstance().getEngineForProfile(
+            request.connectionId
+          ) as DatabaseEngine
+        );
 
-        // Safely format the value based on type
-        const formattedValue = formatFkValue(request.value);
-
-        const sql = `SELECT TOP 1 * FROM [${schema}].[${table}] WHERE [${column}] = ${formattedValue}`;
+        const sql = dialect.selectOneByColumnSQL({
+          schema: request.schema,
+          table: request.table,
+          column: request.column,
+          value: request.value,
+        });
 
         const result = await queryExecutor.execute({
           connectionId: request.connectionId,
@@ -235,50 +245,6 @@ export function registerQueryHandlers(): void {
   safeHandle(IPC_CHANNELS.PYTHON.RECHECK, async (): Promise<PythonDepsResult> => {
     return PythonDepsService.getInstance().recheck();
   });
-}
-
-/**
- * Safely format a value for use in FK lookup SQL
- * Handles SQL injection prevention for various types
- */
-function formatFkValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return 'NULL';
-  }
-
-  // Numbers - safe to use directly
-  if (typeof value === 'number') {
-    if (!isFinite(value)) {
-      return 'NULL';
-    }
-    return String(value);
-  }
-
-  // Boolean
-  if (typeof value === 'boolean') {
-    return value ? '1' : '0';
-  }
-
-  // BigInt
-  if (typeof value === 'bigint') {
-    return String(value);
-  }
-
-  // Date
-  if (value instanceof Date) {
-    return `'${value.toISOString()}'`;
-  }
-
-  // UUID/GUID pattern - safe to use directly
-  const str = String(value);
-  const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (guidRegex.test(str)) {
-    return `'${str}'`;
-  }
-
-  // String - escape single quotes
-  const escaped = str.replace(/'/g, "''");
-  return `N'${escaped}'`;
 }
 
 /**

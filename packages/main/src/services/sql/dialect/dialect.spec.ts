@@ -724,3 +724,114 @@ describe('capabilitiesForDialect', () => {
     expect(Object.values(caps).every(v => v === false)).toBe(true);
   });
 });
+
+describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
+  /**
+   * The FK-lookup handler built `SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'v'` for EVERY engine.
+   * Bracket delimiters, `TOP` and the `N''` prefix are all T-SQL, so the purpose-built bridge
+   * member was a syntax error on two of three engines.
+   *
+   * The values here come from result-set cells, not from Joinery's own strings, which is why the
+   * escaping gets its own tests rather than riding on `escapeString`.
+   */
+
+  it('caps the row the way each engine spells it', () => {
+    expect(
+      getDialect('mssql').selectOneByColumnSQL({
+        schema: 'dbo',
+        table: 'Users',
+        column: 'id',
+        value: 7,
+      })
+    ).toBe('SELECT TOP 1 * FROM [dbo].[Users] WHERE [id] = 7');
+
+    expect(
+      getDialect('postgresql').selectOneByColumnSQL({
+        schema: 'public',
+        table: 'users',
+        column: 'id',
+        value: 7,
+      })
+    ).toBe('SELECT * FROM "public"."users" WHERE "id" = 7 LIMIT 1');
+
+    expect(
+      getDialect('mysql').selectOneByColumnSQL({
+        schema: 'shop',
+        table: 'users',
+        column: 'id',
+        value: 7,
+      })
+    ).toContain('LIMIT 1');
+  });
+
+  it('quotes identifiers with the engine’s own delimiters', () => {
+    expect(
+      getDialect('mysql').selectOneByColumnSQL({
+        schema: 'shop',
+        table: 'users',
+        column: 'id',
+        value: 1,
+      })
+    ).toContain('`id`');
+  });
+
+  it('writes booleans as each engine reads them', () => {
+    expect(getDialect('postgresql').formatLiteral(true)).toBe('TRUE');
+    expect(getDialect('mssql').formatLiteral(true)).toBe('1');
+    expect(getDialect('mysql').formatLiteral(false)).toBe('0');
+  });
+
+  it.each([
+    ['mssql' as const, "N'O''Brien'"],
+    ['postgresql' as const, "E'O''Brien'"],
+    ['mysql' as const, "'O''Brien'"],
+  ])('doubles a quote for %s', (engine, expected) => {
+    expect(getDialect(engine).formatLiteral("O'Brien")).toBe(expected);
+  });
+
+  it('doubles backslashes for PostgreSQL, and does not for SQL Server', () => {
+    // PostgreSQL: with `standard_conforming_strings` off a backslash starts an escape, so a value
+    // ending in one would consume the closing quote and let the next `'` open a NEW literal —
+    // putting a statement terminator outside it, on a driver that multiplexes statements.
+    expect(getDialect('postgresql').formatLiteral('C:\\path')).toBe("E'C:\\\\path'");
+
+    // T-SQL has no backslash escape in any configuration, so doubling would corrupt the data and
+    // the lookup would miss the row.
+    expect(getDialect('mssql').formatLiteral('C:\\path')).toBe("N'C:\\path'");
+  });
+
+  it('keeps an injection attempt inside the literal', () => {
+    const payload = "x'; DROP TABLE users; --";
+    for (const engine of ['mssql', 'postgresql', 'mysql'] as const) {
+      const sql = getDialect(engine).selectOneByColumnSQL({
+        schema: 's',
+        table: 't',
+        column: 'c',
+        value: payload,
+      });
+      // The semicolons stay — they are DATA now, inside the literal, which is the point. What
+      // matters is that the quote that would have closed it is doubled, and that every quote in
+      // the statement is therefore paired: an odd count is what an escaped literal looks like.
+      expect(sql).toContain("x''; DROP TABLE users; --");
+      expect((sql.match(/'/g) ?? []).length % 2).toBe(0);
+    }
+  });
+
+  it.each(['mssql' as const, 'postgresql' as const, 'mysql' as const])(
+    'writes NULL for absent values and non-finite numbers on %s',
+    engine => {
+      const dialect = getDialect(engine);
+      expect(dialect.formatLiteral(null)).toBe('NULL');
+      expect(dialect.formatLiteral(undefined)).toBe('NULL');
+      expect(dialect.formatLiteral(Number.POSITIVE_INFINITY)).toBe('NULL');
+      expect(dialect.formatLiteral(Number.NaN)).toBe('NULL');
+    }
+  );
+
+  it('serialises a Date as ISO and an object as JSON', () => {
+    expect(getDialect('mysql').formatLiteral(new Date('2026-08-25T00:00:00.000Z'))).toBe(
+      "'2026-08-25T00:00:00.000Z'"
+    );
+    expect(getDialect('mysql').formatLiteral({ a: 1 })).toBe('\'{"a":1}\'');
+  });
+});
