@@ -44,6 +44,7 @@ import {
 } from 'react';
 import type { AppSettings } from '@joinery/shared';
 
+import { IS_MAC } from '../utils/platform';
 import { monaco } from './monaco';
 import { EDITOR_THEMES } from './monaco-themes';
 import { sqlIntellisense } from './intellisense';
@@ -354,6 +355,29 @@ export function SqlEditor({
       callbacks.current.onExecute()
     );
     instance.addCommand(monaco.KeyCode.F5, () => callbacks.current.onExecute());
+
+    // ⌃M — the keyboard trap's escape hatch (J-83, WCAG 2.1.2).
+    //
+    // Monaco binds Tab to "insert a tab character", which is right for a SQL editor and wrong for
+    // a keyboard-only user: without an escape, focus cannot leave this control at all. Monaco ships
+    // exactly that escape as `editor.action.toggleTabFocusMode`, and its own ⌃M binding does not
+    // reach the editor in this app — the a11y walk tried it first and stayed trapped, which is
+    // recorded in `tests/e2e-react/a11y.spec.ts`.
+    //
+    // The modifier has to be chosen per platform, and the two Monaco constants do NOT mean what
+    // their names suggest on both: `WinCtrl` is Control on macOS but the WINDOWS key on Windows,
+    // and `CtrlCmd` is ⌘ on macOS but Control on Windows. So Control-M — which is what VS Code
+    // teaches and what a screen-reader user will try — is `WinCtrl` on macOS and `CtrlCmd`
+    // elsewhere. Binding one of them on both platforms would have given Windows users Win+M.
+    //
+    // On macOS this deliberately does not use `CtrlCmd`: ⌘M is the menu's `role: 'minimize'`.
+    //
+    // A toggle, not a one-way move: turning it on makes Tab move focus, turning it off restores
+    // tab-as-indent, and Monaco announces the state to assistive technology itself.
+    const controlKey = IS_MAC ? monaco.KeyMod.WinCtrl : monaco.KeyMod.CtrlCmd;
+    instance.addCommand(controlKey | monaco.KeyCode.KeyM, () => {
+      instance.trigger('joinery:a11y', 'editor.action.toggleTabFocusMode', null);
+    });
 
     // Seed the caret readout so the status bar's Ln/Col is populated before the first keystroke.
     const initial = instance.getPosition();
