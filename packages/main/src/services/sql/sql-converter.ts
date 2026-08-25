@@ -97,6 +97,19 @@ export class PythonUnavailableError extends Error {
   }
 }
 
+/**
+ * The module named by a Python `ModuleNotFoundError`, if the failure is one (J-119).
+ *
+ * The probe answers "is it installed?" with `find_spec`, which a half-installed package satisfies
+ * and then fails to import. Reading the module out of the traceback is what keeps that case from
+ * falling through to the interpreter branch, which is where it landed before — and where the
+ * advice was to install an interpreter that was never missing.
+ */
+function missingModuleFrom(message: string): string | undefined {
+  const match = /No module named ['"]([\w.]+)['"]/.exec(message);
+  return match?.[1];
+}
+
 /** The message a user reads. It names the command to run, because that is the whole fix. */
 function describeMissingPython(deps: PythonDepsResult): string {
   const install = deps.installInstructions?.steps.find(step => step.command)?.command;
@@ -230,6 +243,16 @@ export class SQLConverterService extends BaseSingleton {
       } else if (errorMsg.includes('server script not found')) {
         userError =
           'SQL conversion is unavailable: the sqlglot server script is missing from this build.';
+      } else if (missingModuleFrom(errorMsg) !== undefined) {
+        // The probe uses `find_spec`, which answers "installed?" and not "imports cleanly?" — a
+        // half-installed package passes it and then raises at startup. J-119: this used to be
+        // classified by looking for the substring `python`, which the traceback ALWAYS contains
+        // (the script lives in a folder called `python`), so a missing `fastapi` was reported as
+        // a missing interpreter and the user was told to install Python they already had.
+        const missing = missingModuleFrom(errorMsg);
+        userError =
+          `SQL conversion could not import ${missing}, even though it looked installed. ` +
+          `Reinstall it: python3 -m pip install --force-reinstall ${missing}`;
       } else if (errorMsg.includes('ENOENT') || errorMsg.includes('python')) {
         // Reached only when the probe passed and the spawn failed anyway — the interpreter moved,
         // or is not executable. Naming the probe's own answer beats guessing.
