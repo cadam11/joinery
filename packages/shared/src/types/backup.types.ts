@@ -126,9 +126,14 @@ export interface RestoreRequest {
   fileRelocations?: FileRelocation[];
   replaceExisting?: boolean;
   withReplace?: boolean; // Alias for replaceExisting
-  withRecovery?: boolean;
   withNoRecovery?: boolean;
-  recoveryState?: 'RECOVERY' | 'NORECOVERY' | 'STANDBY';
+  /**
+   * `'STANDBY'` was removed in J-51c: the builder could only emit `STANDBY = N'standby.dat'`, a
+   * relative path the server resolves against whatever its working directory happens to be, so a
+   * standby restore put its undo file somewhere nobody could name. Re-adding it means taking the
+   * path as a field first.
+   */
+  recoveryState?: 'RECOVERY' | 'NORECOVERY';
   restoreId?: string;
 }
 
@@ -139,7 +144,7 @@ export interface RestoreOptions {
   targetDatabaseName: string;
   overwriteExisting: boolean;
   fileMoves: FileMove[];
-  recoveryState: 'recovery' | 'norecovery' | 'standby';
+  recoveryState: 'recovery' | 'norecovery';
 }
 
 export interface FileMove {

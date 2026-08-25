@@ -9,14 +9,11 @@ import { spawn } from 'child_process';
 import { BrowserWindow } from 'electron';
 import { Client as PgClient } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import type {
-  BackupProgress,
-  BackupRequest,
-  RestoreProgress,
-  RestoreRequest,
-} from '@joinery/shared';
+import type { BackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
+import { MetadataService } from './metadata';
+import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
 import { buildPgRestoreArgs } from './backup-args';
@@ -28,6 +25,8 @@ interface PgBackupOperation {
   type: 'backup' | 'restore';
   cancelled: boolean;
   pid?: number;
+  /** Needed to invalidate this connection's database cache once a restore lands (J-51d). */
+  connectionId: string;
 }
 
 export class PgBackupService extends BaseSingleton {
@@ -50,7 +49,12 @@ export class PgBackupService extends BaseSingleton {
 
     const password = await this.profileStore.getPassword(request.connectionId);
 
-    const operation: PgBackupOperation = { id: operationId, type: 'backup', cancelled: false };
+    const operation: PgBackupOperation = {
+      id: operationId,
+      type: 'backup',
+      cancelled: false,
+      connectionId: request.connectionId,
+    };
     this.activeOperations.set(operationId, operation);
 
     const args = [
@@ -91,7 +95,12 @@ export class PgBackupService extends BaseSingleton {
 
     const password = await this.profileStore.getPassword(request.connectionId);
 
-    const operation: PgBackupOperation = { id: operationId, type: 'restore', cancelled: false };
+    const operation: PgBackupOperation = {
+      id: operationId,
+      type: 'restore',
+      cancelled: false,
+      connectionId: request.connectionId,
+    };
     this.activeOperations.set(operationId, operation);
 
     const targetDb = request.targetDatabase || 'restored_db';
@@ -154,6 +163,7 @@ export class PgBackupService extends BaseSingleton {
       if (!claimedSuccess || !verify) {
         if (claimedSuccess) {
           log.info(`${command} completed (${operationId})`);
+          this.onRestored(operation, type);
           this.sendComplete(operationId, type, true);
         }
         return;
@@ -168,6 +178,7 @@ export class PgBackupService extends BaseSingleton {
         const exists = await this.verifyDatabaseExists(verify.targetDb, verify.verifyConfig);
         if (exists) {
           log.info(`${command} completed successfully → ${verify.targetDb} (${operationId})`);
+          this.onRestored(operation, type);
           this.sendComplete(operationId, type, true);
         } else {
           const errMsg =
@@ -286,16 +297,27 @@ export class PgBackupService extends BaseSingleton {
     }
   }
 
+  /**
+   * Drop this connection's cached database list after a restore lands (J-51d).
+   *
+   * `MetadataService.listDatabases` caches for 60s, and only the MSSQL path invalidated it — so a
+   * database a restore had just created could stay invisible to `database.list` for a minute.
+   * A cache drop, not a query: the side effect is one map deletion.
+   */
+  private onRestored(operation: PgBackupOperation, type: 'backup' | 'restore'): void {
+    if (type !== 'restore') return;
+    MetadataService.getInstance().invalidateDatabases(operation.connectionId);
+  }
+
   private sendProgress(operationId: string, type: 'backup' | 'restore', message: string): void {
     const channel =
       type === 'backup' ? IPC_CHANNELS.BACKUP.PROGRESS : IPC_CHANNELS.RESTORE.PROGRESS;
-    const progress: BackupProgress | RestoreProgress = {
-      backupId: operationId,
-      operationId,
+    // Keyed per channel: a restore event carries `restoreId`, which this path never sent (J-51a).
+    const progress = operationProgressEvent(type, operationId, {
       status: 'running',
       percentComplete: -1, // indeterminate — CLI tools don't report %
       currentPhase: message,
-    };
+    });
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
       win.webContents.send(channel, progress);
@@ -310,14 +332,12 @@ export class PgBackupService extends BaseSingleton {
   ): void {
     const channel =
       type === 'backup' ? IPC_CHANNELS.BACKUP.PROGRESS : IPC_CHANNELS.RESTORE.PROGRESS;
-    const progress: BackupProgress | RestoreProgress = {
-      backupId: operationId,
-      operationId,
+    const progress = operationProgressEvent(type, operationId, {
       status: success ? 'completed' : 'failed',
       percentComplete: success ? 100 : 0,
       currentPhase: success ? 'Completed' : 'Failed',
       error,
-    };
+    });
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
       win.webContents.send(channel, progress);
