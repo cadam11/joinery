@@ -168,11 +168,11 @@ export class TsqlBuilder {
       withOptions.push('REPLACE');
     }
 
-    // Recovery state
+    // Recovery state. `STANDBY` used to live here as `STANDBY = N'standby.dat'` — a relative path
+    // resolved against the server's working directory, so the undo file landed somewhere nobody
+    // could name. Removed with the union member that reached it (J-51c).
     if (options.recoveryState === 'norecovery') {
       withOptions.push('NORECOVERY');
-    } else if (options.recoveryState === 'standby') {
-      withOptions.push("STANDBY = N'standby.dat'");
     } else {
       withOptions.push('RECOVERY');
     }

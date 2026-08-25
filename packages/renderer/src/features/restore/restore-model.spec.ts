@@ -388,8 +388,11 @@ function mssqlEvent(overrides: Partial<RestoreProgress> = {}): RestoreProgress {
  * the whole reason `restoreOperationId` exists.
  */
 function cliEvent(overrides: Record<string, unknown> = {}): RestoreProgress {
+  // What pg_restore and the mysql client emit since J-51a: keyed `restoreId`, like MSSQL, with
+  // `operationId` alongside as the declared alias. Before that they sent `backupId` on the restore
+  // channel and no `restoreId` at all.
   return {
-    backupId: 'op-1',
+    restoreId: 'op-1',
     operationId: 'op-1',
     status: 'running',
     percentComplete: -1,
@@ -403,16 +406,20 @@ describe('recognising an operation id whatever the engine calls it', () => {
     expect(restoreOperationId(mssqlEvent())).toBe('op-1');
   });
 
-  it('reads operationId from pg_restore and the mysql client, which never send restoreId', () => {
-    // The bug this is here to stop: `progress.restoreId` alone is `undefined` on two of three
-    // engines, so a bound dialog would discard every event and spin through a finished restore.
+  it('reads restoreId from pg_restore and the mysql client, which now send it (J-51a)', () => {
+    // The bug this is here to stop: `progress.restoreId` was `undefined` on two of three engines,
+    // so a bound dialog discarded every event and spun through a finished restore.
     const event = cliEvent();
-    expect((event as unknown as Record<string, unknown>)['restoreId']).toBeUndefined();
+    expect((event as unknown as Record<string, unknown>)['restoreId']).toBe('op-1');
     expect(restoreOperationId(event)).toBe('op-1');
   });
 
-  it('falls back to backupId, which is the field those two actually populate first', () => {
-    expect(restoreOperationId({ backupId: 'op-2' } as unknown as RestoreProgress)).toBe('op-2');
+  it('still reads the operationId alias on its own, since the type declares it', () => {
+    expect(restoreOperationId({ operationId: 'op-2' } as unknown as RestoreProgress)).toBe('op-2');
+  });
+
+  it('no longer answers a bare backupId — that fallback existed only for the bug', () => {
+    expect(restoreOperationId({ backupId: 'op-2' } as unknown as RestoreProgress)).toBeNull();
   });
 
   it('answers null when the event carries no id at all', () => {
@@ -485,7 +492,7 @@ describe('folding progress into the phase', () => {
 
   it('ignores an event belonging to a different bound operation', () => {
     const phase = running('op-1');
-    expect(applyRestoreProgress(phase, cliEvent({ backupId: 'op-9', operationId: 'op-9' }))).toBe(
+    expect(applyRestoreProgress(phase, cliEvent({ restoreId: 'op-9', operationId: 'op-9' }))).toBe(
       phase
     );
   });

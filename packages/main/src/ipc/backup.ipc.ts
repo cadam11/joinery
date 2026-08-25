@@ -132,26 +132,16 @@ export function registerBackupHandlers(): void {
   // Get backup info (header info from backup file)
   safeHandle(
     IPC_CHANNELS.RESTORE.GET_BACKUP_INFO,
-    async (_event, connectionId: string, backupPath: string): Promise<BackupFileInfo> => {
+    async (_event, connectionId: string, backupPath: string): Promise<BackupFileInfo | null> => {
       const engine = getEngine(connectionId);
-      if (engine === 'postgresql') {
-        return {
-          databaseName:
-            backupPath
-              .split('/')
-              .pop()
-              ?.replace(/\.dump$/, '') || 'unknown',
-        } as BackupFileInfo;
-      }
-      if (engine === 'mysql') {
-        return {
-          databaseName:
-            backupPath
-              .split('/')
-              .pop()
-              ?.replace(/\.sql$/, '') || 'unknown',
-        } as BackupFileInfo;
-      }
+
+      // Only MSSQL has a backup header to read. PostgreSQL and MySQL used to get
+      // `{ databaseName } as BackupFileInfo` — a cast over an object whose every other field was
+      // `undefined` at runtime while the type promised otherwise, so any UI rendering
+      // `backupType` or `backupSizeBytes` printed "undefined". `null` says the same thing without
+      // lying about it (J-51e); the filename guess it carried was never the file's own metadata.
+      if (engine === 'postgresql' || engine === 'mysql') return null;
+
       return backupService.readBackupInfo(connectionId, backupPath);
     }
   );

@@ -30,14 +30,13 @@
  *
  * ── Two Angular controls are dropped, one is replaced ───────────────────────────────────────
  *
- *  1. **"Recovery" was inert.** `backup-restore.ts:272-274` computes the recovery state as
- *     `request.recoveryState ?? (request.withNoRecovery ? 'norecovery' : 'recovery')`. `withRecovery`
- *     is read by nothing, anywhere — unchecking it changed the preview and nothing else. The two
- *     checkboxes are one two-member picker here, which is what the server actually has.
- *  2. **STANDBY is not offered.** `RestoreRequest.recoveryState` admits `'STANDBY'` and the builder
- *     emits `STANDBY = N'standby.dat'` — a *relative* path, resolved by the server against whatever
- *     its working directory happens to be. An option whose file lands somewhere nobody can name is
- *     worse than no option.
+ *  1. **"Recovery" was inert.** `withRecovery` was read by nothing, anywhere — unchecking it changed
+ *     the preview and nothing else. The two checkboxes are one two-member picker here, which is what
+ *     the server actually has, and the dead field was deleted from `RestoreRequest` in J-51b.
+ *  2. **STANDBY is not offered**, and can no longer be requested at all. The builder emitted
+ *     `STANDBY = N'standby.dat'` — a *relative* path resolved against the server's working
+ *     directory, so the undo file landed somewhere nobody could name. J-51c removed the union member
+ *     along with the clause; offering it again means taking the path as a field first.
  *  3. **The T-SQL preview said `STATS = 10`; the builder emits `STATS = 5`,** and the preview also
  *     omitted the difference between "no recovery box ticked" and what the server does with that
  *     (it restores `WITH RECOVERY` regardless). A preview whose whole job is SQL transparency
@@ -526,21 +525,24 @@ function failedAfter(plan: RestorePlan, message: string): RestorePhase {
  * `operationId`, casting it to `BackupProgress | RestoreProgress` — which compiles, because the
  * `BackupProgress` arm of that union is satisfied. Only `backup-restore.ts` (MSSQL) sends `restoreId`.
  *
- * A guard that read `progress.restoreId` alone would therefore compare `undefined` against a bound id
- * on PostgreSQL and MySQL and discard every event, leaving the dialog spinning through a restore that
- * had already finished. The declared type is what hides it, so the read goes through a widened view
- * and says why.
+ * A guard that read `progress.restoreId` alone therefore compared `undefined` against a bound id on
+ * PostgreSQL and MySQL and discarded every event, leaving the dialog spinning through a restore that
+ * had already finished.
+ *
+ * **Fixed in J-51a**: every engine now builds its event through `operationProgressEvent`, which keys
+ * a restore event with `restoreId`. The `operationId` fallback stays — it is a declared alias on the
+ * type, and a reader that survives both spellings costs one `??`. The `backupId` fallback is gone
+ * with the bug that needed it.
  */
 export function restoreOperationId(progress: RestoreProgress): string | null {
-  const actual = progress as Partial<RestoreProgress> & { readonly backupId?: string };
-  return actual.restoreId ?? actual.operationId ?? actual.backupId ?? null;
+  return progress.restoreId ?? progress.operationId ?? null;
 }
 
 /**
  * Bind a running phase to the operation id `restore.start` answered with, once.
  *
- * `restore.start` is typed `Promise<void>` in preload while `backup.ipc.ts:105-113` returns the id
- * (J-48 item h, the restore twin), so the caller recovers it by inspection. A no-op unless the phase
+ * `restore.start` resolves with the operation id and is declared as doing so (J-51f/J-48h; it was
+ * `Promise<void>` while every handler returned a string). A no-op unless the phase
  * is still running and still unbound: an event that got there first came from the operation that is
  * actually reporting, which is the better answer.
  */

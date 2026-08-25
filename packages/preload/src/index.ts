@@ -339,7 +339,11 @@ export interface JoineryAPI {
       connectionId: string,
       backupPath: string
     ) => Promise<{ logicalName: string; physicalName: string; type: string }[]>;
-    getBackupInfo: (connectionId: string, backupPath: string) => Promise<BackupFileInfo>;
+    /**
+     * Resolves `null` for PostgreSQL and MySQL: only MSSQL keeps a readable backup header, and
+     * the object those two returned was a cast over undefined fields (J-51e).
+     */
+    getBackupInfo: (connectionId: string, backupPath: string) => Promise<BackupFileInfo | null>;
     onProgress: (callback: (progress: RestoreProgress) => void) => () => void;
   };
 
