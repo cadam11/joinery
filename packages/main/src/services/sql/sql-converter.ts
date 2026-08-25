@@ -18,7 +18,10 @@ import type {
   TranspileResult,
   SQLDialect as SqlGlotDialect,
 } from './sqlglot/types';
+import type { PythonDepsResult } from '@joinery/shared';
+
 import { BaseSingleton } from '../../utils/singleton';
+import { PythonDepsService } from './python-deps';
 import { createLogger } from '../../utils/logger';
 
 const log = createLogger('SQLConverter');
@@ -77,6 +80,34 @@ export interface SqlGlotClientLike {
   transpile(sql: string, options: TranspileOptions): Promise<TranspileResult>;
 }
 
+/**
+ * Thrown when no host Python can run the converter. Carries the probe so a caller can render the
+ * platform-specific fix rather than restating a one-line complaint (J-29).
+ */
+export class PythonUnavailableError extends Error {
+  constructor(readonly deps: PythonDepsResult) {
+    super(describeMissingPython(deps));
+    this.name = 'PythonUnavailableError';
+  }
+}
+
+/** The message a user reads. It names the command to run, because that is the whole fix. */
+function describeMissingPython(deps: PythonDepsResult): string {
+  const install = deps.installInstructions?.steps.find(step => step.command)?.command;
+  const fix = install === undefined ? '' : ` Run: ${install}`;
+
+  if (deps.command === null) {
+    return `SQL conversion needs Python 3, and none was found (tried python3, python${
+      deps.platform === 'win32' ? ', py' : ''
+    }).${fix}`;
+  }
+
+  const missing = deps.modules.filter(status => !status.available).map(status => status.module);
+  return `SQL conversion needs the ${missing.join(', ')} package${
+    missing.length === 1 ? '' : 's'
+  } for ${deps.command}, which ${missing.length === 1 ? 'is' : 'are'} not installed.${fix}`;
+}
+
 export class SQLConverterService extends BaseSingleton {
   private client: SqlGlotClientLike | null;
   private starting: Promise<void> | null = null;
@@ -86,17 +117,24 @@ export class SQLConverterService extends BaseSingleton {
    * is constructed lazily so that a missing server script surfaces on first
    * conversion rather than throwing while the singleton is being created.
    */
+  /** True when the client came from a caller, so nothing here will ever spawn Python. */
+  private readonly clientWasInjected: boolean;
+
   constructor(client?: SqlGlotClientLike) {
     super();
     this.client = client ?? null;
+    this.clientWasInjected = client !== undefined;
   }
 
-  private getClient(): SqlGlotClientLike {
+  private getClient(pythonPath?: string): SqlGlotClientLike {
     if (!this.client) {
       this.client = new SqlGlotClient({
         serverPath: resolveServerPath(),
         startupTimeoutMs: 15000,
         requestTimeoutMs: 30000,
+        // Whatever the probe found. Omitted only when a caller injected a client (tests), where
+        // the default `python3` is as good as any (J-29).
+        ...(pythonPath === undefined ? {} : { pythonPath }),
       });
     }
     return this.client;
@@ -106,7 +144,20 @@ export class SQLConverterService extends BaseSingleton {
    * Ensure the Python microservice is running
    */
   private async ensureRunning(): Promise<void> {
-    const client = this.getClient();
+    // Probe before spawning, so the failure names what is actually missing: `spawn('python3')` is
+    // wrong on Windows whatever is installed, and "Python 3 is required" was useless advice on a
+    // machine that has Python 3 and no sqlglot (J-29). Cached after the first call.
+    //
+    // Only on the path that really spawns an interpreter. An injected client is somebody else's
+    // transport — gating it on this host's Python would be a probe of the wrong machine.
+    let pythonPath: string | undefined;
+    if (!this.clientWasInjected) {
+      const deps = await PythonDepsService.getInstance().check();
+      if (!deps.ready) throw new PythonUnavailableError(deps);
+      pythonPath = deps.command ?? undefined;
+    }
+
+    const client = this.getClient(pythonPath);
     if (client.IsRunning) return;
 
     // Serialize concurrent start requests
@@ -164,12 +215,19 @@ export class SQLConverterService extends BaseSingleton {
       // path containing "python", so it must be matched before the Python check
       // or a packaging fault gets reported as a missing interpreter.
       let userError = errorMsg;
-      if (errorMsg.includes('server script not found')) {
+      if (err instanceof PythonUnavailableError) {
+        // Already the precise message: which interpreter names were tried, or which packages are
+        // missing from the one that ran, and the command that fixes it (J-29).
+        userError = errorMsg;
+      } else if (errorMsg.includes('server script not found')) {
         userError =
           'SQL conversion is unavailable: the sqlglot server script is missing from this build.';
       } else if (errorMsg.includes('ENOENT') || errorMsg.includes('python')) {
+        // Reached only when the probe passed and the spawn failed anyway — the interpreter moved,
+        // or is not executable. Naming the probe's own answer beats guessing.
         userError =
-          'Python 3 is required for SQL conversion. Please install Python 3 and ensure "python3" is on your PATH.';
+          'SQL conversion could not start its Python helper, even though a suitable interpreter ' +
+          'was found. Check that the interpreter is still installed and executable.';
       } else if (errorMsg.includes('timeout')) {
         userError =
           'SQL conversion service timed out. The microservice may still be starting — try again.';

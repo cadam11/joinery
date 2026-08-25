@@ -29,6 +29,8 @@ export * from './ai.types';
 export * from './chat.types';
 
 // CLI deps types
+// SQL-conversion Python dependency types
+export * from './python-deps.types';
 export * from './cli-deps.types';
 
 // Diagnostics / logging types

@@ -107,25 +107,30 @@ PowerShell window and run `mysqldump --version`.
 
 Converting SQL between dialects ("Convert SQL to PostgreSQL" and its two siblings) is the one
 feature that needs a Python interpreter. Joinery spawns a small local FastAPI service from
-`resources/python/sqlglot-server.py` using `python3` on your PATH, on `127.0.0.1` with an
-ephemeral port, and talks to it over HTTP.
+`resources/python/sqlglot-server.py`, on `127.0.0.1` with an ephemeral port, and talks to it over
+HTTP.
+
+It looks for an interpreter in this order: **`JOINERY_PYTHON`** if you set it (point it at a
+virtualenv), then **`python3`**, then **`python`**, and on Windows the **`py -3`** launcher. The
+first one that runs and has all four packages wins.
 
 Install the four packages it imports:
 
 ```bash
-pip install sqlglot fastapi uvicorn pydantic
+python3 -m pip install --user sqlglot fastapi uvicorn pydantic
 python3 --version
 ```
 
+On Windows, use the launcher: `py -3 -m pip install sqlglot fastapi uvicorn pydantic`.
+
 Everything else in Joinery works without Python. Only dialect conversion needs it.
 
-> **Careful** — Joinery spawns the interpreter as `python3`. On Windows, where the launcher is
-> usually `python` or `py`, that name may not resolve. The spawn fails with `ENOENT`, and Joinery
-> turns that into the conversion warning _Python 3 is required for SQL conversion. Please install
-> Python 3 and ensure "python3" is on your PATH._ — which names the right fix but not the Windows
-> shape of it, because `python3` may be exactly the name your machine does not have. A known rough
-> edge tracked as J-29. [SQL dialect conversion](../../features/sql-dialect-conversion/) lists the
-> other messages that surface.
+> **Note** — Joinery used to spawn `python3` and nothing else, which failed on Windows whatever was
+> installed, and reported a machine with Python 3 but no `sqlglot` as a machine with no Python.
+> Both are fixed (J-29): it probes the names above, and the message names what is actually missing
+> — the interpreters it tried, or the packages the one it found is lacking — with the `pip` command
+> that fixes it. [SQL dialect conversion](../../features/sql-dialect-conversion/) lists the other
+> messages that surface.
 
 ## Where credentials go
 
@@ -137,26 +142,26 @@ single JSON entry that Joinery reads once at startup.
 <details>
 <summary>Where this page's facts come from</summary>
 
-| Claim                                                                                                             | Source                                                                                         |
-| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| macOS 13+, Windows 10/11, x64 + ARM64                                                                             | `README.md:193-194`                                                                            |
-| SQL Server 2017+ incl. Azure SQL; PostgreSQL 12+; MySQL 5.7+/8.0+                                                 | `README.md:47-49, 196-198`                                                                     |
-| Aurora DSQL is PostgreSQL-compatible and uses AWS IAM auth                                                        | `packages/renderer/src/features/connections/form-model.ts:91-95, 257-275`                      |
-| Test harness images: `mssql/server:2022-latest`, `postgres:16-alpine`, `mysql:8`                                  | `tests/docker-compose.test.yml:13, 32, 48`                                                     |
-| Node 20+, pnpm 11+ (`corepack enable pnpm`), Xcode CLI Tools                                                      | `CONTRIBUTING.md:26-28`, `package.json:8-11`                                                   |
-| Container images are matched by name substring                                                                    | `packages/main/src/services/docker/detector.ts:56-67`                                          |
-| Docker is reached at `/var/run/docker.sock`                                                                       | `packages/main/src/services/docker/detector.ts:22`                                             |
-| PG needs `pg_dump` + `pg_restore`; MySQL needs `mysqldump` + `mysql`                                              | `packages/main/src/services/sql/cli-deps.ts:32-35`                                             |
-| Presence is probed with `<tool> --version`, cached, with a re-check path                                          | `packages/main/src/services/sql/cli-deps.ts:42-65, 85`                                         |
-| The dialogs render setup instructions instead of a form when a binary is missing                                  | `packages/main/src/services/sql/cli-deps.ts:5-16`                                              |
-| The exact macOS and Windows install commands                                                                      | `packages/shared/src/config/cli-install-instructions.ts:19-121`                                |
-| "Restart Joinery after installing so the new PATH is picked up"                                                   | `packages/shared/src/config/cli-install-instructions.ts:38, 65, 90, 118`                       |
-| sqlglot service is spawned as `python3` against `resources/python/sqlglot-server.py`                              | `packages/main/src/services/sql/sqlglot/sqlglot-client.ts:56, 98`                              |
-| It is a FastAPI app importing `fastapi`, `pydantic`, `sqlglot`, `uvicorn`, bound to loopback on an ephemeral port | `resources/python/sqlglot-server.py:1-12`                                                      |
-| A failed spawn surfaces as the "Python 3 is required for SQL conversion" warning                                  | `packages/main/src/services/sql/sqlglot/sqlglot-client.ts:136-138`, `sql-converter.ts:170-172` |
-| Credentials are stored via `keytar` as one JSON vault entry, read once at startup                                 | `packages/main/src/services/keychain/credential-store.ts:1-4, 13-14, 52-64`                    |
-| AI provider keys go to the same store, as `ai-<vendorId>`                                                         | `packages/main/src/services/ai/ai-service.ts:136-138`                                          |
-| SSH passwords and passphrases go there as `<profileId>:ssh-password` / `:ssh-passphrase`                          | `packages/main/src/services/ssh/ssh-tunnel-manager.ts:88-97`                                   |
-| The Entra ID (MSAL) token cache is persisted to the same store                                                    | `packages/main/src/services/azure/entra-auth.ts:12-13, 57`                                     |
+| Claim                                                                                                             | Source                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| macOS 13+, Windows 10/11, x64 + ARM64                                                                             | `README.md:193-194`                                                                                            |
+| SQL Server 2017+ incl. Azure SQL; PostgreSQL 12+; MySQL 5.7+/8.0+                                                 | `README.md:47-49, 196-198`                                                                                     |
+| Aurora DSQL is PostgreSQL-compatible and uses AWS IAM auth                                                        | `packages/renderer/src/features/connections/form-model.ts:91-95, 257-275`                                      |
+| Test harness images: `mssql/server:2022-latest`, `postgres:16-alpine`, `mysql:8`                                  | `tests/docker-compose.test.yml:13, 32, 48`                                                                     |
+| Node 20+, pnpm 11+ (`corepack enable pnpm`), Xcode CLI Tools                                                      | `CONTRIBUTING.md:26-28`, `package.json:8-11`                                                                   |
+| Container images are matched by name substring                                                                    | `packages/main/src/services/docker/detector.ts:56-67`                                                          |
+| Docker is reached at `/var/run/docker.sock`                                                                       | `packages/main/src/services/docker/detector.ts:22`                                                             |
+| PG needs `pg_dump` + `pg_restore`; MySQL needs `mysqldump` + `mysql`                                              | `packages/main/src/services/sql/cli-deps.ts:32-35`                                                             |
+| Presence is probed with `<tool> --version`, cached, with a re-check path                                          | `packages/main/src/services/sql/cli-deps.ts:42-65, 85`                                                         |
+| The dialogs render setup instructions instead of a form when a binary is missing                                  | `packages/main/src/services/sql/cli-deps.ts:5-16`                                                              |
+| The exact macOS and Windows install commands                                                                      | `packages/shared/src/config/cli-install-instructions.ts:19-121`                                                |
+| "Restart Joinery after installing so the new PATH is picked up"                                                   | `packages/shared/src/config/cli-install-instructions.ts:38, 65, 90, 118`                                       |
+| sqlglot service is spawned as `python3` against `resources/python/sqlglot-server.py`                              | `packages/main/src/services/sql/sqlglot/sqlglot-client.ts:56, 98`                                              |
+| It is a FastAPI app importing `fastapi`, `pydantic`, `sqlglot`, `uvicorn`, bound to loopback on an ephemeral port | `resources/python/sqlglot-server.py:1-12`                                                                      |
+| The interpreter is probed (JOINERY_PYTHON, python3, python, py -3) and the message names what is missing          | `packages/main/src/services/sql/python-deps.ts`, `sql-converter.ts` (`ensureRunning`, `describeMissingPython`) |
+| Credentials are stored via `keytar` as one JSON vault entry, read once at startup                                 | `packages/main/src/services/keychain/credential-store.ts:1-4, 13-14, 52-64`                                    |
+| AI provider keys go to the same store, as `ai-<vendorId>`                                                         | `packages/main/src/services/ai/ai-service.ts:136-138`                                                          |
+| SSH passwords and passphrases go there as `<profileId>:ssh-password` / `:ssh-passphrase`                          | `packages/main/src/services/ssh/ssh-tunnel-manager.ts:88-97`                                                   |
+| The Entra ID (MSAL) token cache is persisted to the same store                                                    | `packages/main/src/services/azure/entra-auth.ts:12-13, 57`                                                     |
 
 </details>
