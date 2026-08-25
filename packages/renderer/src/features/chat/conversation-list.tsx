@@ -27,9 +27,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
-import type { Conversation } from '@joinery/shared';
-
-import type { ChatStore } from '../../state/chat';
+import type { ChatStore, ConversationSummary } from '../../state/chat';
 import { Icon, Tooltip, cn } from '../../ui';
 import { formatConversationDate } from './tool-result';
 
@@ -42,7 +40,11 @@ const ROW_BUTTON_CLASSES = cn(
 
 export interface ConversationListProps {
   readonly store: ChatStore;
-  readonly conversations: readonly Conversation[];
+  /**
+   * Summaries, not whole conversations: this list renders titles and dates, and the store
+   * deliberately does not keep transcripts that would go stale beside a live stream (J-63).
+   */
+  readonly conversations: readonly ConversationSummary[];
   readonly activeConversationId: string | null;
 }
 
@@ -71,7 +73,7 @@ export function ConversationList({
     void store.getState().renameConversation(id, title);
   };
 
-  const startRename = (conversation: Conversation): void => {
+  const startRename = (conversation: ConversationSummary): void => {
     setArmedDeleteId(null);
     setRenameText(conversation.title);
     setRenamingId(conversation.id);
