@@ -20,6 +20,7 @@ import { dispatchCommand } from '../../commands';
 import { IpcQueryProvider } from '../../ipc';
 import { TooltipProvider } from '../../ui';
 import { connectionStore } from '../../state/connection';
+import { SEARCH_DEBOUNCE_MS } from './query-history-dialog';
 import { setDiagnosticsSink, setNotifier } from '../../state/diagnostics';
 import { queryHistoryStore } from '../../state/query-history';
 import { tabStore } from '../../state/tab';
@@ -177,6 +178,42 @@ describe('the query-history dialog', () => {
     // One fetch, from the command handler: the dialog opens with rows rather than with a spinner.
     expect(filters).toHaveLength(1);
     expect(screen.getByTestId('query-history-count').textContent).toBe('3 queries');
+  });
+
+  it('stays at one fetch after the search debounce window has passed (J-121)', async () => {
+    // The flake this replaces: the dialog's debounced search effect ran on MOUNT with an empty
+    // box and fetched the whole history again 200ms later — a second identical round trip on
+    // every open. The assertion above counted 1 only because it usually finished first; under
+    // full-suite load it did not, about one run in three.
+    //
+    // Waiting past the window is what makes this deterministic: before the fix it fails every
+    // time rather than sometimes, and it is the SECOND fetch that is the product bug.
+    installBridge();
+    seedConnections();
+    await openHistory();
+
+    await new Promise(resolve => setTimeout(resolve, SEARCH_DEBOUNCE_MS * 3));
+
+    expect(filters).toHaveLength(1);
+  });
+
+  it('still searches when the box is cleared back to empty', async () => {
+    // The reason the guard is a ref and not `search === ''`: clearing the box is a real search,
+    // and it must still reach the main process.
+    const user = userEvent.setup();
+    installBridge();
+    seedConnections();
+    await openHistory();
+
+    const box = screen.getByTestId('query-history-search');
+    await user.type(box, 'orders');
+    await waitFor(() => expect(filters.length).toBeGreaterThan(1));
+
+    const afterTyping = filters.length;
+    await user.clear(box);
+
+    await waitFor(() => expect(filters.length).toBeGreaterThan(afterTyping));
+    expect(filters.at(-1)?.searchText ?? '').toBe('');
   });
 
   it('renders the failed entry as failed, with its error', async () => {
