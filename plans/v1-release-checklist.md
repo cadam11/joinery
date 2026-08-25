@@ -22,14 +22,14 @@ go — an item is only green while its evidence is.
 
 ## 1. Quality gates — all green
 
-| Gate                    | Command                     | Result (2026-08-25, `be05719`)                                                         |
-| ----------------------- | --------------------------- | -------------------------------------------------------------------------------------- |
-| Type-check              | `pnpm run typecheck`        | 6/6 packages clean, incl. `tsconfig.tests.json`                                        |
-| Unit                    | `pnpm run test`             | **2866 passed**, 172 files                                                             |
-| Integration             | `pnpm run test:integration` | **52 passed, 42 skipped** — see the skip note below                                    |
-| E2E                     | `pnpm run test:e2e:react`   | **192 passed** in 6.7m, incl. `security.spec.ts`                                       |
-| Lint                    | `pnpm run lint`             | clean at `--max-warnings 0` — **renderer only**, see J-128                             |
-| Packaged-app acceptance | `pnpm run verify:package`   | asar, external resources and renderer bundle assertions in `scripts/verify-package.js` |
+| Gate                    | Command                     | Result (2026-08-25, `be05719`)                                                              |
+| ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| Type-check              | `pnpm run typecheck`        | 6/6 packages clean, incl. `tsconfig.tests.json`                                             |
+| Unit                    | `pnpm run test`             | **2866 passed**, 172 files                                                                  |
+| Integration             | `pnpm run test:integration` | **52 passed, 42 skipped** — see the skip note below                                         |
+| E2E                     | `pnpm run test:e2e:react`   | **192 passed** in 6.7m, incl. `security.spec.ts`                                            |
+| Lint                    | `pnpm run lint`             | clean — **renderer only**; the other three are covered by the pre-commit hook alone (J-128) |
+| Packaged-app acceptance | `pnpm run verify:package`   | asar, external resources and renderer bundle assertions in `scripts/verify-package.js`      |
 
 Two caveats that are real, not bookkeeping:
 
@@ -37,9 +37,10 @@ Two caveats that are real, not bookkeeping:
   wholesale when Python and `sqlglot` are absent (`const describeIfPython = python ? describe :
 describe.skip`). That is J-29 wearing a different hat: dialect conversion is unverified on any
   machine without the Python toolchain, including CI.
-- **`pnpm run lint` only lints `packages/renderer`.** `main`, `shared` and `preload` have never
-  been linted (J-128). CI reflects the same gap — it runs `pnpm --filter @joinery/renderer run
-lint`, and type-checks the other three but does not lint them.
+- **`pnpm run lint` only lints `packages/renderer`.** `main`, `shared` and `preload` are linted
+  only by the `lint-staged` pre-commit hook, which runs root `eslint --fix` on them. Nothing lints
+  them in CI, and nothing lints a file that reaches a branch without passing through the hook
+  (J-128). CI type-checks all four packages but lints one.
 
 ## 2. Blockers — must be closed before tagging
 
