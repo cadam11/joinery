@@ -2,9 +2,9 @@
  * The Electron wiring for J-22: it installs the pure decisions from `navigation-guard.ts` and
  * `content-security-policy.ts` onto a real `WebContents` and `Session`.
  *
- * Deliberately thin — every branch worth testing lives in the pure modules — and every side
- * effect it performs is either passed in (`openExternal`) or named in the function's own name
- * (`readInlineScriptHashes` reads a file).
+ * Deliberately thin — every branch worth testing lives in the pure modules — and the one side
+ * effect it performs beyond registering handlers, opening a URL in the OS browser, is passed in
+ * rather than imported, so it is visible at the call site in `window.ts`.
  */
 
 import { createLogger } from '../utils/logger';

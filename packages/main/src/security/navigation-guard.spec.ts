@@ -85,6 +85,31 @@ describe('decideNavigation — packaged file entry', () => {
     const decision = decideNavigation(`file://${FILE_ENTRY.path}.evil`, FILE_ENTRY);
     expect(decision.kind).toBe('block');
   });
+
+  it.each(['evil.example', '127.0.0.1', 'attacker.example:8080'])(
+    'blocks a file: URL carrying the host %j, even with the exact entry path',
+    host => {
+      // `file://<host>/<path>` parses with `protocol === 'file:'` and a `pathname` identical to
+      // the local case, so a guard that compares only the path decides `allow` for a document
+      // fetched from somewhere else entirely (a UNC share on Windows). The host is the whole
+      // difference and it has to be checked. Found in review of the first cut of this file.
+      const decision = decideNavigation(`file://${host}${FILE_ENTRY.path}`, FILE_ENTRY);
+      expect(decision.kind).toBe('block');
+    }
+  );
+
+  it.each(['localhost', 'LOCALHOST'])(
+    'still allows the entry file when the URL spells the local host as %j',
+    host => {
+      // Not an exception to the rule above — the URL parser normalises a `localhost` file host to
+      // the empty string, so these are the same URL as `file:///…`. Asserted so that tightening
+      // the host check further cannot silently break the local case.
+      expect(new URL(`file://${host}${FILE_ENTRY.path}`).host).toBe('');
+      expect(decideNavigation(`file://${host}${FILE_ENTRY.path}`, FILE_ENTRY)).toEqual({
+        kind: 'allow',
+      });
+    }
+  );
 });
 
 describe('decideNavigation — schemes that are never a navigation', () => {

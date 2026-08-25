@@ -81,6 +81,12 @@ function isAppDocument(target: URL, entry: AppEntry): boolean {
   }
 
   if (target.protocol !== 'file:') return false;
+  // A `file:` URL may carry a HOST — `file://evil.example/some/path` — and its `pathname` is
+  // then indistinguishable from the local case, so a path-only comparison would call a document
+  // fetched from a remote UNC share "the app's own". The host is the entire difference. Safe to
+  // require empty: the URL parser normalises a `localhost` file host away, so `file://localhost/x`
+  // arrives here as `file:///x` with `host === ''`.
+  if (target.host !== '') return false;
   const path = fileUrlPath(target);
   if (path === undefined) return false;
   // `resolve` collapses `..`, so a traversal out of the bundle cannot match. Compared whole
