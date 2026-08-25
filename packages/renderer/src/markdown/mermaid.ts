@@ -107,10 +107,13 @@ export async function renderDiagramsIn(
     container.dataset.mermaidSource = source;
     container.dataset.mermaidTheme = theme;
 
+    // The id mermaid prefixes its own CSS selectors with, held so the sanitizer can check that the
+    // emitted `<style>` really is confined to this diagram (J-25).
+    const diagramId = `diagram-${index}-${Date.now()}`;
     try {
-      const { svg } = await mermaid.render(`diagram-${index}-${Date.now()}`, source);
+      const { svg } = await mermaid.render(diagramId, source);
       container.className = 'mermaid-diagram';
-      container.innerHTML = sanitizeDiagramSvg(svg);
+      container.innerHTML = sanitizeDiagramSvg(svg, diagramId);
     } catch (error) {
       // A malformed diagram must degrade to readable source, not blank space.
       container.className = 'mermaid-error';
