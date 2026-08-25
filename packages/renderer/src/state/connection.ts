@@ -654,19 +654,25 @@ export function selectDefaultDatabaseFor(connectionId: string) {
 }
 
 /**
- * Focus derives from the active query tab and nothing else. A null or non-query active tab means
- * no focus, and the status bar shows disconnected. Selectors over the TAB store, because that is
- * the state they read.
+ * Focus derives from the active tab: a query tab, or a chat tab carrying the target it was opened
+ * from (J-59). A null or otherwise-typed active tab means no focus, and the status bar shows
+ * disconnected. Selectors over the TAB store, because that is the state they read.
+ *
+ * The chat arm is what closes J-59. Focus used to be the active QUERY tab and nothing else, so the
+ * chat SIDE PANEL had context — the query tab behind it was still active — while a chat TAB had
+ * none: the model was asked about "your database" with no connection, no database and no engine,
+ * on the surface a user opens for the LONGER conversation. A chat tab now carries its target the
+ * way every other tab type does, set when it is opened.
  */
 export function selectFocusedConnectionId(state: TabsSlice): string | null {
   const tab = selectActiveTab(state);
-  if (!tab || tab.type !== 'query') return null;
+  if (!tab || (tab.type !== 'query' && tab.type !== 'chat')) return null;
   return tab.connectionId ?? null;
 }
 
 export function selectFocusedDatabaseName(state: TabsSlice): string | null {
   const tab = selectActiveTab(state);
-  if (!tab || tab.type !== 'query') return null;
+  if (!tab || (tab.type !== 'query' && tab.type !== 'chat')) return null;
   return tab.databaseName ?? null;
 }
 

@@ -730,10 +730,10 @@ describe('the model’s UI actions', () => {
 });
 
 describe('the database context line', () => {
-  it('says there is none when no query tab is in front, rather than implying one', async () => {
+  it('says there is none when nothing in front carries a connection', async () => {
     await mount();
-    // Focus derives from the ACTIVE QUERY TAB (`selectFocusedConnectionId`) and nothing else, so with
-    // no query tab the model gets no connection — and this line has to agree with what is sent.
+    // The line reads the same source `sendMessage` does, so with no context it has to say so
+    // rather than imply one.
     expect(screen.getByTestId('chat-context').textContent).toContain('No database context');
   });
 });
