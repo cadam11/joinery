@@ -118,7 +118,8 @@ export function ChatSurface({ store, mode }: ChatSurfaceProps) {
   const pendingUiAction = useStore(store, state => state.pendingUiAction);
   const activeConversation = useStore(store, selectActiveConversation);
   // A pending tool confirmation is a second reason the composer refuses, and it is NOT a sub-case of
-  // `streaming` — the stream is already finished when the card appears. See the selector.
+  // `streaming`: the turn stays open across the confirmation (J-61), but it also outlives it — a
+  // result chunk or a decline can land after the stream ends. See the selector.
   const awaitingConfirmation = useStore(store, selectHasPendingConfirmation);
 
   const providerConfigured = useAIStore(selectHasConfiguredVendors);
