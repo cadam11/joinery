@@ -14,6 +14,7 @@ import mysql from 'mysql2/promise';
 import type { BackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
+import { killProcess } from './kill-process';
 import { MetadataService } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
@@ -382,20 +383,18 @@ export class MySQLBackupService extends BaseSingleton {
   }
 
   /**
-   * Cancel a running backup/restore operation
+   * Cancel a running backup/restore operation.
+   *
+   * Returns whether this service owned `operationId` — the cancel channels carry an id and nothing
+   * else, so the IPC layer asks each engine in turn (J-48e / J-51g).
    */
-  cancel(operationId: string): void {
+  cancel(operationId: string): boolean {
     const op = this.activeOperations.get(operationId);
-    if (op) {
-      op.cancelled = true;
-      if (op.pid) {
-        try {
-          process.kill(op.pid);
-        } catch {
-          /* process may have already exited */
-        }
-      }
-    }
+    if (!op) return false;
+
+    op.cancelled = true;
+    if (op.pid !== undefined) killProcess(op.pid, operationId);
+    return true;
   }
 
   /**
@@ -404,13 +403,7 @@ export class MySQLBackupService extends BaseSingleton {
   stopAllOperations(): void {
     for (const [id, op] of this.activeOperations) {
       op.cancelled = true;
-      if (op.pid) {
-        try {
-          process.kill(op.pid);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (op.pid !== undefined) killProcess(op.pid, id);
       log.info(`Shutdown: stopped MySQL ${op.type} operation ${id}`);
     }
     this.activeOperations.clear();

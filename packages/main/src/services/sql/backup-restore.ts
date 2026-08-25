@@ -351,15 +351,24 @@ export class BackupRestoreService extends BaseSingleton {
   }
 
   /**
-   * Cancel an operation
+   * Cancel an operation, as far as this engine allows.
+   *
+   * Returns whether this service owned `operationId`, so the IPC layer can tell a cancel that
+   * matched nothing from one that was handled (J-48e / J-51g).
+   *
+   * **What this does not do:** stop the server. A T-SQL `BACKUP`/`RESTORE` runs inside SQL Server,
+   * not in a process Joinery owns, so the only real cancellation is `KILL <spid>` — which aborts
+   * the session outright and, for a RESTORE, can leave the target database in RESTORING. Marking
+   * the operation cancelled stops the progress poll and the completion event; the server finishes
+   * the statement it was given. The PostgreSQL and MySQL paths, whose work is a child process this
+   * app spawned, really do stop.
    */
-  async cancel(operationId: string): Promise<void> {
+  async cancel(operationId: string): Promise<boolean> {
     const operation = this.activeOperations.get(operationId);
-    if (operation) {
-      operation.cancelled = true;
-      // Note: Actual cancellation of backup/restore is complex
-      // For now, we just mark it cancelled
-    }
+    if (!operation) return false;
+
+    operation.cancelled = true;
+    return true;
   }
 
   /**
