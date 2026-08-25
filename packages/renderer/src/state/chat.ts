@@ -177,10 +177,39 @@ function patchToolCallById(
 }
 
 /**
- * What a stopped answer says. The main process emits NOTHING when a stream is aborted
- * (`cancelStream` just aborts the controller), so the renderer is the only place that can write the
- * partial answer into the transcript — and a truncated answer that does not say it was truncated is
- * a lie about what the model said.
+ * Answer every tool call still waiting on the user, as "stopped".
+ *
+ * Stop is the only control the composer offers while a card waits, so it has to be an answer
+ * (J-131). Clearing `streaming` alone left the card armed and the composer still gated on it by
+ * `selectHasPendingConfirmation`, and approving afterwards resumed a turn the transcript had
+ * already closed — the J-61 hang, from the other end. `ChatService.stopStream` disarms main's copy
+ * of the same calls over `chat:cancel-stream`; this is the local half, so the card changes the
+ * moment Stop is pressed rather than a round trip later.
+ *
+ * Every message that holds no pending call is returned by identity, which is what the R3 memo
+ * boundary in `features/chat/chat-message.tsx` depends on.
+ */
+function disarmPendingToolCalls(messages: readonly ChatMessage[]): readonly ChatMessage[] {
+  return messages.map(message => {
+    const toolCalls = message.toolCalls ?? [];
+    if (!toolCalls.some(toolCall => toolCall.pendingConfirmation === true)) return message;
+    return {
+      ...message,
+      toolCalls: toolCalls.map(toolCall =>
+        toolCall.pendingConfirmation === true
+          ? { ...toolCall, pendingConfirmation: false, success: false, error: 'Stopped by user' }
+          : toolCall
+      ),
+    };
+  });
+}
+
+/**
+ * What a stopped answer says. The main process emits no partial text when a stream is aborted
+ * (`cancelStream` just aborts the controller; the terminal chunk `stopStream` may send for a parked
+ * confirmation carries no content), so the renderer is the only place that can write the partial
+ * answer into the transcript — and a truncated answer that does not say it was truncated is a lie
+ * about what the model said.
  */
 function stoppedContent(partial: string): string {
   const kept = partial.trimEnd();
@@ -497,18 +526,23 @@ export function createChatStore(deps: ChatStoreDeps, options: ChatStoreOptions =
           .catch(error => diagnostics.warn('failed to cancel chat stream', error));
 
         // **The partial answer is finalized here, and only here.** Clearing `streamingContent`
-        // unmounts the tail, and the main process emits nothing at all on abort — no `done` chunk
-        // follows a cancel — so a cancel that only cleared the flags left the message marked
-        // `streaming: true` with an eternal typing indicator under it and the text the model had
-        // already produced thrown away. The content is read BEFORE the clear for that reason, and
-        // `stoppedContent` marks the truncation so the transcript does not read like a complete
-        // answer that happens to stop mid-sentence.
+        // unmounts the tail, and no partial text ever comes back from main on a stop: a `done`
+        // chunk may follow — `stopStream` sends one when it answers a parked confirmation, and an
+        // aborted loop sends its own — but a terminal chunk carries no content, and by the time it
+        // lands `streaming` is already false here, so it patches nothing. A cancel that only
+        // cleared the flags therefore left the message marked `streaming: true` with an eternal
+        // typing indicator under it and the text the model had already produced thrown away. The
+        // content is read BEFORE the clear for that reason, and `stoppedContent` marks the
+        // truncation so the transcript does not read like a complete answer that happens to stop
+        // mid-sentence.
         const partial = get().streamingContent;
         set(state => ({
-          messages: patchLastAssistantMessage(state.messages, last =>
-            last.streaming === true
-              ? { ...last, content: stoppedContent(partial || last.content), streaming: false }
-              : last
+          messages: disarmPendingToolCalls(
+            patchLastAssistantMessage(state.messages, last =>
+              last.streaming === true
+                ? { ...last, content: stoppedContent(partial || last.content), streaming: false }
+                : last
+            )
           ),
           streaming: false,
           streamingContent: '',
@@ -588,9 +622,10 @@ export function selectHasConversations(state: Pick<ChatStoreState, 'conversation
  * The composer is gated on this as well as on `streaming`, because the two are not the same state.
  * They do overlap now: since J-61 the main process holds the turn open across a confirmation — the
  * `pendingConfirmation` chunk goes out and `done: true` does not follow until the call is answered —
- * so `streaming` is **true** while the card is on screen. But a pending card also reaches states with
- * no stream behind it: one restored from `chat-history/` when the conversation is reopened, and one
- * left armed after Stop (J-131). In those an ungated composer is fully live with a filled Send in it.
+ * so `streaming` is **true** while the card is on screen. But a pending card still reaches a state with
+ * no stream behind it: one restored from `chat-history/` when the conversation is reopened, where an
+ * ungated composer is fully live with a filled Send in it. (Stop used to be a second such state; since
+ * J-131 it disarms the card instead of leaving it armed over a closed turn.)
  * Sending then orphans the card — the local decline would patch a message that is no longer the one
  * holding the tool call, and the main process's own `confirmToolCall` looks the id up in the LAST
  * assistant message (`ChatService.findToolCall`), which the new turn displaced, so approving runs

@@ -214,6 +214,63 @@ export class ChatService extends BaseSingleton {
   }
 
   /**
+   * The user pressed Stop. Aborts a live loop AND answers a confirmation the turn is parked on.
+   *
+   * Aborting alone is not an exit from the paused state (J-131): while the loop waits for an answer
+   * it has already returned, so `activeStreams` is empty and there is nothing to abort. The card
+   * stayed armed and approving it afterwards started a continuation streaming into a message the
+   * renderer had already finalized — the J-61 hang, reached from the other end.
+   */
+  stopStream(conversationId: string, mainWindow: BrowserWindow): void {
+    // Read BEFORE the abort, because `cancelStream` deletes the entry that is the evidence. An
+    // abort is cooperative: the loop is still running and still sends its own terminal chunk on the
+    // aborted break, so a Stop that also sent one would end the turn twice.
+    const carriedByALiveLoop = this.activeStreams.has(conversationId);
+    this.cancelStream(conversationId);
+    this.declineParkedToolCalls(conversationId, mainWindow, !carriedByALiveLoop);
+  }
+
+  /**
+   * Answer every tool call the conversation is parked on as "stopped by the user".
+   *
+   * Scoped to the last assistant message because that is exactly where `confirmToolCall` looks a
+   * card's id up: anything outside it is already unanswerable. Marking each id resolved is what
+   * makes a later approval land on the J-60 `'already-resolved'` branch, which stays silent.
+   *
+   * A call that is already claimed is skipped, not answered again: `confirmToolCall` marks the id
+   * synchronously before its first await, precisely so a racing answer cannot get in, and that
+   * claim outlasts the seconds `executeTool` takes — during which the card is still flagged
+   * pending. Answering it here wrote `Stopped by user` onto a card that then went on to succeed.
+   *
+   * `endTurn` is the caller's answer to "will anything else terminate this turn?", which only the
+   * caller can know once it has aborted.
+   */
+  private declineParkedToolCalls(
+    conversationId: string,
+    mainWindow: BrowserWindow,
+    endTurn: boolean
+  ): void {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    const lastAssistant = [...conversation.messages].reverse().find(m => m.role === 'assistant');
+    const parked = (lastAssistant?.toolCalls ?? []).filter(
+      tc => tc.pendingConfirmation === true && !this.isToolCallResolved(conversationId, tc.id, tc)
+    );
+    if (parked.length === 0) return;
+
+    for (const toolCall of parked) {
+      this.markToolCallResolved(conversationId, toolCall.id);
+      toolCall.pendingConfirmation = false;
+      toolCall.confirmed = false;
+      toolCall.success = false;
+      toolCall.error = 'Stopped by user';
+    }
+    this.saveConversation(conversation);
+    if (endTurn) this.endUnansweredTurn(conversationId, mainWindow);
+  }
+
+  /**
    * Abort all active streams (used during app shutdown)
    */
   abortAll(): void {
@@ -439,47 +496,54 @@ export class ChatService extends BaseSingleton {
   ): Promise<void> {
     const conversationId = conversation.id;
 
-    // Execute the confirmed tool
-    const start = Date.now();
-    try {
-      const result = await this.toolRegistry.executeTool(
-        toolCall.toolName,
-        toolCall.args,
-        conversation.connectionId,
-        conversation.databaseName,
-        conversation.id
-      );
-      toolCall.result = result;
-      toolCall.success = true;
-      toolCall.confirmed = true;
-      toolCall.pendingConfirmation = false;
-      toolCall.durationMs = Date.now() - start;
-    } catch (error) {
-      toolCall.error = (error as Error).message;
-      toolCall.success = false;
-      toolCall.confirmed = true;
-      toolCall.pendingConfirmation = false;
-      toolCall.durationMs = Date.now() - start;
-    }
-
-    this.saveConversation(conversation);
-
-    // Send tool result to UI
-    this.sendChunk(mainWindow, {
-      conversationId,
-      toolResult: toolCall,
-      done: false,
-    });
-
-    // Continue the agentic loop — feed the tool result back to the LLM
+    // Registered BEFORE the tool runs, not after it (J-131). `activeStreams` is what
+    // `endUnansweredTurn` and `stopStream` read to answer "will anything else end this turn?", and
+    // from here on the answer is yes — the continuation below always terminates, including on the
+    // aborted break. Leaving the map empty for the seconds a DDL takes made that guard lie, so a
+    // Stop landing mid-execution ended the turn a second time.
     const abortController = new AbortController();
     this.activeStreams.set(conversationId, abortController);
 
     try {
+      // Execute the confirmed tool
+      const start = Date.now();
+      try {
+        const result = await this.toolRegistry.executeTool(
+          toolCall.toolName,
+          toolCall.args,
+          conversation.connectionId,
+          conversation.databaseName,
+          conversation.id
+        );
+        toolCall.result = result;
+        toolCall.success = true;
+        toolCall.confirmed = true;
+        toolCall.pendingConfirmation = false;
+        // A success carries no error. Left over, one would render beside the result it contradicts.
+        delete toolCall.error;
+        toolCall.durationMs = Date.now() - start;
+      } catch (error) {
+        toolCall.error = (error as Error).message;
+        toolCall.success = false;
+        toolCall.confirmed = true;
+        toolCall.pendingConfirmation = false;
+        toolCall.durationMs = Date.now() - start;
+      }
+
+      this.saveConversation(conversation);
+
+      // Send tool result to UI
+      this.sendChunk(mainWindow, {
+        conversationId,
+        toolResult: toolCall,
+        done: false,
+      });
+
+      // Continue the agentic loop — feed the tool result back to the LLM
       await this.continueAfterToolConfirmation(conversation, mainWindow, abortController.signal);
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
-        log.error('Post-confirmation loop error:', error);
+        log.error('Confirmed tool-call turn failed:', error);
         this.sendChunk(mainWindow, {
           conversationId,
           delta: `\n\nError: ${(error as Error).message}`,

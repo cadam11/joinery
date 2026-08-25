@@ -69,8 +69,12 @@ export function registerChatHandlers(): void {
     }
   );
 
-  safeHandle(CHAT_IPC_CHANNELS.CANCEL_STREAM, async (_event, conversationId: string) => {
-    chatService.cancelStream(conversationId);
+  safeHandle(CHAT_IPC_CHANNELS.CANCEL_STREAM, async (event, conversationId: string) => {
+    const mainWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!mainWindow) throw new Error('No window found');
+    // The window is needed because Stop may have to end a turn parked on a confirmation, which
+    // means emitting the terminal chunk nothing else will now send (J-131).
+    chatService.stopStream(conversationId, mainWindow);
     return { cancelled: true };
   });
 }

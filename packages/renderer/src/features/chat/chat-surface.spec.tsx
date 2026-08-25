@@ -480,6 +480,29 @@ describe('the tool-confirmation flow', () => {
     );
   });
 
+  it('makes Stop a real exit from the confirmation, not just a stopped answer (J-131)', async () => {
+    // Stop is the only control the composer offers while a card waits, so it has to be an answer.
+    // Clearing `streaming` alone left the card armed and the composer still gated on it — and
+    // approving afterwards resumed a turn the transcript had already closed, which is J-61 again.
+    // Main disarms its own copy over the same `chat:cancel-stream` call.
+    const { store } = await mount();
+    await pendingConfirmation(store);
+    await screen.findByTestId('chat-tool-confirm');
+
+    await userEvent.click(screen.getByTestId('chat-stop'));
+
+    expect(double.cancels()).toEqual([CONVERSATION_ID]);
+    await waitFor(() => expect(screen.queryByTestId('chat-tool-confirm')).toBeNull());
+    expect(store.getState().messages.at(-1)?.toolCalls?.[0]?.pendingConfirmation).toBe(false);
+    expect(store.getState().messages.at(-1)?.toolCalls?.[0]?.error).toBe('Stopped by user');
+    // The composer comes back: both gates are down, so neither the refusal note nor the disabled
+    // box outlives the Stop.
+    expect(screen.queryByTestId('chat-confirm-blocked')).toBeNull();
+    await waitFor(() =>
+      expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).disabled).toBe(false)
+    );
+  });
+
   it('declines the tool call in the message that holds it, not the newest one', async () => {
     // The positional patch this replaces wrote to "the last assistant message", which is only the right
     // one while nothing has happened since. Here an assistant message follows the pending card.
