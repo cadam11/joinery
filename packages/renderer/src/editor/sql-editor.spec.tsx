@@ -23,6 +23,11 @@ import { IS_MAC } from '../utils/platform';
 
 /** Monaco's `KeyMod`/`KeyCode` bit values, so a binding assertion reads as the keystroke it is. */
 const KEY_MOD = { CtrlCmd: 2048, Shift: 1024, Alt: 512, WinCtrl: 256 };
+/**
+ * The id Monaco registers with `registerAction2`. Named here for the same reason the component
+ * names it: it is the one id in this file that `getAction` must never resolve.
+ */
+const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
 /** Control-M, spelled the way the component spells it for this platform. */
 const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
 // Monaco's real values (`monaco-editor/esm/vs/editor/editor.api.d.ts`). `KeyM` was missing until
@@ -95,7 +100,15 @@ function makeEditor(): FakeEditor {
     focus: vi.fn(),
     layout: vi.fn(),
     updateOptions: vi.fn(),
-    getAction: vi.fn(() => (state.actionExists ? state.action : null)),
+    // Null for `editor.action.toggleTabFocusMode`, ALWAYS, and not because a test asked for it.
+    // Monaco 0.56 registers that one with `registerAction2` — as a command, not an editor action —
+    // so the real `getAction` cannot resolve it under any conditions. A double that handed back a
+    // working action for every id is precisely what let the first attempt at this fix go green
+    // while ⌃M did nothing in the app; `state.actionExists` must not be able to bring it back.
+    getAction: vi.fn((actionId: string) => {
+      if (actionId === TAB_FOCUS_COMMAND_ID) return null;
+      return state.actionExists ? state.action : null;
+    }),
     // Monaco 0.56 registers `toggleTabFocusMode` with `registerAction2`, so it is reachable ONLY
     // through `trigger`'s command path and `getAction` returns null for it. The double mirrors
     // that: `trigger` is what moves the mode, and it moves nothing for an id the build lacks.
@@ -413,18 +426,36 @@ describe('keybindings', () => {
   });
 
   it('the fourth one toggles tab-focus mode, which is the whole point of it', () => {
-    // Through `trigger`, not `getAction` — the opposite of the `runAction` handle below, and the
-    // one place where that is right. Monaco 0.56 registers this one with `registerAction2`, i.e.
-    // as a platform command rather than an editor action, so `getAction` answers null for it and
-    // only the command path reaches it. It is a toggle, so pressing it twice must come back.
+    // It is a toggle, so pressing it twice must come back.
     mount();
 
     state.commands.get(TAB_FOCUS_KEY)?.();
-    expect(state.triggered).toEqual(['editor.action.toggleTabFocusMode']);
+    expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
     expect(state.tabFocusMode).toBe(true);
 
     state.commands.get(TAB_FOCUS_KEY)?.();
     expect(state.tabFocusMode).toBe(false);
+  });
+
+  it('reaches it through trigger, because getAction cannot resolve a command', () => {
+    // The regression fence. The first attempt at this fix ran ⌃M through `getAction(...).run()`,
+    // which returns null for a `registerAction2` id — so the binding fired on every press and did
+    // nothing, and the suite was green because the double resolved every id. This pins the working
+    // path from both sides: the command id goes to `trigger`, and `getAction` is never consulted
+    // for it — and the double now answers null there no matter what the test asks for.
+    mount();
+    state.commands.get(TAB_FOCUS_KEY)?.();
+
+    expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
+    expect(lastEditor().getAction).not.toHaveBeenCalledWith(TAB_FOCUS_COMMAND_ID);
+    expect(state.tabFocusMode).toBe(true);
+
+    // And the double could not have let the old implementation pass: it answers null for this id
+    // whatever `state.actionExists` says, exactly as the real `getAction` does.
+    const getAction = lastEditor().getAction as unknown as (id: string) => unknown;
+    state.actionExists = true;
+    expect(getAction(TAB_FOCUS_COMMAND_ID)).toBeNull();
+    expect(getAction('actions.find')).not.toBeNull();
   });
 
   it('says so instead of doing nothing when the command is not in the build', () => {

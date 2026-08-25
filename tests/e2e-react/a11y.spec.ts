@@ -336,9 +336,9 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
       // honest ending for this segment too, and it is the SECOND time round that proves the loop
       // closed rather than a `cycled` that never happens.
       //
-      // (Monaco's own ⌃M `toggleTabFocusMode` would give a single continuous walk and was tried
-      // first; that keystroke does not reach the editor through Electron here. J-83 therefore
-      // binds ⌃M explicitly in `editor/sql-editor.tsx`, and the test above proves it frees Tab.
+      // (`toggleTabFocusMode` would give a single continuous walk. Monaco does bind it — at ⌃⇧M on
+      // macOS and Ctrl+M elsewhere, two keys for one behaviour — and J-83 binds ⌃M on both
+      // platforms in `editor/sql-editor.tsx` instead; the test below proves that binding frees Tab.
       // This walk still runs in two segments on purpose: it measures the DEFAULT order, where Tab
       // indents, which is what a user who has not pressed ⌃M experiences.)
       const pastEditor = await walkTabOrder(window, window.getByTestId('query-results-tabs'));
@@ -451,8 +451,9 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
         true
       );
 
-      // ⌃M — `editor.action.toggleTabFocusMode`, bound explicitly in `editor/sql-editor.tsx`
-      // because Monaco's own binding for it does not reach the editor here. This is the exit.
+      // ⌃M — `editor.action.toggleTabFocusMode`, bound in `editor/sql-editor.tsx`. Monaco's own
+      // binding for it is ⌃⇧M on macOS and Ctrl+M elsewhere; this app binds ⌃M on both, which is
+      // the key VS Code teaches. This is the exit.
       await window.keyboard.press('Control+m');
       await window.keyboard.press('Tab');
       expect(await inMonaco(), 'Control+M did not free Tab — the editor is still a trap').toBe(

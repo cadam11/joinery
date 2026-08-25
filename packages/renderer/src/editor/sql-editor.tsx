@@ -82,13 +82,24 @@ export interface SqlEditorHandle {
  * The four Monaco actions this app drives, named once. A union rather than a `string` so a typo is a
  * compile error instead of a silently missing action — `getAction` returns null for an unknown id and
  * the Angular version's `trigger('keyboard', id)` swallowed that entirely.
+ *
+ * Membership is narrower than "every id this file mentions": an id belongs here only if `runAction`
+ * — the union's one consumer — can actually execute it, i.e. only if `getAction` resolves it. That
+ * rules out `editor.action.toggleTabFocusMode`, which Monaco registers as a *command*; see
+ * `TAB_FOCUS_COMMAND_ID` below.
  */
 export type EditorActionId =
   | 'actions.find'
   | 'editor.action.startFindReplaceAction'
   | 'editor.action.gotoLine'
-  | 'editor.action.commentLine'
-  | 'editor.action.toggleTabFocusMode';
+  | 'editor.action.commentLine';
+
+/**
+ * Not an `EditorActionId`, deliberately. Monaco 0.56 registers this one with `registerAction2`, so
+ * `getAction` answers null for it and `runAction` — which throws on null — could never run it. It is
+ * reachable only through `trigger`'s command path, from the ⌃M binding below and nowhere else.
+ */
+const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
 
 export interface SqlEditorProps {
   /** Seeds the document once, on mount. Later changes are ignored — the editor owns the text. */
@@ -384,15 +395,20 @@ export function SqlEditor({
       // `esm/vs/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js`.
       //
       // `trigger` returns nothing either way, so the "did it reach anything?" guard `runAction`
-      // gets from `getAction` is bought here by reading the mode back: a toggle that did not
-      // toggle is the silent failure this has to be loud about, because "⌃M does nothing" is
-      // indistinguishable from the trap it exists to remove.
+      // gets from `getAction` is bought here by reading the mode back — the toggle is synchronous
+      // (`TabFocus` fires a plain emitter and `editorConfiguration` recomputes in the same turn),
+      // so a `before === after` read is a real detector and not a race.
+      //
+      // Where that throw lands, precisely, because it is less than it sounds: Monaco's standalone
+      // command service rejects, and `AbstractKeybindingService._doDispatch` hands the rejection to
+      // the standalone notification service, which is a `console.warn`. So this is a breadcrumb for
+      // whoever bisects the next Monaco upgrade, NOT something a user will ever see. It is worth
+      // having anyway: "⌃M does nothing" is indistinguishable from the trap this exists to remove,
+      // and a console line is the difference between a five-minute diagnosis and the last one.
       const before = instance.getOption(monaco.editor.EditorOption.tabFocusMode);
-      instance.trigger('keyboard', 'editor.action.toggleTabFocusMode', null);
+      instance.trigger('keyboard', TAB_FOCUS_COMMAND_ID, null);
       if (instance.getOption(monaco.editor.EditorOption.tabFocusMode) === before) {
-        throw new Error(
-          '[SqlEditor] "editor.action.toggleTabFocusMode" left tab focus mode unchanged'
-        );
+        throw new Error(`[SqlEditor] "${TAB_FOCUS_COMMAND_ID}" left tab focus mode unchanged`);
       }
     });
 
