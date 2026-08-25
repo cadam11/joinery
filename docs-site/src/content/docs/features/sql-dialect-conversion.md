@@ -81,9 +81,15 @@ Every refusal arrives as a message in the app — none of them throw, and none o
 > and an interpreter that is there without the packages. On a machine with Python 3 and no
 > `sqlglot`, "install Python 3" was advice that did nothing.
 
-There is still no setup-instructions _view_ for this feature the way there is for the
-[backup and restore CLI tools](../backup-and-restore/) — a failed conversion is a message. It now
-carries the command that fixes it; the fuller version is on the Prerequisites page.
+When the refusal is "this machine cannot run the converter", you get the same **setup-instructions
+view** the [backup and restore CLI tools](../backup-and-restore/) have: a dialog naming the
+interpreter that was found, ticking off which of the four packages it has, the numbered fix with a
+copyable `pip` command, and a **Check again** button. That last one matters — the probe is cached
+for the life of the app, so re-checking is how you tell Joinery you have installed something
+without restarting it.
+
+A conversion that fails for any other reason — sqlglot could not parse your SQL, the service timed
+out — is still a message, because there is nothing to set up.
 
 If one of those messages is what brought you here —
 [SQL conversion fails, or Python is not found](../../troubleshooting/sql-conversion-and-python/)
@@ -106,6 +112,7 @@ works through each of them.
 | The source dialect is the tab's connection engine                             | `packages/renderer/src/features/query/query-panel.tsx:266-272`                                                           |
 | The success message names the target engine                                   | `packages/renderer/src/features/query/query-panel.tsx:278`                                                               |
 | Conversion runs through a Python sqlglot service, whose interpreter is probed | `packages/main/src/services/sql/python-deps.ts`, `sql-converter.ts` (`ensureRunning`), `sqlglot/sqlglot-client.ts:52-59` |
+| A failed probe opens the setup-instructions dialog, with Check again          | `packages/renderer/src/features/query/python-setup-dialog.tsx`, `query-panel.tsx` (`recheckPython`)                      |
 | The script path, and that it must live outside the asar archive               | `packages/main/src/services/sql/sql-converter.ts:26-52`                                                                  |
 | It starts on the first conversion and stops at shutdown                       | `packages/main/src/services/sql/sql-converter.ts:105-127, 195-207`                                                       |
 | The 15-second startup and 30-second request timeouts                          | `packages/main/src/services/sql/sql-converter.ts:96-100`                                                                 |

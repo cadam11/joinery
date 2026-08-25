@@ -23,9 +23,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { IDockviewPanelProps } from 'dockview-react';
-import type { DatabaseEngine } from '@joinery/shared';
+import type { DatabaseEngine, PythonDepsResult } from '@joinery/shared';
 
 import { dispatchCommand } from '../../commands';
+import { ipc } from '../../ipc';
 import {
   SqlEditor,
   formatSql,
@@ -34,7 +35,7 @@ import {
   type SqlEditorHandle,
 } from '../../editor';
 import { ResizeHandle } from '../../shell/resize-handle';
-import { notify } from '../../state/diagnostics';
+import { diagnostics, notify } from '../../state/diagnostics';
 import { selectProfileFor, useConnectionStore } from '../../state/connection';
 import {
   queryExecutionStore,
@@ -61,6 +62,7 @@ import { editorPrefsStore, useEditorPrefsStore } from '../../state/editor-prefs'
 import { adoptOpenedFile, openQueryFile, rememberedFilePath, saveQueryToFile } from './query-files';
 import { PLAN_KIND, planFromResult, planRequestFor } from './execution-plan';
 import { ENGINE_LABELS, convertSql } from './sql-convert';
+import { PythonSetupDialog } from './python-setup-dialog';
 import { useRunQuery } from './use-run-query';
 
 /** Arrow-key step for the split divider, in percent. 2% is ~12px in a 600px pane. */
@@ -89,6 +91,10 @@ export function QueryPanel(props: IDockviewPanelProps) {
   /** The split container, measured at drag start so a percentage divider knows what 1px is worth. */
   const splitPane = useRef<HTMLDivElement | null>(null);
   const [resultsHidden, setResultsHidden] = useState(false);
+  /** The Python probe behind a refused conversion, or null when the dialog is closed (J-29). */
+  const [pythonSetup, setPythonSetup] = useState<PythonDepsResult | null>(null);
+  const [rechecking, setRechecking] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<string | undefined>(undefined);
   /**
    * The run waiting on a confirmation: the SQL it would send, and which gate stopped it. `null` when
    * nothing is waiting, which is also what closes the dialog.
@@ -271,6 +277,12 @@ export function QueryPanel(props: IDockviewPanelProps) {
 
       void convertSql({ sql, from: engine, to: toEngine }).then(outcome => {
         if (!outcome.ok) {
+          // "This host cannot run the converter" is a setup problem with a guided fix, not a
+          // failed conversion — a toast saying so would be the sentence J-29 exists to replace.
+          if (outcome.pythonSetup !== undefined) {
+            setPythonSetup(outcome.pythonSetup);
+            return;
+          }
           notify.warning(outcome.reason);
           return;
         }
@@ -280,6 +292,46 @@ export function QueryPanel(props: IDockviewPanelProps) {
     },
     [engine]
   );
+
+  /**
+   * Probe again after the user says they have installed the packages (J-29).
+   *
+   * The probe is cached for the process lifetime, so this is the only way back without a restart.
+   * On success the dialog closes and says so rather than converting on the user's behalf: they
+   * asked for a conversion some minutes and one install ago, and re-running it silently would be
+   * acting on a stale intent.
+   */
+  const recheckPython = useCallback((): void => {
+    setRechecking(true);
+    void ipc()
+      .python.recheck()
+      .then(next => {
+        if (next.ready) {
+          setPythonSetup(null);
+          notify.success('Python is ready — convert again.');
+          return;
+        }
+        setPythonSetup(next);
+      })
+      .catch(cause => {
+        diagnostics.error('the Python re-check failed', cause);
+        notify.warning('Could not check for Python again.');
+      })
+      .finally(() => setRechecking(false));
+  }, []);
+
+  const copySetupCommand = useCallback((command: string): void => {
+    void navigator.clipboard
+      .writeText(command)
+      .then(() => setCopiedCommand(command))
+      .catch(cause => diagnostics.error('the setup command could not be copied', cause));
+  }, []);
+
+  const openSetupLink = useCallback((url: string): void => {
+    void ipc()
+      .app.openExternal(url)
+      .catch(cause => diagnostics.error('the setup link could not be opened', cause));
+  }, []);
 
   /**
    * Send the plan request and store what came back (Task 19b).
@@ -616,6 +668,19 @@ export function QueryPanel(props: IDockviewPanelProps) {
           onReturnFocus={() => editor.current?.focus()}
         />
       )}
+
+      {/* Opens only when a conversion was refused because this host cannot run the converter — a
+          setup problem with a guided fix, which used to be a toast saying "Python 3 is required"
+          on machines that had Python 3 (J-29). */}
+      <PythonSetupDialog
+        deps={pythonSetup}
+        rechecking={rechecking}
+        onRecheck={recheckPython}
+        onCopyCommand={copySetupCommand}
+        onOpenLink={openSetupLink}
+        onClose={() => setPythonSetup(null)}
+        copiedCommand={copiedCommand}
+      />
     </div>
   );
 }

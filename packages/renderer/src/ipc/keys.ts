@@ -62,6 +62,7 @@ export const ipcKeys: { readonly [N in IpcNamespace]: IpcKeyFactory<N> } = {
   explorer: keyFactory('explorer'),
   logs: keyFactory('logs'),
   menu: keyFactory('menu'),
+  python: keyFactory('python'),
   query: keyFactory('query'),
   queryResults: keyFactory('queryResults'),
   restore: keyFactory('restore'),

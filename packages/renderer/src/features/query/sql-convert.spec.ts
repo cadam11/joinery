@@ -7,6 +7,7 @@
  * so nobody "tidies" the two arguments into the wrong order later.
  */
 
+import type { PythonDepsResult } from '@joinery/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { setDiagnosticsSink } from '../../state/diagnostics';
@@ -24,7 +25,8 @@ let logged: string[] = [];
 const teardowns: (() => void)[] = [];
 
 function installBridge(
-  answer: { success: boolean; sql?: string; error?: string } | 'throws' = {
+  answer:
+    { success: boolean; sql?: string; error?: string; pythonDeps?: PythonDepsResult } | 'throws' = {
     success: true,
     sql: 'SELECT 1 LIMIT 1',
   }
@@ -40,6 +42,7 @@ function installBridge(
             success: answer.success,
             sql: answer.sql ?? '',
             ...(answer.error === undefined ? {} : { error: answer.error }),
+            ...(answer.pythonDeps === undefined ? {} : { pythonDeps: answer.pythonDeps }),
           });
         },
       },
@@ -116,6 +119,52 @@ describe('convertSql', () => {
 
     expect(outcome).toEqual({ ok: false, reason: 'Could not convert this SQL to MySQL.' });
     expect(logged.join('\n')).toContain('sqlglot is not installed');
+  });
+});
+
+describe('a refusal this host cannot fix by retrying', () => {
+  it('carries the probe through, so the caller can show the setup view (J-29)', async () => {
+    // The distinction the sentence could not make: "this machine cannot run the converter" is a
+    // setup problem with a guided fix, not a conversion that failed. Without a field to key on,
+    // the caller can only match on prose.
+    const pythonDeps: PythonDepsResult = {
+      platform: 'darwin',
+      command: 'python3',
+      commandArgs: [],
+      modules: [
+        { module: 'sqlglot', available: false },
+        { module: 'fastapi', available: true },
+        { module: 'uvicorn', available: true },
+        { module: 'pydantic', available: true },
+      ],
+      ready: false,
+      installInstructions: {
+        platform: 'darwin',
+        title: 'SQL conversion needs Python 3 and the sqlglot package',
+        steps: [{ description: 'Install them.', command: 'python3 -m pip install sqlglot' }],
+      },
+    };
+
+    installBridge({
+      success: false,
+      error: 'SQL conversion needs the sqlglot package',
+      pythonDeps,
+    });
+    const outcome = await convertSql({ sql: 'select 1', from: 'mssql', to: 'mysql' });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.pythonSetup).toEqual(pythonDeps);
+    expect(outcome.reason).toContain('sqlglot');
+  });
+
+  it('leaves pythonSetup absent for an ordinary transpile failure', async () => {
+    installBridge({ success: false, error: 'sqlglot could not parse this' });
+    const outcome = await convertSql({ sql: 'select 1', from: 'mssql', to: 'mysql' });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.pythonSetup).toBeUndefined();
   });
 });
 

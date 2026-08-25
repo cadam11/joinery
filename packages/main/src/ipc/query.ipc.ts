@@ -6,7 +6,9 @@ import { dialog } from 'electron';
 import * as fs from 'fs';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { SQLConverterService, type ConversionResult } from '../services/sql/sql-converter';
+import { PythonDepsService } from '../services/sql/python-deps';
 import type {
+  PythonDepsResult,
   QueryRequest,
   QueryResult,
   QueryHistoryFilter,
@@ -222,6 +224,17 @@ export function registerQueryHandlers(): void {
       return converter.convert(sql, fromEngine, toEngine);
     }
   );
+
+  // The SQL-conversion Python probe (J-29). Two channels for the same reason the backup CLI probe
+  // has two: the result is cached for the process lifetime, so a user who installs the packages
+  // while Joinery is running needs a way to say so without restarting.
+  safeHandle(IPC_CHANNELS.PYTHON.CHECK, async (): Promise<PythonDepsResult> => {
+    return PythonDepsService.getInstance().check();
+  });
+
+  safeHandle(IPC_CHANNELS.PYTHON.RECHECK, async (): Promise<PythonDepsResult> => {
+    return PythonDepsService.getInstance().recheck();
+  });
 }
 
 /**

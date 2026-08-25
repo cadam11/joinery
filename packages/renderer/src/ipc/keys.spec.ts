@@ -17,6 +17,7 @@ const EXPECTED_NAMESPACES: readonly IpcNamespace[] = [
   'explorer',
   'logs',
   'menu',
+  'python',
   'query',
   'queryResults',
   'restore',
