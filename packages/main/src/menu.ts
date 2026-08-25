@@ -203,24 +203,29 @@ export function createMenu(): void {
             win?.webContents.send('menu:toggle-comment');
           },
         },
-        { type: 'separator' },
-        {
-          label: isMac ? 'Settings...' : 'Preferences...',
-          accelerator: 'CmdOrCtrl+,',
-          click: () => {
-            const win = BrowserWindow.getFocusedWindow();
-            win?.webContents.send('menu:open-settings');
-          },
-        },
-        // The second copy, for the same reason Settings has one: this submenu is where Windows and
-        // Linux users find preferences, and the macOS app menu above is where macOS users do.
-        {
-          label: 'AI Setup...',
-          click: () => {
-            const win = BrowserWindow.getFocusedWindow();
-            win?.webContents.send('menu:open-ai-setup');
-          },
-        },
+        // Preferences live in the app menu on macOS and in Edit everywhere else — never both.
+        // This block was unconditional, so macOS showed Settings… twice, and when J-92 added
+        // AI Setup… beside it, faithfully, it doubled that too (J-97).
+        ...(isMac
+          ? []
+          : [
+              { type: 'separator' as const },
+              {
+                label: 'Preferences...',
+                accelerator: 'CmdOrCtrl+,' as const,
+                click: () => {
+                  const win = BrowserWindow.getFocusedWindow();
+                  win?.webContents.send('menu:open-settings');
+                },
+              },
+              {
+                label: 'AI Setup...',
+                click: () => {
+                  const win = BrowserWindow.getFocusedWindow();
+                  win?.webContents.send('menu:open-ai-setup');
+                },
+              },
+            ]),
       ],
     },
 
@@ -379,8 +384,13 @@ export function createMenu(): void {
         { type: 'separator' },
         { role: 'togglefullscreen' },
         { type: 'separator' },
-        { role: 'reload', label: 'Reload Window', visible: true },
-        { role: 'forceReload', label: 'Force Reload', visible: true },
+        // No `role: 'reload'` here. It carries ⌘R implicitly, which Server ▸ Refresh Object
+        // Explorer also claims — Electron binds whichever it builds first, so one of the two was
+        // unreachable by keyboard, and which one lost depended on menu construction order rather
+        // than on a decision (J-58). A database client is not a browser: refreshing the object
+        // explorer is the everyday meaning of ⌘R here, and reloading the renderer is a devtools
+        // affordance that keeps ⇧⌘R.
+        { role: 'forceReload', label: 'Reload Window', visible: true },
         { role: 'toggleDevTools' },
       ],
     },

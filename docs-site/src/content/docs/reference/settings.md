@@ -5,8 +5,8 @@ sidebar:
   order: 3
 ---
 
-**⌘,** opens Settings. So does **Joinery ▸ Settings…** on macOS, and **Edit ▸ Settings…** —
-**Edit ▸ Preferences…** on Windows.
+**⌘,** opens Settings. So does **Joinery ▸ Settings…** on macOS, and **Edit ▸ Preferences…** on
+Windows and Linux — one menu per platform, wherever that platform's users look for it.
 
 There are five groups: **Appearance**, **Editor**, **Query**, **Results grid** and **AI**. The first
 four hold preferences. The fifth holds a door to [AI setup](../../features/ai-setup/) and no
@@ -108,30 +108,30 @@ Preferences are written by the main process, not the browser storage of the wind
 <details>
 <summary>Where this page's facts come from</summary>
 
-| Claim                                                                              | Source                                                                                             |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| ⌘, opens Settings, from the app menu on macOS and the Edit menu everywhere         | `packages/main/src/menu.ts:19-26, 186-193`, `packages/renderer/src/commands/catalogue.ts:587-595`  |
-| The five groups and their labels, in this order                                    | `packages/renderer/src/features/settings/settings-dialog.tsx:69-79`                                |
-| The AI group holds no preference, and why                                          | `packages/renderer/src/features/settings/settings-groups.tsx:484-502`                              |
-| Switches apply immediately; number fields commit on blur or Enter, clamped         | `packages/renderer/src/features/settings/setting-controls.tsx:100, 107-112, 143-150`               |
-| A field left uncommitted still commits when the dialog closes                      | `packages/renderer/src/features/settings/setting-controls.tsx:21-31`, `settings-dialog.tsx:92-104` |
-| Every control changes real behaviour or ships disabled with its owner named (J-44) | `packages/renderer/src/features/settings/settings-groups.tsx:7-27`                                 |
-| The three theme choices and their names                                            | `packages/renderer/src/features/settings/settings-groups.tsx:71-79`                                |
-| Theme defaults to System, and an unreadable system preference resolves to dark     | `packages/shared/src/types/settings.types.ts:52`, `packages/renderer/src/state/settings.ts:94-95`  |
-| The control says what System currently resolves to                                 | `packages/renderer/src/features/settings/settings-groups.tsx:141-145`                              |
-| The six editor settings, their labels, hints and ranges                            | `packages/renderer/src/features/settings/settings-groups.tsx:241-286`                              |
-| Editor settings are applied to open editors without reopening them                 | `packages/renderer/src/features/settings/settings-groups.tsx:239-240`                              |
-| Editor defaults: 13, 4, off, off, on, on                                           | `packages/shared/src/types/settings.types.ts:53-63`                                                |
-| **Ask me again** resets the ⌘E confirmation and is disabled with nothing to reset  | `packages/renderer/src/features/settings/settings-groups.tsx:193-231`                              |
-| The ⌘E label is rendered per platform (Ctrl+E off macOS)                           | `packages/renderer/src/utils/platform.ts:22-29`, `settings-groups.tsx:207, 212`                    |
-| Maximum rows 10,000, range 100–100,000, truncated before the grid                  | `packages/shared/src/types/settings.types.ts:66`, `settings-groups.tsx:318-329`                    |
-| Execute scope defaults to the whole editor; a selection always wins                | `packages/shared/src/types/settings.types.ts:70`, `settings-groups.tsx:292-295, 331-348`           |
-| Show execution time on; confirm before every execute off                           | `packages/shared/src/types/settings.types.ts:68-69`, `settings-groups.tsx:350-364`                 |
-| Query timeout is disabled, unread, and tracked as J-54                             | `packages/renderer/src/features/settings/settings-groups.tsx:366-379`                              |
-| The six grid settings, their hints and ranges                                      | `packages/renderer/src/features/settings/settings-groups.tsx:405-471`                              |
-| Grid defaults: 24, on, on, off, tab-separated, on                                  | `packages/shared/src/types/settings.types.ts:72-79`                                                |
-| Include-headers is disabled for JSON, which carries names as object keys           | `packages/renderer/src/features/settings/settings-groups.tsx:457-471`                              |
-| Copy format drives the results Copy button; Export offers all three                | `packages/renderer/src/features/settings/settings-groups.tsx:444`                                  |
-| Reset to defaults arms on the first press and lapses after four seconds            | `packages/renderer/src/features/settings/settings-groups.tsx:555-581`                              |
+| Claim                                                                              | Source                                                                                                                     |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| ⌘, opens Settings, from the app menu on macOS and the Edit menu elsewhere          | `packages/main/src/menu.ts` (app menu, and the `!isMac` Edit block), `packages/renderer/src/commands/catalogue.ts:587-595` |
+| The five groups and their labels, in this order                                    | `packages/renderer/src/features/settings/settings-dialog.tsx:69-79`                                                        |
+| The AI group holds no preference, and why                                          | `packages/renderer/src/features/settings/settings-groups.tsx:484-502`                                                      |
+| Switches apply immediately; number fields commit on blur or Enter, clamped         | `packages/renderer/src/features/settings/setting-controls.tsx:100, 107-112, 143-150`                                       |
+| A field left uncommitted still commits when the dialog closes                      | `packages/renderer/src/features/settings/setting-controls.tsx:21-31`, `settings-dialog.tsx:92-104`                         |
+| Every control changes real behaviour or ships disabled with its owner named (J-44) | `packages/renderer/src/features/settings/settings-groups.tsx:7-27`                                                         |
+| The three theme choices and their names                                            | `packages/renderer/src/features/settings/settings-groups.tsx:71-79`                                                        |
+| Theme defaults to System, and an unreadable system preference resolves to dark     | `packages/shared/src/types/settings.types.ts:52`, `packages/renderer/src/state/settings.ts:94-95`                          |
+| The control says what System currently resolves to                                 | `packages/renderer/src/features/settings/settings-groups.tsx:141-145`                                                      |
+| The six editor settings, their labels, hints and ranges                            | `packages/renderer/src/features/settings/settings-groups.tsx:241-286`                                                      |
+| Editor settings are applied to open editors without reopening them                 | `packages/renderer/src/features/settings/settings-groups.tsx:239-240`                                                      |
+| Editor defaults: 13, 4, off, off, on, on                                           | `packages/shared/src/types/settings.types.ts:53-63`                                                                        |
+| **Ask me again** resets the ⌘E confirmation and is disabled with nothing to reset  | `packages/renderer/src/features/settings/settings-groups.tsx:193-231`                                                      |
+| The ⌘E label is rendered per platform (Ctrl+E off macOS)                           | `packages/renderer/src/utils/platform.ts:22-29`, `settings-groups.tsx:207, 212`                                            |
+| Maximum rows 10,000, range 100–100,000, truncated before the grid                  | `packages/shared/src/types/settings.types.ts:66`, `settings-groups.tsx:318-329`                                            |
+| Execute scope defaults to the whole editor; a selection always wins                | `packages/shared/src/types/settings.types.ts:70`, `settings-groups.tsx:292-295, 331-348`                                   |
+| Show execution time on; confirm before every execute off                           | `packages/shared/src/types/settings.types.ts:68-69`, `settings-groups.tsx:350-364`                                         |
+| Query timeout is disabled, unread, and tracked as J-54                             | `packages/renderer/src/features/settings/settings-groups.tsx:366-379`                                                      |
+| The six grid settings, their hints and ranges                                      | `packages/renderer/src/features/settings/settings-groups.tsx:405-471`                                                      |
+| Grid defaults: 24, on, on, off, tab-separated, on                                  | `packages/shared/src/types/settings.types.ts:72-79`                                                                        |
+| Include-headers is disabled for JSON, which carries names as object keys           | `packages/renderer/src/features/settings/settings-groups.tsx:457-471`                                                      |
+| Copy format drives the results Copy button; Export offers all three                | `packages/renderer/src/features/settings/settings-groups.tsx:444`                                                          |
+| Reset to defaults arms on the first press and lapses after four seconds            | `packages/renderer/src/features/settings/settings-groups.tsx:555-581`                                                      |
 
 </details>
