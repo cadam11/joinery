@@ -156,10 +156,17 @@ describe('SQLConverterService — failure handling', () => {
     expect(out.targetDialect).toBe('postgres');
   });
 
-  it('explains a missing interpreter in user terms', async () => {
+  it('explains a spawn failure that got past the probe', async () => {
+    // With an injected client the probe is skipped — it describes this host's Python, and an
+    // injected client is somebody else's transport. So this is the narrow case the fallback is
+    // for: the probe passed and the spawn failed anyway (interpreter moved, or not executable).
+    // The old message told the user to install Python 3 and put python3 on PATH, which since
+    // J-29 may be exactly what they already did.
     const fake = new FakeClient({ startError: new Error('spawn python3 ENOENT') });
     const out = await new SQLConverterService(fake).convert('SELECT 1', 'mssql', 'postgresql');
-    expect(out.error).toMatch(/Python 3 is required/);
+
+    expect(out.error).toMatch(/could not start its Python helper/);
+    expect(out.error).not.toMatch(/ensure "python3" is on your PATH/);
   });
 
   it('blames the build, not Python, when the server script is missing', async () => {
@@ -174,7 +181,7 @@ describe('SQLConverterService — failure handling', () => {
     const out = await new SQLConverterService(fake).convert('SELECT 1', 'mssql', 'postgresql');
 
     expect(out.error).toMatch(/server script is missing from this build/);
-    expect(out.error).not.toMatch(/Python 3 is required/);
+    expect(out.error).not.toMatch(/Python helper/);
   });
 
   it('explains a startup timeout', async () => {

@@ -22,16 +22,18 @@ and only there.** Four packages: `sqlglot`, `fastapi`, `uvicorn`, `pydantic`.
 Every refusal arrives as a message. None of them throws, and none of them touches the SQL in your
 editor.
 
-| Message                                                                                                  | What actually happened                                                                                 |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| _There is no SQL to convert._                                                                            | The editor — or your selection — is empty                                                              |
-| _This tab is already …_                                                                                  | You asked for the engine the tab is already on                                                         |
-| _Python 3 is required for SQL conversion. Please install Python 3 and ensure "python3" is on your PATH._ | The service failed to start. **See below** — this is the message you get for several different causes  |
-| _SQL conversion is unavailable: the sqlglot server script is missing from this build._                   | A packaging fault, not a machine problem                                                               |
-| `sqlglot server failed to start within 15000ms. stderr: …`                                               | The interpreter ran but the service never announced its port. The stderr excerpt is the real diagnosis |
-| `sqlglot server did not become ready within 15000ms`                                                     | The service started but never answered its own health check                                            |
-| `Request to /transpile timed out after 30000ms`                                                          | The service is up, and this conversion took longer than 30 seconds                                     |
-| The transpiler's own error text                                                                          | sqlglot ran and could not parse or rewrite your SQL                                                    |
+| Message                                                                                           | What actually happened                                                                                                  |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| _There is no SQL to convert._                                                                     | The editor — or your selection — is empty                                                                               |
+| _This tab is already …_                                                                           | You asked for the engine the tab is already on                                                                          |
+| _SQL conversion needs Python 3, and none was found (tried python3, python…)._                     | No interpreter could be run under any of the names Joinery tries. The message ends with the `pip` command that fixes it |
+| _SQL conversion needs the sqlglot package for python3, which is not installed._                   | An interpreter ran; one or more of the four packages is missing. Every missing package is named                         |
+| _SQL conversion could not start its Python helper, even though a suitable interpreter was found._ | The probe passed and the spawn failed anyway — the interpreter moved, or is not executable                              |
+| _SQL conversion is unavailable: the sqlglot server script is missing from this build._            | A packaging fault, not a machine problem                                                                                |
+| `sqlglot server failed to start within 15000ms. stderr: …`                                        | The interpreter ran but the service never announced its port. The stderr excerpt is the real diagnosis                  |
+| `sqlglot server did not become ready within 15000ms`                                              | The service started but never answered its own health check                                                             |
+| `Request to /transpile timed out after 30000ms`                                                   | The service is up, and this conversion took longer than 30 seconds                                                      |
+| The transpiler's own error text                                                                   | sqlglot ran and could not parse or rewrite your SQL                                                                     |
 
 > **Note** — the last three are Joinery's **internal** strings, shown verbatim, not sentences
 > written for you. There is a friendlier one in the code — _SQL conversion service timed out. The
@@ -40,33 +42,32 @@ editor.
 > out" or "within 15000ms" instead. Tracked as **J-119**. Read them as "the service did not come up"
 > and "that conversion took too long" respectively; both are worth simply retrying once.
 
-## "Python 3 is required" when Python is installed
+## When Python is installed and conversion still refuses
 
-This is the sharp edge worth knowing about, and there are two ways into it.
+Joinery probes before it spawns, so the message tells you which of the two situations you are in
+rather than conflating them.
 
-**The packages are not installed.** `python3` is found and spawned, the script hits its first
-`import`, and the process exits before it can announce its port. Joinery decides which message to
-show by looking for the text `python` anywhere in the failure — and the failure carries the
-interpreter's own traceback, whose `File "…"` line names the script inside a folder called
-`python`. So a `ModuleNotFoundError` for `fastapi` is **usually** reported as _Python 3 is
-required_, naming the wrong half of the problem. (Occasionally the traceback has not been flushed
-by the time the process is reaped, and you get the raw `Python process exited with code 1` string
-instead — same cause, different wording.)
-
-If you have Python and still get that message, run the install line from Prerequisites and try
-again. To confirm the diagnosis first, run the four imports yourself:
+**The packages are not installed.** The message names them: _SQL conversion needs the sqlglot,
+fastapi packages for python3, which are not installed._ Run the `pip` line it gives you — or the
+one on [Prerequisites](../../getting-started/prerequisites/#python-and-sqlglot-for-sql-dialect-conversion)
+— and convert again. To confirm the diagnosis yourself:
 
 ```bash
 python3 -c "import sqlglot, fastapi, uvicorn, pydantic"
 ```
 
-**The interpreter is not called `python3`.** Joinery spawns the interpreter by that exact name. On
-Windows, where the launcher is usually `python` or `py`, the name may not resolve at all and the
-spawn fails with `ENOENT` — which produces the same sentence, and the sentence names a fix that
-may be exactly the thing your machine does not have. There is no setting for the interpreter path.
-This is a known rough edge, tracked as **J-29**, and
-[Prerequisites](../../getting-started/prerequisites/#python-and-sqlglot-for-sql-dialect-conversion)
-says so too.
+**The interpreter is under a different name.** Joinery tries `JOINERY_PYTHON`, then `python3`, then
+`python`, and on Windows the `py -3` launcher, taking the first that runs and has all four
+packages. So a Windows machine whose interpreter is `python` works without configuration — which it
+did not before **J-29**, when the spawn was hardcoded to `python3` and failed with `ENOENT`
+whatever was installed.
+
+**Your packages live in a virtualenv.** Set `JOINERY_PYTHON` to that interpreter's path and it wins
+over every other candidate. That is the same variable the integration suite uses.
+
+> **Note** — the probe result is cached for the lifetime of the app. If you install the packages
+> while Joinery is running, restart it (or reopen the conversion panel, which probes again on
+> start) rather than converting straight away.
 
 > **Careful** — Joinery inherits its PATH from the process that launched it. If you installed
 > Python after starting the app, restart it. On macOS, an app launched from the Dock does not
