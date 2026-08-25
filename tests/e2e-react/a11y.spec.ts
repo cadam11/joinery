@@ -336,9 +336,11 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
       // honest ending for this segment too, and it is the SECOND time round that proves the loop
       // closed rather than a `cycled` that never happens.
       //
-      // (Monaco's own ⌃M `toggleTabFocusMode` would give a single continuous walk and was tried
-      // first; the keystroke does not reach the editor through Electron here, so the walk stayed
-      // trapped. Recorded so nobody spends the same hour on it.)
+      // (`toggleTabFocusMode` would give a single continuous walk. Monaco does bind it — at ⌃⇧M on
+      // macOS and Ctrl+M elsewhere, two keys for one behaviour — and J-83 binds ⌃M on both
+      // platforms in `editor/sql-editor.tsx` instead; the test below proves that binding frees Tab.
+      // This walk still runs in two segments on purpose: it measures the DEFAULT order, where Tab
+      // indents, which is what a user who has not pressed ⌃M experiences.)
       const pastEditor = await walkTabOrder(window, window.getByTestId('query-results-tabs'));
       await attachFocusTable(
         'query-tab-order-2-results.md',
@@ -417,6 +419,46 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
         erd.stops.some(stop => stop.id.startsWith('status-')),
         'the ERD walk stopped before the status bar — the duplicate-testid truncation is back'
       ).toBe(true);
+    });
+  });
+
+  test('the SQL editor has a keyboard way out, which is what WCAG asks for (J-83)', async () => {
+    await withJoineryReact(async ({ window }) => {
+      // A query tab is only openable from a live connection — `sidebar-new-query` stays disabled
+      // until one exists — so this test needs the same preamble as the other query-tab walks.
+      await createPostgresProfile(window, PROFILE);
+      await connectFromSidebar(window, PROFILE);
+      await selectDatabase(window, DATABASE);
+      await dismissToasts(window);
+
+      await typeSql(window, 'SELECT 1');
+
+      // Focus is in Monaco's input sink. Tab inserts a tab character here — correct for a SQL
+      // editor, and a keyboard trap without an exit (WCAG 2.1.2, Level A).
+      const inMonaco = async (): Promise<boolean> =>
+        window.evaluate(() => {
+          const active = document.activeElement;
+          return (
+            active !== null &&
+            (active.classList.contains('inputarea') ||
+              active.classList.contains('native-edit-context'))
+          );
+        });
+
+      expect(await inMonaco(), 'the test did not start with focus in the editor').toBe(true);
+      await window.keyboard.press('Tab');
+      expect(await inMonaco(), 'Tab moved focus out of the editor — the premise has changed').toBe(
+        true
+      );
+
+      // ⌃M — `editor.action.toggleTabFocusMode`, bound in `editor/sql-editor.tsx`. Monaco's own
+      // binding for it is ⌃⇧M on macOS and Ctrl+M elsewhere; this app binds ⌃M on both, which is
+      // the key VS Code teaches. This is the exit.
+      await window.keyboard.press('Control+m');
+      await window.keyboard.press('Tab');
+      expect(await inMonaco(), 'Control+M did not free Tab — the editor is still a trap').toBe(
+        false
+      );
     });
   });
 

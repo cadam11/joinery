@@ -17,12 +17,23 @@ import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings } from '@joinery/shared';
 import { DEFAULT_SETTINGS } from '@joinery/shared';
+import { IS_MAC } from '../utils/platform';
 
 // ── The double ─────────────────────────────────────────────────────────────────────────────
 
 /** Monaco's `KeyMod`/`KeyCode` bit values, so a binding assertion reads as the keystroke it is. */
 const KEY_MOD = { CtrlCmd: 2048, Shift: 1024, Alt: 512, WinCtrl: 256 };
-const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35 };
+/**
+ * The id Monaco registers with `registerAction2`. Named here for the same reason the component
+ * names it: it is the one id in this file that `getAction` must never resolve.
+ */
+const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
+/** Control-M, spelled the way the component spells it for this platform. */
+const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
+// Monaco's real values (`monaco-editor/esm/vs/editor/editor.api.d.ts`). `KeyM` was missing until
+// J-83, so the component's new binding resolved to `modifier | undefined` and the guard below read
+// a bare modifier — an incomplete double reporting a keystroke nobody bound.
+const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35, KeyM: 43 };
 
 interface FakeEditor {
   getValue: ReturnType<typeof vi.fn>;
@@ -35,6 +46,8 @@ interface FakeEditor {
   layout: ReturnType<typeof vi.fn>;
   updateOptions: ReturnType<typeof vi.fn>;
   getAction: ReturnType<typeof vi.fn>;
+  trigger: ReturnType<typeof vi.fn>;
+  getOption: ReturnType<typeof vi.fn>;
   addCommand: ReturnType<typeof vi.fn>;
   onDidChangeModelContent: ReturnType<typeof vi.fn>;
   onDidChangeCursorPosition: ReturnType<typeof vi.fn>;
@@ -58,6 +71,15 @@ const state = {
   commands: new Map<number, () => void>(),
   action: { run: vi.fn(async () => undefined) },
   actionExists: true,
+  /** Every id handed to `trigger`, in order. */
+  triggered: [] as string[],
+  /** The mode `getOption(EditorOption.tabFocusMode)` reports. Flipped by the real command. */
+  tabFocusMode: false,
+  /**
+   * Whether this Monaco build carries `editor.action.toggleTabFocusMode` at all. `false` makes
+   * `trigger` a no-op, which is exactly how the real API fails for an unknown id — silently.
+   */
+  tabFocusCommandExists: true,
 };
 
 function makeEditor(): FakeEditor {
@@ -78,7 +100,30 @@ function makeEditor(): FakeEditor {
     focus: vi.fn(),
     layout: vi.fn(),
     updateOptions: vi.fn(),
-    getAction: vi.fn(() => (state.actionExists ? state.action : null)),
+    // Null for `editor.action.toggleTabFocusMode`, ALWAYS, and not because a test asked for it.
+    // Monaco 0.56 registers that one with `registerAction2` — as a command, not an editor action —
+    // so the real `getAction` cannot resolve it under any conditions. A double that handed back a
+    // working action for every id is precisely what let the first attempt at this fix go green
+    // while ⌃M did nothing in the app; `state.actionExists` must not be able to bring it back.
+    getAction: vi.fn((actionId: string) => {
+      if (actionId === TAB_FOCUS_COMMAND_ID) return null;
+      return state.actionExists ? state.action : null;
+    }),
+    // Monaco 0.56 registers `toggleTabFocusMode` with `registerAction2`, so it is reachable ONLY
+    // through `trigger`'s command path and `getAction` returns null for it. The double mirrors
+    // that: `trigger` is what moves the mode, and it moves nothing for an id the build lacks.
+    trigger: vi.fn((_source: string | null | undefined, handlerId: string) => {
+      state.triggered.push(handlerId);
+      if (handlerId === 'editor.action.toggleTabFocusMode' && state.tabFocusCommandExists) {
+        state.tabFocusMode = !state.tabFocusMode;
+      }
+    }),
+    getOption: vi.fn((option: number) => {
+      if (option !== monacoDouble.editor.EditorOption.tabFocusMode) {
+        throw new Error(`[double] unexpected getOption(${option})`);
+      }
+      return state.tabFocusMode;
+    }),
     addCommand: vi.fn((keybinding: number, handler: () => void) => {
       state.commands.set(keybinding, handler);
     }),
@@ -107,6 +152,9 @@ const monacoDouble = {
     defineTheme: vi.fn(),
     setTheme: vi.fn(),
     setModelLanguage: vi.fn(),
+    // Monaco's real index for this computed option (`editor.api.d.ts`). The value is opaque to the
+    // component — what matters is that it is the one `getOption` is called with.
+    EditorOption: { tabFocusMode: 164 },
   },
   languages: { marker: 'the languages namespace' },
   KeyMod: KEY_MOD,
@@ -169,6 +217,9 @@ beforeEach(() => {
   state.commands = new Map();
   state.disposedSubscriptions = 0;
   state.actionExists = true;
+  state.triggered = [];
+  state.tabFocusMode = false;
+  state.tabFocusCommandExists = true;
   vi.clearAllMocks();
 });
 
@@ -356,13 +407,66 @@ describe('keybindings', () => {
     expect(onExecute).toHaveBeenCalledTimes(2);
   });
 
-  it('binds exactly three keystrokes and nothing else', () => {
+  it('binds exactly four keystrokes and nothing else', () => {
+    // The fourth is J-83's Control-M, `editor.action.toggleTabFocusMode` — the editor's only way
+    // out for a keyboard user. Which modifier constant carries Control depends on the platform:
+    // `WinCtrl` is Control on macOS and the WINDOWS key on Windows, while `CtrlCmd` is ⌘ on macOS
+    // and Control elsewhere. jsdom reports no macOS, so `IS_MAC` is false here and the component
+    // binds `CtrlCmd` — the expectation is computed the same way rather than hardcoded, because
+    // hardcoding either constant would pass on one platform and lie on the other.
     mount();
     expect([...state.commands.keys()].sort((a, b) => a - b)).toEqual(
-      [KEY_CODE.F5, KEY_MOD.CtrlCmd | KEY_CODE.Enter, KEY_MOD.CtrlCmd | KEY_CODE.KeyE].sort(
-        (a, b) => a - b
-      )
+      [
+        KEY_CODE.F5,
+        KEY_MOD.CtrlCmd | KEY_CODE.Enter,
+        KEY_MOD.CtrlCmd | KEY_CODE.KeyE,
+        TAB_FOCUS_KEY,
+      ].sort((a, b) => a - b)
     );
+  });
+
+  it('the fourth one toggles tab-focus mode, which is the whole point of it', () => {
+    // It is a toggle, so pressing it twice must come back.
+    mount();
+
+    state.commands.get(TAB_FOCUS_KEY)?.();
+    expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
+    expect(state.tabFocusMode).toBe(true);
+
+    state.commands.get(TAB_FOCUS_KEY)?.();
+    expect(state.tabFocusMode).toBe(false);
+  });
+
+  it('reaches it through trigger, because getAction cannot resolve a command', () => {
+    // The regression fence. The first attempt at this fix ran ⌃M through `getAction(...).run()`,
+    // which returns null for a `registerAction2` id — so the binding fired on every press and did
+    // nothing, and the suite was green because the double resolved every id. This pins the working
+    // path from both sides: the command id goes to `trigger`, and `getAction` is never consulted
+    // for it — and the double now answers null there no matter what the test asks for.
+    mount();
+    state.commands.get(TAB_FOCUS_KEY)?.();
+
+    expect(state.triggered).toEqual([TAB_FOCUS_COMMAND_ID]);
+    expect(lastEditor().getAction).not.toHaveBeenCalledWith(TAB_FOCUS_COMMAND_ID);
+    expect(state.tabFocusMode).toBe(true);
+
+    // And the double could not have let the old implementation pass: it answers null for this id
+    // whatever `state.actionExists` says, exactly as the real `getAction` does.
+    const getAction = lastEditor().getAction as unknown as (id: string) => unknown;
+    state.actionExists = true;
+    expect(getAction(TAB_FOCUS_COMMAND_ID)).toBeNull();
+    expect(getAction('actions.find')).not.toBeNull();
+  });
+
+  it('says so instead of doing nothing when the command is not in the build', () => {
+    // `trigger` returns nothing whether or not the id exists, so the guard the `getAction` path
+    // gets for free has to be bought by reading the mode back. Without it a Monaco build missing
+    // the contribution would present as "⌃M does nothing" — which is indistinguishable from the
+    // keyboard trap this binding exists to remove.
+    state.tabFocusCommandExists = false;
+    mount();
+
+    expect(() => state.commands.get(TAB_FOCUS_KEY)?.()).toThrow(/left tab focus mode unchanged/);
   });
 });
 

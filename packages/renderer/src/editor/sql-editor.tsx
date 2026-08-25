@@ -44,6 +44,7 @@ import {
 } from 'react';
 import type { AppSettings } from '@joinery/shared';
 
+import { IS_MAC } from '../utils/platform';
 import { monaco } from './monaco';
 import { EDITOR_THEMES } from './monaco-themes';
 import { sqlIntellisense } from './intellisense';
@@ -81,12 +82,24 @@ export interface SqlEditorHandle {
  * The four Monaco actions this app drives, named once. A union rather than a `string` so a typo is a
  * compile error instead of a silently missing action — `getAction` returns null for an unknown id and
  * the Angular version's `trigger('keyboard', id)` swallowed that entirely.
+ *
+ * Membership is narrower than "every id this file mentions": an id belongs here only if `runAction`
+ * — the union's one consumer — can actually execute it, i.e. only if `getAction` resolves it. That
+ * rules out `editor.action.toggleTabFocusMode`, which Monaco registers as a *command*; see
+ * `TAB_FOCUS_COMMAND_ID` below.
  */
 export type EditorActionId =
   | 'actions.find'
   | 'editor.action.startFindReplaceAction'
   | 'editor.action.gotoLine'
   | 'editor.action.commentLine';
+
+/**
+ * Not an `EditorActionId`, deliberately. Monaco 0.56 registers this one with `registerAction2`, so
+ * `getAction` answers null for it and `runAction` — which throws on null — could never run it. It is
+ * reachable only through `trigger`'s command path, from the ⌃M binding below and nowhere else.
+ */
+const TAB_FOCUS_COMMAND_ID = 'editor.action.toggleTabFocusMode';
 
 export interface SqlEditorProps {
   /** Seeds the document once, on mount. Later changes are ignored — the editor owns the text. */
@@ -354,6 +367,50 @@ export function SqlEditor({
       callbacks.current.onExecute()
     );
     instance.addCommand(monaco.KeyCode.F5, () => callbacks.current.onExecute());
+
+    // ⌃M — the keyboard trap's escape hatch (J-83, WCAG 2.1.2).
+    //
+    // Monaco binds Tab to "insert a tab character", which is right for a SQL editor and wrong for
+    // a keyboard-only user: without an escape, focus cannot leave this control at all. Monaco ships
+    // exactly that escape as `editor.action.toggleTabFocusMode`, but its own binding for it is
+    // ⌃⇧M on macOS and Ctrl+M elsewhere — two different keys for one behaviour, and the macOS one
+    // is not what a screen-reader user reaches for. This binds Control-M on both platforms.
+    //
+    // The modifier has to be chosen per platform, and the two Monaco constants do NOT mean what
+    // their names suggest on both: `WinCtrl` is Control on macOS but the WINDOWS key on Windows,
+    // and `CtrlCmd` is ⌘ on macOS but Control on Windows. So Control-M — which is what VS Code
+    // teaches and what a screen-reader user will try — is `WinCtrl` on macOS and `CtrlCmd`
+    // elsewhere. Binding one of them on both platforms would have given Windows users Win+M.
+    //
+    // On macOS this deliberately does not use `CtrlCmd`: ⌘M is the menu's `role: 'minimize'`.
+    //
+    // A toggle, not a one-way move: turning it on makes Tab move focus, turning it off restores
+    // tab-as-indent, and Monaco announces the state to assistive technology itself.
+    const controlKey = IS_MAC ? monaco.KeyMod.WinCtrl : monaco.KeyMod.CtrlCmd;
+    instance.addCommand(controlKey | monaco.KeyCode.KeyM, () => {
+      // `trigger` and NOT `getAction`, which is the opposite of `runAction` above and the one place
+      // in this file where that is correct. Monaco 0.56 registers this one with `registerAction2`,
+      // i.e. as a platform *command* rather than as an editor action, so `getAction` returns null
+      // for it and only the command path reaches it. Verified in
+      // `esm/vs/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js`.
+      //
+      // `trigger` returns nothing either way, so the "did it reach anything?" guard `runAction`
+      // gets from `getAction` is bought here by reading the mode back — the toggle is synchronous
+      // (`TabFocus` fires a plain emitter and `editorConfiguration` recomputes in the same turn),
+      // so a `before === after` read is a real detector and not a race.
+      //
+      // Where that throw lands, precisely, because it is less than it sounds: Monaco's standalone
+      // command service rejects, and `AbstractKeybindingService._doDispatch` hands the rejection to
+      // the standalone notification service, which is a `console.warn`. So this is a breadcrumb for
+      // whoever bisects the next Monaco upgrade, NOT something a user will ever see. It is worth
+      // having anyway: "⌃M does nothing" is indistinguishable from the trap this exists to remove,
+      // and a console line is the difference between a five-minute diagnosis and the last one.
+      const before = instance.getOption(monaco.editor.EditorOption.tabFocusMode);
+      instance.trigger('keyboard', TAB_FOCUS_COMMAND_ID, null);
+      if (instance.getOption(monaco.editor.EditorOption.tabFocusMode) === before) {
+        throw new Error(`[SqlEditor] "${TAB_FOCUS_COMMAND_ID}" left tab focus mode unchanged`);
+      }
+    });
 
     // Seed the caret readout so the status bar's Ln/Col is populated before the first keystroke.
     const initial = instance.getPosition();
