@@ -6,7 +6,7 @@ dist/
 build/
 out/
 *.tsbuildinfo
-release/builder-debug.yml
+/release/builder-debug.yml
 
 # Turbo
 .turbo/
@@ -33,7 +33,10 @@ coverage/
 .env.*.local
 
 # Electron / Build artifacts
-release/
+# Anchored: this is electron-builder's output directory (electron-builder.yml
+# `directories.output`), which is at the repository root. Unanchored, it also
+# swallowed plans/release/.
+/release/
 *.app
 *.dmg
 *.zip

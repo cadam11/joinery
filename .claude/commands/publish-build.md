@@ -1,95 +1,124 @@
-Build, tag, and publish a new release of Joinery to GitHub with CI-built installers for macOS and Windows.
+Cut a Joinery release: pick the version, prove the tree is releasable, bump it through a PR, and push the tag. `.github/workflows/release.yml` does everything after the tag — building, signing, checksums, the GitHub Release, and the Homebrew tap. This command owns only the judgement the workflow cannot make.
+
+Design and rationale for the pipeline: `plans/release/DISTRIBUTION.md`.
+
+## What this command does and does not do
+
+**Does:** choose the version, run the release gate, bump through a PR, tag, watch, and check the result.
+
+**Does not:** build, sign, notarize, upload assets, write checksums, or edit the cask. If you find yourself about to do any of those by hand, the workflow is broken and that is the thing to fix. Never upload an asset to a release manually — the release's `SHA256SUMS.txt` would then be a lie.
 
 ## Inputs
 
 Ask the user:
 
-1. **Version number** (e.g. `0.4.0`) — or suggest the next patch/minor based on current version in `package.json`
-2. **Release notes** — or offer to auto-generate from commits since the last tag
+1. **Version number** (e.g. `0.6.0`) — or suggest the next patch/minor from the `version` in `package.json`.
+2. **Anything to say in the release notes beyond the generated changelog.** The workflow writes the install instructions, the signing status and the checksum section itself; this is for the human sentence at the top, if there is one.
 
-## Steps
+## 1. Pre-flight
 
-### 1. Pre-flight checks
+- Working tree clean (`git status`), on `main`, up to date with `origin/main`.
+- `pnpm run build` succeeds.
+- Read the current `version` in `package.json` and `git tag --list` — confirm the new version is actually ahead of both.
 
-- Ensure working tree is clean (`git status` — no uncommitted changes)
-- Ensure you're on the `main` branch
-- Confirm all packages build successfully: `pnpm run build`
-- Check the current version in `package.json` and the latest git tag
+### First release only
 
-### 1a. Run the full regression harness — REQUIRED RELEASE GATE
+Two things must exist before the first tag, and both fail the release loudly rather than quietly if they do not:
 
-**This is mandatory for every release. No release proceeds on a red or skipped harness.** Invoke the **joinery-regression-harness** skill and run the complete 4-tier pipeline:
+- **The Homebrew tap.** `gh repo view cadam11/homebrew-joinery`. If it 404s, run `./scripts/release/bootstrap-tap.sh` (it is idempotent, and `--dry-run` shows what it would push).
+- **`HOMEBREW_TAP_TOKEN`** in the repository's secrets — a token with `contents: write` on the tap. Check with `gh secret list --repo cadam11/joinery`. Without it the `homebrew` job fails after the release is already public.
 
-- The harness needs the Docker daemon running (it brings up the test Docker Compose stack). If Docker is down, start it and wait for the daemon before running.
-- Run `pnpm run test:full` — it brings the harness up, runs unit/integration/e2e/visual, writes structured JSON to `tests/reports/.cache/`, and **exits non-zero on any failure**.
-- **Gate:** the run must exit 0 (all tiers green). If anything fails, STOP — do not bump, tag, or push. Surface the failures (read `tests/reports/.cache/{tier}.summary.md`), fix or get the user's call, and re-run until green.
-- Only after a green harness do you continue to the version bump.
+### Signing status — say it out loud before tagging
 
-### 2. Bump version
+`gh secret list --repo cadam11/joinery` and check for all five of `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
 
-- Update `version` in root `package.json` to the new version number
+Tell the user which case this release is, and do not proceed until they have heard it:
 
-### 3. Commit and open a bump PR — do NOT push to `main` directly
+- **All five present** → the macOS build is signed and notarized. The workflow's `spctl --assess` step will prove it, and a failure there is a real failure.
+- **Any missing** → the macOS build is **unsigned**, every download is quarantined, and the release notes will say so. That may be fine. It should still be a decision, not a discovery.
 
-The project hard rule is **never push directly to `main`** (see root CLAUDE.md). The release convention is a dedicated bump branch merged via PR (see PRs #26 / #28 / #38) — the tag is then placed on the merge commit. Direct-to-main pushes are blocked by the permission classifier anyway.
+Never work around a missing certificate. No ad-hoc signing, no `identity: "-"`, no stripping quarantine on a user's behalf.
 
-- Create branch `chore/bump-v{VERSION}`
-- Stage `package.json` **only** (don't sweep in unrelated working-tree changes)
-- Commit: `chore: bump version to v{VERSION}`
-- Push the branch and open a PR into `main` via `gh pr create` (summarize the release + confirm the harness gate is green in the body)
-- Merge with `gh pr merge --merge --delete-branch` (a real merge commit, so the tag can point at it)
-- Sync local main: `git checkout main && git pull origin main`
+## 2. The release gate — the full harness
 
-### 4. Tag and push tag
+**Mandatory for every release. No release proceeds on a red or skipped harness.** Invoke the **joinery-regression-harness** skill and run the complete pipeline:
 
-- Create an annotated tag at the merge commit: `git tag -a v{VERSION} -m "Release v{VERSION}"`
-- Push tag: `git push origin v{VERSION}`
-- This triggers the GitHub Actions CI workflow (`.github/workflows/build-release.yml`) which builds:
-  - macOS: DMG + ZIP for both arm64 and x64
-  - Windows: NSIS installer + ZIP for both x64 and arm64
+- It needs the Docker daemon for the integration and e2e tiers. If Docker is down, ask the user to start it — do not skip the tiers.
+- `pnpm run test:full` brings the harness up, runs unit / integration / e2e / visual, writes structured JSON to `tests/reports/.cache/`, and **exits non-zero on any failure**.
+- **Gate:** it must exit 0. If anything fails, STOP. Do not bump, do not tag. Read `tests/reports/.cache/{tier}.summary.md`, fix it or get the user's call, and re-run until green.
 
-### 5. Monitor CI
+Also run `pnpm run package:dmg` and then `pnpm run verify:package` once locally. The workflow runs `verify:package` too, but finding a packaging break here costs a minute instead of forty.
 
-- Watch the GitHub Actions run: `gh run list --repo cadam11/joinery --limit 1`
-- Wait for completion: `gh run watch {RUN_ID} --repo cadam11/joinery --exit-status`
-- Both `macos-latest` and `windows-latest` jobs must pass
-- If a job fails, investigate with `gh run view --job={JOB_ID} --log-failed`, fix, and re-tag
+## 3. Bump the version through a PR
 
-### 6. Verify release
+The project hard rule is **never push directly to `main`**. The release convention is a dedicated bump branch merged via PR; the tag then points at the merge commit.
 
-- Check the release page: `gh release view v{VERSION} --repo cadam11/joinery`
-- Confirm all expected assets are present (typically 16 files: DMGs, ZIPs, EXEs, blockmaps)
+- Branch `chore/bump-v{VERSION}`.
+- Stage `package.json` **only** — do not sweep in unrelated working-tree changes.
+- Commit `chore: bump version to v{VERSION}`.
+- Push, open a PR with `gh pr create`, and say in the body that the harness gate is green and whether this build will be signed.
+- Merge with `gh pr merge --merge --delete-branch` — a real merge commit, so the tag has something to point at.
+- `git checkout main && git pull origin main`.
 
-### 7. Local test install (macOS)
+The tag and `package.json` must agree exactly. The workflow's `guard` job checks this first and refuses the release if they do not, because every artifact filename — and therefore every Homebrew cask URL — is built from the manifest version.
 
-- Download the arm64 DMG: `gh release download v{VERSION} --repo cadam11/joinery --pattern "*arm64.dmg" --dir ~/Downloads`
-- Inform the user the DMG is ready at `~/Downloads/` for manual testing
-- Remind: right-click → Open to bypass Gatekeeper (app is not yet notarized)
+## 4. Tag
 
-### 8. Update the wiki
+```bash
+git tag -a v{VERSION} -m "Release v{VERSION}"
+git push origin v{VERSION}
+```
 
-The user-facing docs at https://github.com/cadam11/joinery/wiki must reflect what shipped. Invoke the **wiki-author** skill (`.claude/skills/wiki-author/SKILL.md`) — it handles the clone-write-commit-push workflow, including the wiki's `master` (not `main`) default branch and the team-of-authors + dedicated wiki-editor pattern.
+That is the release. There is no other trigger.
 
-Two things must happen on every release:
+## 5. Watch it
 
-**A. Refresh `Release-Notes.md`.** Summarise v{VERSION} highlights — feature additions, behaviour changes, and UX shifts the user will notice. Pull from `git log v{PREVIOUS}..v{VERSION} --no-merges` and merged PR titles. Keep it short; the page points readers at the full GitHub Releases for everything else.
+```bash
+gh run list --repo cadam11/joinery --limit 1
+gh run watch {RUN_ID} --repo cadam11/joinery --exit-status
+```
 
-**B. Audit content pages for drift.** Walk the changes since the last tag and update any wiki page whose feature surface moved. Common drift sources:
+Four jobs, in order: **guard**, **build** (mac and win), **release**, **homebrew**.
 
-- New AI tools, providers, or models → `AI-Assistant-Setup.md`, `Using-the-AI-Assistant.md`
-- New menu items or keyboard shortcuts (especially anything added to `packages/main/src/menu.ts` or `shortcuts-dialog.component.ts`) → `Keyboard-Shortcuts.md` and the relevant feature page
-- New connection options or auth flows → the relevant `Connecting-to-X.md` / `SSH-Tunneling.md` / `Azure-Entra-ID.md`
-- Object Explorer, ERD, Execution Plan, Backup/Restore, Snippet Library behaviour → the corresponding feature page
-- New settings → `Settings.md` (and potentially the affected feature page)
+Read the run's annotations, not just its colour. An unsigned build is a **warning**, not a failure — the run is green and the release is still unsigned. Report that to the user in words.
 
-For a **patch release with no UX changes**, the audit may yield only the `Release-Notes.md` edit — that's fine, push it as a single-page commit. For **minor or major releases**, expect 3–5 content pages to need updates.
+If a job fails after the release is published, fix the cause and re-run the failed job rather than re-tagging. `homebrew` in particular is safely re-runnable: the cask rewrite is idempotent and pushes nothing when the tap is already current.
 
-**Screenshots:** the wiki pins image URLs to a specific release tag (e.g. `https://raw.githubusercontent.com/cadam11/joinery/v{PREVIOUS}/docs/screenshots/<name>.png`) for stability. If the UI shifted in this release, re-capture the affected screenshots (the wiki-author skill describes the playwright-cli flow against a Docker SQL Server) and update the tag in the URL to v{VERSION}. If the UI did not shift, leave the older tag as-is — pinning to v{VERSION} every release just to update the tag is churn.
+## 6. Verify what shipped
 
-**Commit message:** `docs(wiki): update for v{VERSION}` (conventional commit). Push directly to wiki `master` after a `git diff --stat` review — wikis don't support PRs, so the push _is_ the publish. The user has standing authorization for wiki pushes during a release run; you don't need to re-confirm each one.
+```bash
+gh release view v{VERSION} --repo cadam11/joinery
+```
+
+Check:
+
+- Both DMGs, both `.exe` installers, the zips, and **`SHA256SUMS.txt`**.
+- The notes' Signing section matches what step 1 predicted.
+- The tap moved: `gh api repos/cadam11/homebrew-joinery/contents/Casks/joinery.rb --jq '.content' | base64 -d | head -20` shows the new version and real checksums.
+
+Then install it the way a user would, on macOS:
+
+```bash
+brew update && brew install --cask cadam11/joinery/joinery
+```
+
+On an unsigned release this is where the quarantine prompt appears — confirm the release notes' instructions actually work, because that text is the only help a user gets.
+
+## 7. Documentation
+
+`docs-site/` must track what shipped; the root `CLAUDE.md` makes this a hard rule for user-facing change.
+
+- **`getting-started/install.md`** is the page that moves on every release. Its "What installing will look like" section is written in the future tense until the first tag exists — **on the first release, rewrite it in the present tense and delete the "None of this works yet" line.** Its "unsigned-build warning" section is deleted on the release where signing first happens, and not before.
+- **Walk the changes since the last tag** and update any page whose feature surface moved: new commands or shortcuts, new settings, new connection options, new AI providers or tools, changed error surfaces. `pnpm run check:reference` in `docs-site/` fails the build if the generated reference pages have drifted from the app, so that half is enforced; the prose half is not.
+- Gates: `cd docs-site && pnpm install && pnpm run check && pnpm run build`. The build fails on a broken internal link.
+- Docs changes go in through a PR like anything else.
+
+There is no wiki. Help ▸ Joinery Documentation opens <https://usejoinery.com/> (`DOCS_SITE_URL` in `packages/shared/src/constants/index.ts`); do not resurrect the wiki flow the previous version of this command described.
 
 ## Troubleshooting
 
-- **`cpu-features` build failure**: The `scripts/before-build.js` hook removes this incompatible optional module before `@electron/rebuild` runs. If it still fails, check that `before-build.js` exists and is referenced in `electron-builder.yml` under `beforeBuild`.
-- **Missing dependencies in packaged app**: The `beforeBuild` hook MUST return `true`. Returning `false` tells electron-builder that node_modules are handled externally, which excludes all deps from the asar.
-- **Workspace symlink issues**: `scripts/prepare-package.js` replaces the `@joinery/shared` symlink with a real copy. This runs automatically as part of `pnpm run package`.
+- **`cpu-features` build failure** — `scripts/before-build.js` removes this incompatible optional module before `@electron/rebuild` runs. If it still fails, check the hook exists and that `electron-builder.yml` still names it under `beforeBuild`.
+- **Missing dependencies in the packaged app** — the `beforeBuild` hook MUST return `true`. Returning `false` tells electron-builder that `node_modules` are handled externally, which excludes every dependency from the asar. `pnpm run verify:package` is what catches this.
+- **Workspace symlink issues** — `scripts/package.js` replaces the `@joinery/shared` symlink with a real copy and restores it in a `finally`, so a failed build cannot leave `node_modules` swapped. Never call `electron-builder` directly; go through that script.
+- **The `homebrew` job fails on checkout** — the tap does not exist, or `HOMEBREW_TAP_TOKEN` is missing or expired. See step 1.
+- **The `guard` job fails on the cask template** — someone edited `Casks/joinery.rb` into a shape `scripts/release/update-cask.ts` no longer matches. Its spec reads the real template, so `pnpm exec vitest run --project scripts` reproduces it locally.
