@@ -315,6 +315,12 @@ describe('the completion items themselves', () => {
   });
 
   it('bracket-quotes every identifier it inserts', async () => {
+    // KNOWN DEFECT, not intended behaviour: brackets are T-SQL, and this fixture's schema is the
+    // PostgreSQL `public`. The completion provider has no engine to consult — `IntellisenseTarget`
+    // carries only `{connectionId, database}` — so every PostgreSQL and MySQL user is handed
+    // `[schema].[table]`. J-138 adds the engine and rewrites this test to assert `"s"."t"` and
+    // `` `t` ``. J-134 fixed the same class of bug in the main-process dialect layer and left this
+    // one to its own ticket rather than reach into the renderer.
     expect((await completionsFor('SELECT * FROM '))[0]?.insertText).toBe('[public].[customers]');
     expect((await completionsFor('SELECT customers.|'))[0]?.insertText).toBe('[id]');
     // A view is quoted as one name, because the cache holds it as one string. Verbatim.

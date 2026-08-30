@@ -66,13 +66,17 @@ describe('MSSQLDialect', () => {
     });
   });
 
-  describe('escapeString', () => {
-    it('escapes single quotes', () => {
-      expect(dialect.escapeString("O'Brien")).toBe("O''Brien");
+  describe('quoteLiteral', () => {
+    it('doubles single quotes and adds the delimiters', () => {
+      expect(dialect.quoteLiteral("O'Brien")).toBe("'O''Brien'");
     });
 
     it('handles strings without quotes', () => {
-      expect(dialect.escapeString('hello')).toBe('hello');
+      expect(dialect.quoteLiteral('hello')).toBe("'hello'");
+    });
+
+    it('leaves a backslash alone — T-SQL has no backslash escape', () => {
+      expect(dialect.quoteLiteral('C:\\path')).toBe("'C:\\path'");
     });
   });
 
@@ -256,7 +260,9 @@ describe('PgDialect', () => {
 
     it('generates CREATE DATABASE with collation', () => {
       const sql = dialect.createDatabaseSQL({ name: 'testdb', collation: 'en_US.UTF-8' });
-      expect(sql).toContain("LC_COLLATE = 'en_US.UTF-8'");
+      // `E'…'` is a string constant wherever a plain one is accepted; verified against the
+      // harness PostgreSQL 16 server, which takes this CREATE DATABASE verbatim (J-134).
+      expect(sql).toContain("LC_COLLATE = E'en_US.UTF-8'");
     });
 
     it('generates DROP DATABASE', () => {
@@ -600,10 +606,25 @@ describe('dialect cross-engine consistency', () => {
     expect(mysql.listColumnsSQL('db', 's', 't').trim().length).toBeGreaterThan(0);
   });
 
-  it('escapeString works the same across all dialects', () => {
+  it('quoteLiteral does NOT work the same across all dialects (J-134)', () => {
+    // This assertion used to require the three engines to escape identically. They must not: MySQL
+    // reads a backslash as an escape character in its default `sql_mode`, and so does PostgreSQL
+    // whenever `standard_conforming_strings` is off, so quote-doubling alone leaves both open to an
+    // injected statement. Only T-SQL, which has no backslash escape in any configuration, is
+    // correct with plain doubling.
     const input = "it's a test";
-    expect(mssql.escapeString(input)).toBe(pg.escapeString(input));
-    expect(pg.escapeString(input)).toBe(mysql.escapeString(input));
+    expect(mssql.quoteLiteral(input)).toBe("'it''s a test'");
+    expect(pg.quoteLiteral(input)).toBe("E'it''s a test'");
+    expect(mysql.quoteLiteral(input)).toBe("'it''s a test'");
+  });
+
+  it('no dialect exposes the old escapeString footgun (J-134)', () => {
+    // `escapeString` returned a *bare* escaped body and left the caller to write the quotes, so a
+    // dialect could not add the `E` prefix PostgreSQL needs, and every call site read as though
+    // quote-doubling were the whole job. `quoteLiteral` returns the complete literal instead.
+    for (const dialect of [mssql, pg, mysql]) {
+      expect('escapeString' in dialect).toBe(false);
+    }
   });
 });
 
@@ -671,7 +692,7 @@ describe('PgDsqlDialect', () => {
     expect(sql).not.toContain('pg_stat_user_tables');
     expect(sql).not.toContain('pg_relation_size');
     expect(sql).toContain('reltuples');
-    expect(sql).toContain("t.schemaname = 'public'");
+    expect(sql).toContain("t.schemaname = E'public'");
   });
 
   it('listProceduresSQL / listFunctionsSQL / listTriggersSQL return empty-set queries', () => {
@@ -731,8 +752,9 @@ describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
    * Bracket delimiters, `TOP` and the `N''` prefix are all T-SQL, so the purpose-built bridge
    * member was a syntax error on two of three engines.
    *
-   * The values here come from result-set cells, not from Joinery's own strings, which is why the
-   * escaping gets its own tests rather than riding on `escapeString`.
+   * The values here come from result-set cells, not from Joinery's own strings. J-134 moved the
+   * escaping itself down to `quoteLiteral`, which every metadata query goes through too; what is
+   * left in this block is the type handling `formatLiteral` adds on top of it.
    */
 
   it('caps the row the way each engine spells it', () => {
@@ -800,21 +822,31 @@ describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
     expect(getDialect('mssql').formatLiteral('C:\\path')).toBe("N'C:\\path'");
   });
 
-  it('keeps an injection attempt inside the literal', () => {
-    const payload = "x'; DROP TABLE users; --";
-    for (const engine of ['mssql', 'postgresql', 'mysql'] as const) {
-      const sql = getDialect(engine).selectOneByColumnSQL({
-        schema: 's',
-        table: 't',
-        column: 'c',
-        value: payload,
-      });
-      // The semicolons stay — they are DATA now, inside the literal, which is the point. What
-      // matters is that the quote that would have closed it is doubled, and that every quote in
-      // the statement is therefore paired: an odd count is what an escaped literal looks like.
-      expect(sql).toContain("x''; DROP TABLE users; --");
-      expect((sql.match(/'/g) ?? []).length % 2).toBe(0);
-    }
+  it('keeps a backslash-led injection attempt inside the literal (J-134)', () => {
+    // The payload the cycle-4 audit demonstrated against a real MySQL 8.4 server: the leading
+    // backslash escapes the quote the escaper doubles, so the NEXT quote closes the literal and
+    // `DROP TABLE users` runs as a second statement on a `multipleStatements: true` pool. The
+    // earlier version of this test used a payload with no backslash plus a quote-parity heuristic
+    // that the exploit string also satisfied, so it asserted the defect was fine.
+    const payload = String.raw`\'; DROP TABLE users; --`;
+    const ref = { schema: 's', table: 't', column: 'c', value: payload };
+
+    // T-SQL has no backslash escape in any configuration: the backslash stays single, and the
+    // doubled quote is the whole defence.
+    expect(getDialect('mssql').selectOneByColumnSQL(ref)).toBe(
+      String.raw`SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'\''; DROP TABLE users; --'`
+    );
+
+    // PostgreSQL: `E'…'` is escape-string syntax whatever `standard_conforming_strings` is set to,
+    // so doubling the backslash there closes the escape the payload opened.
+    expect(getDialect('postgresql').selectOneByColumnSQL(ref)).toBe(
+      String.raw`SELECT * FROM "s"."t" WHERE "c" = E'\\''; DROP TABLE users; --' LIMIT 1`
+    );
+
+    // MySQL: backslash is an escape character in the default `sql_mode`, so it must be doubled too.
+    expect(getDialect('mysql').selectOneByColumnSQL(ref)).toBe(
+      'SELECT * FROM `s`.`t` WHERE `c` = ' + String.raw`'\\''; DROP TABLE users; --'` + ' LIMIT 1'
+    );
   });
 
   it.each(['mssql' as const, 'postgresql' as const, 'mysql' as const])(
@@ -833,5 +865,70 @@ describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
       "'2026-08-25T00:00:00.000Z'"
     );
     expect(getDialect('mysql').formatLiteral({ a: 1 })).toBe('\'{"a":1}\'');
+  });
+});
+
+describe('quoteLiteral — engine-correct string literals (J-134)', () => {
+  it.each([
+    ['mssql' as const, "'plain'"],
+    ['postgresql' as const, "E'plain'"],
+    ['mysql' as const, "'plain'"],
+  ])('wraps an ordinary value for %s', (engine, expected) => {
+    expect(getDialect(engine).quoteLiteral('plain')).toBe(expected);
+  });
+
+  it.each([
+    ['mssql' as const, "'O''Brien'"],
+    ['postgresql' as const, "E'O''Brien'"],
+    ['mysql' as const, "'O''Brien'"],
+  ])('doubles the quote for %s', (engine, expected) => {
+    expect(getDialect(engine).quoteLiteral("O'Brien")).toBe(expected);
+  });
+
+  it('doubles a backslash on the two engines that read it as an escape', () => {
+    // Verified against the harness servers: MySQL 8.4's default `sql_mode` does NOT include
+    // `NO_BACKSLASH_ESCAPES`, and PostgreSQL's `standard_conforming_strings` is settable per
+    // database and per role (J-52), so neither can be trusted to read a lone backslash as data.
+    expect(getDialect('mysql').quoteLiteral('C:\\path')).toBe("'C:\\\\path'");
+    expect(getDialect('postgresql').quoteLiteral('C:\\path')).toBe("E'C:\\\\path'");
+
+    // T-SQL has no backslash escape, so doubling would corrupt the value and the predicate
+    // would miss the row.
+    expect(getDialect('mssql').quoteLiteral('C:\\path')).toBe("'C:\\path'");
+  });
+
+  it('escapes the metadata predicates, not just the result-set literals', () => {
+    // The J-52 work fixed `formatLiteral` and left every metadata query on the old escape. These
+    // are the schema/table names that reach the dialect from the explorer and from IPC arguments.
+    const hostile = 'x\\'; // a schema name ending in a backslash
+
+    expect(getDialect('mysql').listTablesSQL('db', hostile)).toContain(
+      String.raw`TABLE_SCHEMA = 'x\\'`
+    );
+    expect(getDialect('postgresql').listTablesSQL('db', hostile)).toContain(
+      String.raw`t.schemaname = E'x\\'`
+    );
+    expect(getDialect('postgresql', 'dsql').listTablesSQL('db', hostile)).toContain(
+      String.raw`t.schemaname = E'x\\'`
+    );
+  });
+
+  it('escapes both halves of a schema-qualified metadata lookup', () => {
+    const sql = getDialect('mysql').listColumnsSQL('db', 's\\', 't\\');
+    expect(sql).toContain(String.raw`TABLE_SCHEMA = 's\\'`);
+    expect(sql).toContain(String.raw`TABLE_NAME = 't\\'`);
+  });
+
+  it('formatLiteral and quoteLiteral agree on every engine', () => {
+    // One escaping implementation per engine, not two: `formatLiteral` adds the type handling
+    // (NULL, numbers, booleans) on top of `quoteLiteral` and nothing else.
+    const value = String.raw`mixed '\ value`;
+    expect(getDialect('mssql').formatLiteral(value)).toBe(
+      `N${getDialect('mssql').quoteLiteral(value)}`
+    );
+    expect(getDialect('postgresql').formatLiteral(value)).toBe(
+      getDialect('postgresql').quoteLiteral(value)
+    );
+    expect(getDialect('mysql').formatLiteral(value)).toBe(getDialect('mysql').quoteLiteral(value));
   });
 });
