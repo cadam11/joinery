@@ -11,7 +11,7 @@ import { Transform } from 'stream';
 import { BrowserWindow } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import mysql from 'mysql2/promise';
-import type { BackupRequest, RestoreRequest } from '@joinery/shared';
+import type { CliBackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
@@ -20,7 +20,11 @@ import { MetadataService } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
-import { buildMysqlRestorePrelude, resolveReplaceExisting } from './backup-args';
+import {
+  buildMysqlDumpArgs,
+  buildMysqlRestorePrelude,
+  resolveReplaceExisting,
+} from './backup-args';
 
 const log = createLogger('MySQLBackup');
 
@@ -46,8 +50,11 @@ export class MySQLBackupService extends BaseSingleton {
    * Start a MySQL backup using mysqldump.
    * Returns the operationId immediately — the dump runs in the background
    * and reports progress/completion via IPC events.
+   *
+   * Takes a {@link CliBackupRequest} rather than a `BackupRequest`: mysqldump writes one format —
+   * a plain SQL script — so there is no `backupType` here to read or to branch on (J-48d).
    */
-  async startBackup(request: BackupRequest): Promise<string> {
+  async startBackup(request: CliBackupRequest): Promise<string> {
     const operationId = uuidv4();
     const profile = this.profileStore.getById(request.connectionId);
     if (!profile) throw new Error('Connection profile not found');
@@ -71,32 +78,12 @@ export class MySQLBackupService extends BaseSingleton {
 
     const backupPath = request.backupPath || `/tmp/${request.database}_${Date.now()}.sql`;
 
-    // Build args with minimal privilege requirements. The key challenge is that
-    // --single-transaction does a FLUSH TABLES WITH READ LOCK on some versions,
-    // which requires RELOAD privilege that many managed DB users don't have.
-    // Instead we use --skip-lock-tables + --skip-opt + --create-options to get
-    // a clean dump without requiring RELOAD, PROCESS, or SUPER privileges.
-    const args = [
-      '-h',
-      profile.server,
-      '-P',
-      String(profile.port),
-      '-u',
-      profile.username || 'root',
-      '--skip-opt',
-      '--create-options',
-      '--add-drop-table',
-      '--set-charset',
-      '--extended-insert',
-      '--quick',
-      '--triggers',
-      '--no-tablespaces',
-      '--set-gtid-purged=OFF',
-      '--column-statistics=0',
-      '--result-file',
-      backupPath,
+    // Why these flags and no format flag: see `buildMysqlDumpArgs`.
+    const args = buildMysqlDumpArgs(
+      { server: profile.server, port: profile.port, username: profile.username },
       request.database,
-    ];
+      backupPath
+    );
 
     log.info(`Starting mysqldump for ${request.database} → ${backupPath}`);
 

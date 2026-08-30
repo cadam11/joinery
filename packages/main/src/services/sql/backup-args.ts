@@ -8,6 +8,86 @@
 import type { RestoreRequest } from '@joinery/shared';
 
 /**
+ * How the host CLI tool is reached. The subset of a connection profile these builders need — a
+ * whole profile would carry a password, and nothing here belongs on a command line.
+ */
+export interface CliHost {
+  readonly server: string;
+  readonly port: number;
+  readonly username?: string;
+}
+
+/**
+ * The one format `pg_dump` is ever asked for: `c`, the compressed custom-format archive.
+ *
+ * Not a default and not a fallback — there is no other value, and no caller can supply one
+ * (J-48d). `pg_restore` reads it, the restore wizard restores it, and the backup dialog states it
+ * ("pg_dump writes a compressed custom-format archive").
+ */
+export const PG_DUMP_FORMAT = 'c';
+
+/**
+ * Build the argument vector for `pg_dump`.
+ *
+ * `-v` is not cosmetic: the CLI reports no percentage, so its stderr phase lines are the only
+ * progress the dialog has to show.
+ */
+export function buildPgDumpArgs(host: CliHost, database: string, backupPath: string): string[] {
+  return [
+    '-h',
+    host.server,
+    '-p',
+    String(host.port),
+    '-U',
+    host.username || 'postgres',
+    '-d',
+    database,
+    '-F',
+    PG_DUMP_FORMAT,
+    '-v',
+    '-f',
+    backupPath,
+  ];
+}
+
+/**
+ * Build the argument vector for `mysqldump`.
+ *
+ * No format flag appears here, and that is the whole point: mysqldump's default output is the
+ * plain SQL script Joinery names, restores through the `mysql` client, and documents. Its only
+ * alternative shapes — `--tab`, `--xml` — are not a script, so nothing downstream could read them
+ * (J-48d).
+ *
+ * The privilege-related flags are load-bearing. `--single-transaction` takes a
+ * `FLUSH TABLES WITH READ LOCK` on some versions, which needs RELOAD; `--skip-opt`
+ * plus `--create-options` gets a clean dump without RELOAD, PROCESS or SUPER, which
+ * managed instances routinely withhold.
+ */
+export function buildMysqlDumpArgs(host: CliHost, database: string, backupPath: string): string[] {
+  return [
+    '-h',
+    host.server,
+    '-P',
+    String(host.port),
+    '-u',
+    host.username || 'root',
+    '--skip-opt',
+    '--create-options',
+    '--add-drop-table',
+    '--set-charset',
+    '--extended-insert',
+    '--quick',
+    '--triggers',
+    '--no-tablespaces',
+    '--set-gtid-purged=OFF',
+    '--column-statistics=0',
+    '--result-file',
+    backupPath,
+    database,
+  ];
+}
+
+/**
  * Resolve whether the user asked to overwrite an existing database.
  *
  * The renderer restore dialog populates `withReplace`, while the legacy
@@ -25,7 +105,7 @@ export function resolveReplaceExisting(request: RestoreRequest): boolean {
  * archive path, which pg_restore requires.
  */
 export function buildPgRestoreArgs(
-  profile: { server: string; port: number; username?: string },
+  profile: CliHost,
   request: RestoreRequest,
   targetDb: string
 ): string[] {

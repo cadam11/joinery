@@ -39,19 +39,42 @@ export interface BackupHistoryEntry {
   description?: string;
 }
 
+/**
+ * The three things `BACKUP DATABASE` can be asked for. **SQL Server only** — see `BackupRequest`.
+ */
 export type BackupType = 'full' | 'differential' | 'log';
 
 export interface BackupRequest {
   connectionId: string;
   database: string;
   backupPath: string;
-  backupType: BackupType;
+  /**
+   * SQL Server only, and absent on every other engine (J-48d).
+   *
+   * The Angular dialog bound a four-option "Dump Format" picker to this field on PostgreSQL and
+   * MySQL, where all four options produced a byte-identical dump: `pg_dump` was always given
+   * `-F c` and `mysqldump` was never given a format flag at all. Rather than implement four
+   * formats nobody asked for, each of those engines has exactly one, stated as a fact in the
+   * dialog and pinned in `backup-args.ts`. The field is optional so that a request for those
+   * engines can leave it out rather than carry a placeholder the engine ignores; the two CLI
+   * services take {@link CliBackupRequest}, which does not have it at all.
+   */
+  backupType?: BackupType;
   compression?: boolean;
   copyOnly?: boolean;
   checksum?: boolean;
   description?: string;
   backupId?: string;
 }
+
+/**
+ * The request the `pg_dump` / `mysqldump` services receive.
+ *
+ * `backupType` is removed rather than ignored: those engines have one dump format each, so a
+ * service that could read the field could grow a format branch again without anyone changing this
+ * type first (J-48d).
+ */
+export type CliBackupRequest = Omit<BackupRequest, 'backupType'>;
 
 // Legacy alias
 export interface BackupOptions {

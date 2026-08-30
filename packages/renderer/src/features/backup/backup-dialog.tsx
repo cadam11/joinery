@@ -256,7 +256,9 @@ export function BackupDialog({
       connectionId,
       database: databaseName,
       backupPath: path,
-      backupType: options.showBackupType ? current.backupType : 'full',
+      // Omitted entirely off SQL Server: pg_dump and mysqldump each write one format, so there is
+      // nothing here to choose and nothing to send (J-48d).
+      ...(options.showBackupType ? { backupType: current.backupType } : {}),
       ...(options.showCompression ? { compression: current.compression } : {}),
       ...(options.showDescription && current.description !== ''
         ? { description: current.description }

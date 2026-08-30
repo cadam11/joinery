@@ -13,10 +13,13 @@
  * reach the engine; **three did nothing at all**, and one more silently did the wrong thing. Read
  * against `packages/main/src/services/sql/` — which this task may not change — the facts are:
  *
- *  1. **PG/MySQL "Dump Format" was inert.** `pg-backup.ts:65-66` hard-codes `-F c` and
- *     `mysql-backup.ts` never reads `backupType`, so all three PostgreSQL options and the single
+ *  1. **PG/MySQL "Dump Format" was inert.** `pg-backup.ts` hard-coded `-F c` and
+ *     `mysql-backup.ts` never read `backupType`, so all three PostgreSQL options and the single
  *     MySQL one produced byte-identical dumps. Here the format is stated as a fact
- *     (`formatNote`), not offered as a choice.
+ *     (`formatNote`), not offered as a choice. **Closed in J-48d**: the choice is gone from the
+ *     types too — the format each engine writes lives in `backup-args.ts`
+ *     (`buildPgDumpArgs`, `buildMysqlDumpArgs`), those services take a `CliBackupRequest` with no
+ *     `backupType` on it, and this dialog omits the field rather than sending a placeholder.
  *  2. **MSSQL "Copy-Only" was inert**, and **3. "Checksum" was inert** — `copyOnly` was read by
  *     nothing anywhere, and `checksum` arrived at the builder as a `verify` it never read. Both
  *     are wired now (J-48b, J-48c), so the fields work for any caller of `backup.start`; the two
@@ -27,9 +30,9 @@
  *     promising a log backup. **Fixed in J-48a**: the builder now emits `BACKUP LOG … WITH NOINIT`,
  *     which appends rather than discarding the chain, so the option is offered again below.
  *
- * Item 1 remains open (J-48d). The rest are closed. Reproducing a control before its engine gap
- * was closed would have reproduced exactly the class of bug PLAN.md 0.4 exists to kill: an
- * affordance indistinguishable from a working one.
+ * All four are closed. Reproducing a control before its engine gap was closed would have
+ * reproduced exactly the class of bug PLAN.md 0.4 exists to kill: an affordance
+ * indistinguishable from a working one.
  */
 
 import type {
@@ -77,7 +80,8 @@ export function destinationIsServerSide(engine: DatabaseEngine): boolean {
 }
 
 /**
- * The two backup types that reach the T-SQL. See gap 4 in the header for why `'log'` is absent.
+ * The three backup types that reach the T-SQL. SQL Server's picker only; see gap 4 in the header
+ * for why `'log'` was withheld until J-48a, and gap 1 for why the other engines get no picker.
  */
 export const BACKUP_TYPES: readonly { readonly value: BackupType; readonly label: string }[] = [
   { value: 'full', label: 'Full backup' },
@@ -89,7 +93,7 @@ export const BACKUP_TYPES: readonly { readonly value: BackupType; readonly label
 
 /** Which controls an engine gets, and what they are called. One record, read by the markup. */
 export interface EngineBackupOptions {
-  /** The backup-type picker. MSSQL only — see gap 1. */
+  /** The backup-type picker. MSSQL only — the other two engines have one dump format each. */
   readonly showBackupType: boolean;
   /** `WITH COMPRESSION`. MSSQL only; the CLI dumps compress by format, not by flag. */
   readonly showCompression: boolean;
@@ -391,7 +395,7 @@ export interface PercentReadout {
 /**
  * The percentage to paint, or `null` for an indeterminate bar.
  *
- * `pg-backup.ts:296` reports `-1` on purpose — pg_dump, pg_restore, mysqldump and the mysql client
+ * `pg-backup.ts` reports `-1` on purpose (`sendProgress`) — pg_dump, pg_restore, mysqldump and the mysql client
  * all emit phase lines and never a percentage — and the Angular bar rendered that as `0%` next to an
  * indeterminate track, which read as a stalled operation. `null` is the honest answer and the bar has
  * a mode for it.

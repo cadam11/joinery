@@ -582,13 +582,16 @@ describe('running a backup', () => {
     await user.click(screen.getByTestId('backup-start'));
 
     await waitFor(() => expect(bridge.start).toHaveBeenCalledOnce());
-    // No `compression`, no `description`, no engine-specific format — PG reads none of them.
-    expect(bridge.start.mock.calls[0]?.[0]).toEqual({
+    // No `compression`, no `description`, and no `backupType` — PG reads none of them. The field
+    // is absent rather than filled with a placeholder `'full'`: pg_dump has exactly one format and
+    // Joinery states it rather than pretending it is a choice (J-48d).
+    const request = bridge.start.mock.calls[0]?.[0];
+    expect(request).toEqual({
       connectionId: CONNECTION_ID,
       database: DATABASE,
       backupPath: '/tmp/sales.dump',
-      backupType: 'full',
     });
+    expect(Object.keys(request ?? {})).not.toContain('backupType');
   });
 
   it('sends the MSSQL options that do reach the T-SQL', async () => {
