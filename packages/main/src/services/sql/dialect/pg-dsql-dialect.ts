@@ -77,7 +77,7 @@ SELECT
   /** pg_stat_user_tables and pg_relation_size are unsupported; use reltuples. */
   override listTablesSQL(_database: string, schema?: string): string {
     const schemaFilter = schema
-      ? `AND t.schemaname = '${this.escapeString(schema)}'`
+      ? `AND t.schemaname = ${this.quoteLiteral(schema)}`
       : `AND t.schemaname NOT IN ('pg_catalog', 'information_schema')`;
     return `
 SELECT
@@ -122,8 +122,8 @@ WHERE false;`;
     return `
 SELECT (
   SELECT definition FROM pg_views
-  WHERE schemaname = '${this.escapeString(schema)}'
-    AND viewname = '${this.escapeString(name)}'
+  WHERE schemaname = ${this.quoteLiteral(schema)}
+    AND viewname = ${this.quoteLiteral(name)}
 ) AS definition;`;
   }
 }

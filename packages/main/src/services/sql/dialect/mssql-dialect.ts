@@ -39,7 +39,7 @@ export class MSSQLDialect extends SQLDialect {
     if (typeof value === 'bigint') return String(value);
     if (typeof value === 'boolean') return value ? '1' : '0';
 
-    return `N'${textOf(value).replace(/'/g, "''")}'`;
+    return `N${this.quoteLiteral(textOf(value))}`;
   }
 
   /** `TOP` goes before the select list here, not `LIMIT` after the predicate. */

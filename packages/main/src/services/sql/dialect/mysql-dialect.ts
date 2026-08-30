@@ -24,6 +24,30 @@ export class MySQLDialect extends SQLDialect {
   readonly supportsObjectComments = true; // MySQL supports COMMENT in DDL
   readonly supportsServerFileBrowsing = false;
 
+  /**
+   * `'…'` with backslashes doubled as well as quotes (J-134).
+   *
+   * MySQL treats `\` as an escape character inside a string literal unless `NO_BACKSLASH_ESCAPES`
+   * is in `sql_mode`, and it is not there by default — the harness server (MySQL 8.4) reports
+   * `IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,
+   * ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`. So a value ending in a backslash escapes
+   * the quote that should close the literal, the next quote opens a new one, and a `;` lands
+   * outside it. Both MySQL pools are opened `multipleStatements: true` (`connection-pool.ts`,
+   * `provider/mysql-provider.ts`), so that second statement runs.
+   *
+   * Doubling BOTH is deliberate. mysql2's own escaper (`sql-escaper`, its `escapeString`) writes
+   * `\'` and `\\`; that is correct in the default mode and unsafe under `NO_BACKSLASH_ESCAPES`,
+   * where `\'` is a literal backslash followed by a quote that CLOSES the literal. Quote-doubling
+   * is an escape in both modes, so `''` + `\\` is the only pair that cannot be talked out of the
+   * literal either way. The cost is that under `NO_BACKSLASH_ESCAPES` — not the default, and not
+   * something Joinery sets — one backslash in the data reads back as two. Safe in both modes and
+   * lossy in the rare one beats correct in one mode and injectable in the other.
+   */
+  override quoteLiteral(value: string): string {
+    const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    return `'${escaped}'`;
+  }
+
   quoteIdentifier(name: string): string {
     const escaped = name.replace(/`/g, '``');
     return `\`${escaped}\``;
@@ -39,7 +63,7 @@ export class MySQLDialect extends SQLDialect {
     const name = this.quoteIdentifier(options.name);
     let sql = `CREATE DATABASE ${name} CHARACTER SET utf8mb4`;
     if (options.collation) {
-      sql += ` COLLATE '${this.escapeString(options.collation)}'`;
+      sql += ` COLLATE ${this.quoteLiteral(options.collation)}`;
     } else {
       sql += ' COLLATE utf8mb4_unicode_ci';
     }
@@ -85,7 +109,7 @@ ORDER BY s.SCHEMA_NAME;`;
     // MySQL conflates database and schema — return the database as a single schema
     return `
 SELECT
-  '${this.escapeString(database)}' AS name,
+  ${this.quoteLiteral(database)} AS name,
   NULL AS owner,
   false AS \`isSystem\`;`;
   }
@@ -100,7 +124,7 @@ SELECT
   ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024) AS \`sizeKb\`,
   CREATE_TIME AS \`createdAt\`
 FROM information_schema.TABLES
-WHERE TABLE_SCHEMA = '${this.escapeString(db)}'
+WHERE TABLE_SCHEMA = ${this.quoteLiteral(db)}
   AND TABLE_TYPE = 'BASE TABLE'
 ORDER BY TABLE_NAME;`;
   }
@@ -112,7 +136,7 @@ SELECT
   TABLE_NAME AS name,
   TABLE_SCHEMA AS \`schema\`
 FROM information_schema.VIEWS
-WHERE TABLE_SCHEMA = '${this.escapeString(db)}'
+WHERE TABLE_SCHEMA = ${this.quoteLiteral(db)}
 ORDER BY TABLE_NAME;`;
   }
 
@@ -125,7 +149,7 @@ SELECT
   CREATED AS \`createdAt\`,
   LAST_ALTERED AS \`modifiedAt\`
 FROM information_schema.ROUTINES
-WHERE ROUTINE_SCHEMA = '${this.escapeString(db)}'
+WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(db)}
   AND ROUTINE_TYPE = 'PROCEDURE'
 ORDER BY ROUTINE_NAME;`;
   }
@@ -140,7 +164,7 @@ SELECT
   CREATED AS \`createdAt\`,
   LAST_ALTERED AS \`modifiedAt\`
 FROM information_schema.ROUTINES
-WHERE ROUTINE_SCHEMA = '${this.escapeString(db)}'
+WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(db)}
   AND ROUTINE_TYPE = 'FUNCTION'
 ORDER BY ROUTINE_NAME;`;
   }
@@ -159,8 +183,8 @@ SELECT
   COLUMN_DEFAULT AS \`defaultValue\`,
   ORDINAL_POSITION AS \`ordinalPosition\`
 FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND TABLE_NAME = '${this.escapeString(table)}'
+WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND TABLE_NAME = ${this.quoteLiteral(table)}
 ORDER BY ORDINAL_POSITION;`;
   }
 
@@ -177,8 +201,8 @@ SELECT
   IF(INDEX_NAME = 'PRIMARY', true, false) AS \`isPrimaryKey\`,
   GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS \`columns\`
 FROM information_schema.STATISTICS
-WHERE TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND TABLE_NAME = '${this.escapeString(table)}'
+WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND TABLE_NAME = ${this.quoteLiteral(table)}
 GROUP BY INDEX_NAME, NON_UNIQUE
 ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME;`;
   }
@@ -197,8 +221,8 @@ FROM information_schema.KEY_COLUMN_USAGE kcu
 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
   AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
-WHERE kcu.TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND kcu.TABLE_NAME = '${this.escapeString(table)}'
+WHERE kcu.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND kcu.TABLE_NAME = ${this.quoteLiteral(table)}
   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
 GROUP BY kcu.CONSTRAINT_NAME, kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME,
   rc.DELETE_RULE, rc.UPDATE_RULE
@@ -224,8 +248,8 @@ LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
   AND tc.TABLE_NAME = kcu.TABLE_NAME
 LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
   ON cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND cc.CONSTRAINT_SCHEMA = tc.TABLE_SCHEMA
-WHERE tc.TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND tc.TABLE_NAME = '${this.escapeString(table)}'
+WHERE tc.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND tc.TABLE_NAME = ${this.quoteLiteral(table)}
 GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
 ORDER BY tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME;`;
   }
@@ -238,8 +262,8 @@ SELECT
   LOWER(EVENT_MANIPULATION) AS \`triggerType\`,
   CREATED AS \`createdAt\`
 FROM information_schema.TRIGGERS
-WHERE EVENT_OBJECT_SCHEMA = '${this.escapeString(schema)}'
-  AND EVENT_OBJECT_TABLE = '${this.escapeString(table)}'
+WHERE EVENT_OBJECT_SCHEMA = ${this.quoteLiteral(schema)}
+  AND EVENT_OBJECT_TABLE = ${this.quoteLiteral(table)}
 ORDER BY TRIGGER_NAME;`;
   }
 
@@ -249,9 +273,9 @@ ORDER BY TRIGGER_NAME;`;
 SELECT
   COALESCE(
     (SELECT VIEW_DEFINITION FROM information_schema.VIEWS
-     WHERE TABLE_SCHEMA = '${this.escapeString(schema)}' AND TABLE_NAME = '${this.escapeString(name)}'),
+     WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)} AND TABLE_NAME = ${this.quoteLiteral(name)}),
     (SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES
-     WHERE ROUTINE_SCHEMA = '${this.escapeString(schema)}' AND ROUTINE_NAME = '${this.escapeString(name)}'
+     WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(schema)} AND ROUTINE_NAME = ${this.quoteLiteral(name)}
      LIMIT 1)
   ) AS definition;`;
   }
@@ -266,14 +290,14 @@ SELECT
   'MS_Description' AS name,
   t.TABLE_COMMENT AS value,
   'SCHEMA' AS \`level0Type\`,
-  '${this.escapeString(schema)}' AS \`level0Name\`,
+  ${this.quoteLiteral(schema)} AS \`level0Name\`,
   'TABLE' AS \`level1Type\`,
-  '${this.escapeString(table)}' AS \`level1Name\`,
+  ${this.quoteLiteral(table)} AS \`level1Name\`,
   NULL AS \`level2Type\`,
   NULL AS \`level2Name\`
 FROM information_schema.TABLES t
-WHERE t.TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND t.TABLE_NAME = '${this.escapeString(table)}'
+WHERE t.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND t.TABLE_NAME = ${this.quoteLiteral(table)}
   AND t.TABLE_COMMENT IS NOT NULL AND t.TABLE_COMMENT != ''
 
 UNION ALL
@@ -282,14 +306,14 @@ SELECT
   'MS_Description' AS name,
   c.COLUMN_COMMENT AS value,
   'SCHEMA' AS \`level0Type\`,
-  '${this.escapeString(schema)}' AS \`level0Name\`,
+  ${this.quoteLiteral(schema)} AS \`level0Name\`,
   'TABLE' AS \`level1Type\`,
-  '${this.escapeString(table)}' AS \`level1Name\`,
+  ${this.quoteLiteral(table)} AS \`level1Name\`,
   'COLUMN' AS \`level2Type\`,
   c.COLUMN_NAME AS \`level2Name\`
 FROM information_schema.COLUMNS c
-WHERE c.TABLE_SCHEMA = '${this.escapeString(schema)}'
-  AND c.TABLE_NAME = '${this.escapeString(table)}'
+WHERE c.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
+  AND c.TABLE_NAME = ${this.quoteLiteral(table)}
   AND c.COLUMN_COMMENT IS NOT NULL AND c.COLUMN_COMMENT != ''
 ORDER BY \`level2Type\`, \`level2Name\`;`;
   }

@@ -92,6 +92,60 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
     });
   });
 
+  it('quoteLiteral keeps a backslash-led injection payload as data (J-134)', async () => {
+    // The payload the cycle-4 audit demonstrated: the leading backslash escapes the quote the
+    // escaper doubles, so on an engine that reads `\` as an escape the NEXT quote closes the
+    // literal and `DROP TABLE` runs as a second statement. `runMysql` opens its connection with
+    // `multipleStatements: true`, exactly as Joinery's own MySQL pools do, so this test can fail
+    // the way production would.
+    const payload = String.raw`\'; DROP TABLE probe_victim; -- `;
+
+    await withFreshDatabase(engine, async db => {
+      await createProbeVictim(engine, db.databaseName);
+      await insertProbeLabel(engine, db.databaseName, payload);
+
+      const predicate = `${dialect.quoteIdentifier('label')} = ${dialect.quoteLiteral(payload)}`;
+      const matched = await runQuery(
+        engine,
+        db.databaseName,
+        `SELECT COUNT(*) AS n FROM ${dialect.quoteIdentifier('probe_victim')} WHERE ${predicate}`
+      );
+      // 1 means the literal reached the server as the exact bytes the driver bound on insert.
+      expect(Number(matched[0].n)).toBe(1);
+
+      // And the table is still there: nothing after the payload's `;` was executed. This query
+      // throws if it was dropped.
+      const survived = await runQuery(
+        engine,
+        db.databaseName,
+        `SELECT COUNT(*) AS n FROM ${dialect.quoteIdentifier('probe_victim')}`
+      );
+      expect(Number(survived[0].n)).toBe(1);
+    });
+  });
+
+  it('listColumnsSQL finds a table whose name contains a backslash (J-134)', async () => {
+    // Not a security case — a correctness one. With quote-doubling alone, MySQL read the `\t` in
+    // this name as a TAB and the metadata query silently returned no columns.
+    const table = String.raw`probe\table`;
+
+    await withFreshDatabase(engine, async db => {
+      const { database, schema } = dialectArgs(engine, db.databaseName);
+      await runQuery(
+        engine,
+        db.databaseName,
+        `CREATE TABLE ${dialect.quoteIdentifier(table)} (${dialect.quoteIdentifier('id')} INT)`
+      );
+
+      const rows = await runQuery(
+        engine,
+        db.databaseName,
+        dialect.listColumnsSQL(database, schema, table)
+      );
+      expect(rows.map(r => String(r.name).toLowerCase())).toEqual(['id']);
+    });
+  });
+
   it('quoteIdentifier roundtrips through a SELECT', async () => {
     await withFreshDatabase(engine, async db => {
       await applyFixture(engine, db.databaseName, 'seed');
@@ -196,3 +250,124 @@ async function runMysql(dbName: string, sql: string): Promise<Record<string, unk
     await conn.end();
   }
 }
+
+/** A one-column table the injection payload names as its DROP target. */
+async function createProbeVictim(engine: Engine, dbName: string): Promise<void> {
+  await runQuery(engine, dbName, 'CREATE TABLE probe_victim (label VARCHAR(200) NULL)');
+}
+
+/**
+ * Insert `value` through the driver's own parameter binding.
+ *
+ * Bound, not interpolated, on purpose: the row this test matches against must be written by
+ * something other than the code under test, or the test would only prove the escaper agrees
+ * with itself.
+ */
+async function insertProbeLabel(engine: Engine, dbName: string, value: string): Promise<void> {
+  if (engine === 'mssql') {
+    const c = TEST_CONNECTIONS.mssql;
+    const pool = new sqlserver.ConnectionPool({
+      server: c.host,
+      port: c.port,
+      user: c.user,
+      password: c.password,
+      database: dbName,
+      options: { trustServerCertificate: true, encrypt: false },
+    });
+    await pool.connect();
+    try {
+      await pool
+        .request()
+        .input('label', sqlserver.NVarChar(200), value)
+        .query('INSERT INTO probe_victim (label) VALUES (@label)');
+    } finally {
+      await pool.close();
+    }
+    return;
+  }
+
+  if (engine === 'postgres') {
+    const c = TEST_CONNECTIONS.postgres;
+    const client = new PgClient({
+      host: c.host,
+      port: c.port,
+      user: c.user,
+      password: c.password,
+      database: dbName,
+    });
+    await client.connect();
+    try {
+      await client.query('INSERT INTO probe_victim (label) VALUES ($1)', [value]);
+    } finally {
+      await client.end();
+    }
+    return;
+  }
+
+  const c = TEST_CONNECTIONS.mysql;
+  const conn = await mysql.createConnection({
+    host: c.host,
+    port: c.port,
+    user: c.user,
+    password: c.password,
+    database: dbName,
+  });
+  try {
+    await conn.execute('INSERT INTO probe_victim (label) VALUES (?)', [value]);
+  } finally {
+    await conn.end();
+  }
+}
+
+/**
+ * The `describe.each` injection test above cannot fail for PostgreSQL.
+ *
+ * Its payload is neutralised by quote-doubling alone whenever `standard_conforming_strings` is on,
+ * and on is the default — so that arm stays green even with `PgDialect.quoteLiteral`'s `E'…'` and
+ * backslash doubling reverted (verified by mutation during the J-134 review). The whole reason
+ * J-52 chose `E'…'` is that the setting is not Joinery's to assume: it is settable per database and
+ * per role, and `MetadataService.queryAny` sends PostgreSQL SQL through the simple query protocol,
+ * which runs a second statement happily.
+ *
+ * So this block pins the case the default configuration hides.
+ */
+describe('dialect roundtrip — postgres with standard_conforming_strings off (J-134)', () => {
+  const dialect = getDialect('postgresql');
+  const payload = String.raw`\'; DROP TABLE probe_victim; -- `;
+
+  it('quoteLiteral keeps the payload as data when the server reads backslashes as escapes', async () => {
+    await withFreshDatabase('postgres', async db => {
+      const c = TEST_CONNECTIONS.postgres;
+      const client = new PgClient({
+        host: c.host,
+        port: c.port,
+        user: c.user,
+        password: c.password,
+        database: db.databaseName,
+      });
+      await client.connect();
+      try {
+        await client.query('SET standard_conforming_strings = off');
+        const scs = await client.query('SHOW standard_conforming_strings');
+        expect(scs.rows[0].standard_conforming_strings).toBe('off');
+
+        await client.query('CREATE TABLE probe_victim (label VARCHAR(200) NULL)');
+        // Bound, not interpolated: the row must be written by something other than the code
+        // under test, or the test would only prove the escaper agrees with itself.
+        await client.query('INSERT INTO probe_victim (label) VALUES ($1)', [payload]);
+
+        const predicate = `label = ${dialect.quoteLiteral(payload)}`;
+        const matched = await client.query(
+          `SELECT COUNT(*) AS n FROM probe_victim WHERE ${predicate}`
+        );
+        expect(Number(matched.rows[0].n)).toBe(1);
+
+        // Throws if the payload's DROP ran as a second statement.
+        const survived = await client.query('SELECT COUNT(*) AS n FROM probe_victim');
+        expect(Number(survived.rows[0].n)).toBe(1);
+      } finally {
+        await client.end();
+      }
+    });
+  });
+});
