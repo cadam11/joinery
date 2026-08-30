@@ -74,13 +74,13 @@ export interface WorkspaceInfo {
 }
 
 /**
- * GoldenLayout-based workspace configuration for flexible tab layouts
+ * Workspace configuration for flexible tab layouts
  */
 export interface WorkspaceLayoutConfig {
   /** Schema version for future migrations */
   version: number;
 
-  /** Golden Layout state (may be undefined if cleared due to corruption) */
+  /** Serialized workspace layout (may be undefined if cleared due to corruption) */
   layout?: LayoutConfig;
 
   /** ID of currently active tab */
@@ -116,7 +116,7 @@ export interface LayoutNode {
 }
 
 /**
- * Individual tab definition for GoldenLayout
+ * Individual tab definition for the workspace layout
  */
 export interface WorkspaceTab {
   /** Unique ID for this tab */

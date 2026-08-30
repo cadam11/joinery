@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppState, LayoutConfig } from '@joinery/shared';
 import { AppStateStore } from './app-state';
 
 /** Fresh instance simulating a new process: sees only persisted data. */
@@ -59,5 +60,62 @@ describe('AppStateStore (debounced persistence)', () => {
     const a = store.getState();
     a.lastDatabase = 'mutated';
     expect(store.getState().lastDatabase).not.toBe('mutated');
+  });
+});
+
+/**
+ * J-89 renamed the persisted key `goldenLayoutConfig` → `workspaceLayout` with no migration. Every
+ * other test of that rename runs against the renderer's in-memory stand-in for this class, so
+ * nothing proved the real store — the one that actually reaches disk — round-trips the new key or
+ * leaves the old one alone. These two do, across a simulated restart.
+ */
+describe('AppStateStore workspace layout', () => {
+  /** The envelope shape `renderer/src/persistence/layout.ts` writes: one childless component node. */
+  const LAYOUT: LayoutConfig = {
+    root: {
+      type: 'component',
+      componentType: 'joinery:react-workspace',
+      componentState: { version: 1, dockview: { grid: 'opaque' } },
+    },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const store = freshInstance();
+    store.clearState();
+    store.flush();
+  });
+
+  afterEach(() => {
+    const store = AppStateStore.getInstance();
+    store.clearState();
+    store.flush();
+    vi.useRealTimers();
+  });
+
+  it('persists and restores the layout under workspaceLayout across a restart', () => {
+    const store = freshInstance();
+    expect(store.getWorkspaceLayout()).toBeUndefined();
+
+    store.setWorkspaceLayout(LAYOUT);
+    store.flush();
+
+    const restarted = freshInstance();
+    expect(restarted.getWorkspaceLayout()).toEqual(LAYOUT);
+    expect(restarted.getState().workspaceLayout).toEqual(LAYOUT);
+  });
+
+  it('ignores a layout left on disk under the retired goldenLayoutConfig key', () => {
+    // A pre-J-89 install. Craig's ruling (n-04b9b625): no migration, pre-v1 — so the old bytes are
+    // neither honoured nor deleted, and the workspace rebuilds from the intact saveTabs/getTabs list.
+    const store = freshInstance();
+    store.setState({ goldenLayoutConfig: LAYOUT } as unknown as Partial<AppState>);
+    store.flush();
+
+    const restarted = freshInstance();
+    expect(restarted.getWorkspaceLayout()).toBeUndefined();
+
+    const onDisk = restarted.getState() as AppState & { goldenLayoutConfig?: LayoutConfig };
+    expect(onDisk.goldenLayoutConfig).toEqual(LAYOUT);
   });
 });
