@@ -25,10 +25,26 @@ import { cleanupWorkspaceWatchers } from './ipc/workspace.ipc';
 import {
   LEGACY_USER_DATA_DIR_NAME,
   USER_DATA_DIR_NAME,
+  isUsableAsUserDataDirName,
   migrateLegacyUserDataDir,
 } from './services/config/user-data-dir';
 
 const log = createLogger('App');
+
+/**
+ * The invariant the case guard below assumes, stated out loud (J-142). Electron joins `app.name`
+ * onto the platform's application-data directory without validating it, so a scoped package name
+ * nests instead of failing — that is how 46 MB of development state ended up in
+ * `~/Library/Application Support/@joinery/main`. Logged, not thrown: a bad name is a build mistake
+ * a developer must see, and refusing to launch over it helps nobody.
+ */
+if (!isUsableAsUserDataDirName(app.getName())) {
+  log.error(
+    `app.name is "${app.getName()}", which Electron nests into the user-data path instead of ` +
+      `using one directory named "${USER_DATA_DIR_NAME}". Give the package.json beside the entry ` +
+      `point a plain "productName".`
+  );
+}
 
 /**
  * First side effect in the process, deliberately (J-117). `productName: Joinery` moved the user-data

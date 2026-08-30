@@ -19,6 +19,8 @@ import * as path from 'node:path';
 import {
   LEGACY_USER_DATA_DIR_NAME,
   USER_DATA_DIR_NAME,
+  electronAppNameFrom,
+  isUsableAsUserDataDirName,
   migrateLegacyUserDataDir,
 } from './user-data-dir';
 
@@ -301,5 +303,129 @@ describe('the package.json Electron reads app.name from', () => {
 
     expect(outcome).toBe('skipped-unexpected-path');
     expect(fs.existsSync(path.join(devUserData, 'connections.json'))).toBe(false);
+  });
+});
+
+/**
+ * The shape of the bug that produced `~/Library/Application Support/@joinery/main` (J-142).
+ *
+ * Electron hands `app.name` straight to `path.join` when it builds the user-data path. A scoped
+ * npm name therefore does not fail — the `/` in `@joinery/main` silently nests the directory one
+ * level deeper, and 46 MB of state ended up somewhere nothing looks. `productName` fixed the two
+ * manifests that exist today; these specs turn "the name is a single plain directory" into a rule
+ * that a third entry point cannot get wrong.
+ */
+describe('electronAppNameFrom', () => {
+  test('prefers productName, the way Electron does', () => {
+    expect(electronAppNameFrom({ name: '@joinery/main', productName: 'Joinery (dev)' })).toBe(
+      'Joinery (dev)'
+    );
+  });
+
+  test('falls back to name when productName is missing or empty', () => {
+    expect(electronAppNameFrom({ name: '@joinery/main' })).toBe('@joinery/main');
+    expect(electronAppNameFrom({ name: '@joinery/main', productName: '' })).toBe('@joinery/main');
+    expect(electronAppNameFrom({ name: '@joinery/main', productName: null })).toBe('@joinery/main');
+  });
+
+  /**
+   * Checked against a real `electron <dir>` launch, because guessing here is how the last version
+   * of this function got it wrong: a `productName` of `"   Joinery (dev)   "` produced
+   * `app.name` = `"   Joinery (dev)   "` and a user-data directory with the spaces in its name.
+   * Development does not trim. `isUsableAsUserDataDirName` is what refuses such a name.
+   */
+  test('does not trim, because `electron <dir>` assigns productName as written', () => {
+    expect(electronAppNameFrom({ productName: '   Joinery (dev)   ' })).toBe('   Joinery (dev)   ');
+  });
+
+  test('reports no name rather than inventing one', () => {
+    expect(electronAppNameFrom({})).toBeNull();
+    expect(electronAppNameFrom({ name: null, productName: null })).toBeNull();
+    expect(electronAppNameFrom({ name: '', productName: '' })).toBeNull();
+  });
+});
+
+describe('isUsableAsUserDataDirName', () => {
+  test('accepts the names this app ships', () => {
+    expect(isUsableAsUserDataDirName('Joinery')).toBe(true);
+    expect(isUsableAsUserDataDirName('Joinery (dev)')).toBe(true);
+  });
+
+  test('rejects a scoped package name, which Electron nests instead of refusing', () => {
+    expect(isUsableAsUserDataDirName('@joinery/main')).toBe(false);
+  });
+
+  test('rejects a Windows separator too — %APPDATA% nests on backslashes', () => {
+    expect(isUsableAsUserDataDirName('joinery\\main')).toBe(false);
+  });
+
+  test('rejects a bare scope, which is the directory the bug left behind', () => {
+    expect(isUsableAsUserDataDirName('@joinery')).toBe(false);
+  });
+
+  test('rejects surrounding whitespace, which development keeps and a packaged build trims', () => {
+    expect(isUsableAsUserDataDirName('   Joinery (dev)   ')).toBe(false);
+  });
+
+  test('rejects names that are not a directory of their own', () => {
+    expect(isUsableAsUserDataDirName('')).toBe(false);
+    expect(isUsableAsUserDataDirName('.')).toBe(false);
+    expect(isUsableAsUserDataDirName('..')).toBe(false);
+  });
+});
+
+/**
+ * An Electron app root is a package.json Electron can be pointed at: the repo root's, which
+ * electron-builder bakes into the packaged app, plus any workspace package whose scripts run
+ * `electron .`. Discovering the second set from the scripts — rather than listing paths here —
+ * is what makes this a rule instead of two more hard-coded strings: add `electron .` to a package
+ * and this spec starts holding it to the same invariant.
+ */
+describe('every Electron app root in this workspace', () => {
+  function readManifestAt(repoRelativePath: string): Record<string, unknown> {
+    const file = path.resolve(process.cwd(), repoRelativePath);
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+  }
+
+  function runsElectronOnItsOwnDirectory(manifest: Record<string, unknown>): boolean {
+    const scripts = manifest.scripts;
+    if (typeof scripts !== 'object' || scripts === null) return false;
+    return Object.values(scripts as Record<string, unknown>).some(
+      command => typeof command === 'string' && /(^|\s)electron\s+\./.test(command)
+    );
+  }
+
+  function findAppRoots(): string[] {
+    const packagesDir = path.resolve(process.cwd(), 'packages');
+    const workspaceRoots = fs
+      .readdirSync(packagesDir)
+      .map(entry => path.posix.join('packages', entry, 'package.json'))
+      .filter(relative => fs.existsSync(path.resolve(process.cwd(), relative)))
+      .filter(relative => runsElectronOnItsOwnDirectory(readManifestAt(relative)));
+    return ['package.json', ...workspaceRoots];
+  }
+
+  test('is discovered, so this suite is checking something', () => {
+    // A failure here means an entry point moved. Fix the list's expectation, do not delete it.
+    expect(findAppRoots()).toEqual(['package.json', 'packages/main/package.json']);
+  });
+
+  test('resolves a user-data directory name that is a single, plain directory', () => {
+    for (const relative of findAppRoots()) {
+      const appName = electronAppNameFrom(readManifestAt(relative));
+      expect(appName, `${relative} gives Electron no app name`).not.toBeNull();
+      expect(
+        isUsableAsUserDataDirName(appName as string),
+        `${relative} resolves app.name "${appName}", which Electron nests into the user-data path`
+      ).toBe(true);
+    }
+  });
+
+  test('gives the packaged app and the development app different directories', () => {
+    const packaged = electronAppNameFrom(readManifestAt('package.json'));
+    const development = electronAppNameFrom(readManifestAt('packages/main/package.json'));
+
+    expect(packaged).toBe(USER_DATA_DIR_NAME);
+    expect(development).not.toBe(packaged);
   });
 });
