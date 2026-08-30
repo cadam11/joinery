@@ -235,6 +235,20 @@ describe('every accelerator in the catalogue is the one the main process registe
     expect(collisions.map(owned => owned.owner)).toEqual([]);
   });
 
+  it('leaves an editor-bound surface shortcut out of the renderer-owned set', () => {
+    // The surface list is no longer renderer-only: ⌃M is a surface shortcut whose keystroke Monaco
+    // binds, not a window `keydown` (J-133). Folding it into the guard would assert the wrong rule
+    // — a Monaco keybinding is dispatched from the editor's own container element
+    // (`standaloneServices.js:259-268`), not from the window listener this guard protects.
+    const editorBound = SURFACE_SHORTCUTS.filter(shortcut => shortcut.source === 'editor');
+    expect(editorBound.length, 'no editor-bound surface shortcut, so this test is vacuous').toBe(1);
+
+    const owners = RENDERER_OWNED_KEYS.map(owned => owned.owner);
+    for (const shortcut of editorBound) {
+      expect(owners).not.toContain(`surface: ${shortcut.label}`);
+    }
+  });
+
   it('gives each of the five renderer-owned keystrokes to exactly one owner', () => {
     // The other collision that kills a keystroke: two renderer surfaces claiming it. Both listeners
     // run, so the loser is whichever `preventDefault`s second — a bug with no error anywhere.
@@ -355,17 +369,22 @@ const REGISTERED_KEYS: ReadonlySet<string> = (() => {
 })();
 
 /**
- * Every keystroke the RENDERER owns — a catalogue command with `source: 'renderer'`, plus the surface
- * shortcuts that belong to no command (the palette's own ⌘K / ⇧⌘P, which the cheatsheet lists from
- * `SURFACE_SHORTCUTS`). Folded together because they are the same risk: a keydown listener that never
- * fires because something above it took the key.
+ * Every keystroke the RENDERER owns — a catalogue command with `source: 'renderer'`, plus the
+ * renderer-bound surface shortcuts that belong to no command (the palette's own ⌘K / ⇧⌘P, which the
+ * cheatsheet lists from `SURFACE_SHORTCUTS`). Folded together because they are the same risk: a
+ * keydown listener that never fires because something above it took the key.
+ *
+ * `source: 'renderer'` is the filter on both halves, and on the surface list it is load-bearing since
+ * J-133 put the editor's ⌃M there: a Monaco keybinding is dispatched from the editor's own container
+ * element (`standaloneServices.js:259-268`) rather than from the window listener this guard protects,
+ * so folding it in would assert a rule it does not live under.
  */
 const RENDERER_OWNED_KEYS: readonly { owner: string; forms: readonly string[] }[] = [
   ...COMMAND_IDS.filter(id => COMMAND_CATALOGUE[id].accelerator?.source === 'renderer').map(id => ({
     owner: id as string,
     forms: keyForms(declaredKeys(id)),
   })),
-  ...SURFACE_SHORTCUTS.flatMap(shortcut =>
+  ...SURFACE_SHORTCUTS.filter(shortcut => shortcut.source === 'renderer').flatMap(shortcut =>
     shortcut.keys.map(keys => ({
       owner: `surface: ${shortcut.label}`,
       forms: keyForms([keys]),

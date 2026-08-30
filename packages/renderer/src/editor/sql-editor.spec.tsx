@@ -387,6 +387,21 @@ describe('creation', () => {
     });
   });
 
+  it('advertises the ⌃M tab-focus escape in the editor’s aria label (J-133)', () => {
+    // The other half of WCAG 2.1.2: a keyboard trap needs an escape AND the user has to be told
+    // about it. The cheat sheet (⇧⌘/) advertises it to a sighted user; this is the advisement a
+    // screen-reader user gets, read out on focus. Monaco applies `ariaLabel` to whichever screen
+    // reader surface the build uses — `textAreaEditContext.js:130` and
+    // `native/screenReaderSupport.js:95` both read it through `ariaLabelForScreenReaderContent`,
+    // which returns `options.get(EditorOption.ariaLabel)` whenever accessibility support is not
+    // explicitly Disabled (`screenReaderUtils.js:75-97`). Left unset, the label is Monaco's own
+    // "Editor content", which names no escape.
+    mount();
+    const ariaLabel = lastCreate()?.options.ariaLabel;
+    expect(typeof ariaLabel).toBe('string');
+    expect(ariaLabel).toContain('Control+M');
+  });
+
   it('sends indentation to the MODEL, not the editor', () => {
     // `tabSize` and `insertSpaces` are `ITextModelUpdateOptions`; passing them to `create` is a type
     // error, which is how this split was found.

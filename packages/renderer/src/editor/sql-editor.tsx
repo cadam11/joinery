@@ -239,6 +239,18 @@ function modelOptionsFrom(settings: AppSettings['editor']): monaco.editor.ITextM
 /** The options that are not user preferences. Split out so `optionsFrom` is exactly the settings. */
 const FIXED_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
   automaticLayout: true,
+  // The screen-reader half of advertising the Tab escape (J-133, WCAG 2.1.2). The cheat sheet
+  // (⇧⌘/) tells a sighted user; this is read out on focus, which is where a keyboard-only user
+  // actually meets the trap. Monaco's default is "Editor content", which names no way out.
+  //
+  // Spelled "Control+M" rather than ⌃M because a screen reader reads it aloud, and it is the same
+  // physical key on both platforms (`bindKey('toggleTabFocus', …)` below picks the modifier per
+  // platform so that it is). Monaco applies this to whichever screen-reader surface the build uses
+  // — `textAreaEditContext.js:130` and `native/screenReaderSupport.js:95` both go through
+  // `ariaLabelForScreenReaderContent`, which returns this option unless `accessibilitySupport` is
+  // explicitly `'off'` (`screenReaderUtils.js:75-97`), and this app never sets that.
+  ariaLabel:
+    'SQL editor. Press Control+M to toggle tab-focus mode, so Tab moves focus out of the editor instead of indenting.',
   scrollBeyondLastLine: false,
   renderWhitespace: 'selection',
   // Verbatim from `:1281-1289`: the find widget's configuration and occurrence highlighting.

@@ -13,7 +13,8 @@
  * trusted this dialog was misinformed, and nothing could tell.
  *
  * So the content is derived: every row comes from `COMMAND_CATALOGUE`'s accelerator field or from
- * `SURFACE_SHORTCUTS` (the palette's own ⌘K / ⇧⌘P, which belong to no command). `catalogue.spec.ts`
+ * `SURFACE_SHORTCUTS` (the palette's own ⌘K / ⇧⌘P and the editor's ⌃M, which belong to no
+ * command). `catalogue.spec.ts`
  * parses `menu.ts` and `preload/src/index.ts` as text and asserts every menu-sourced accelerator here
  * equals what the main process actually registers — which is the check that could not exist while the
  * data was prose.
@@ -53,8 +54,7 @@ export interface ShortcutRow {
   readonly group: CommandGroup;
   /**
    * Where the keystroke is bound: `menu`, `renderer` or `editor`. Never null — a surface shortcut has
-   * no command behind it but is still bound by a renderer `keydown`, so it reports `renderer` like any
-   * other renderer-owned key.
+   * no command behind it, but something still binds it, and it says which (`SurfaceShortcut.source`).
    */
   readonly source: AcceleratorSource;
 }
@@ -96,11 +96,14 @@ export function shortcutRows(): readonly ShortcutRow[] {
     rows.push({
       // One accelerator at a time through the same formatter the commands use, so a surface shortcut
       // cannot render its keys by a different rule than a command's.
-      keys: shortcut.keys.flatMap(keys => formatAcceleratorList({ source: 'renderer', keys })),
+      keys: shortcut.keys.flatMap(keys => formatAcceleratorList({ source: shortcut.source, keys })),
       label: shortcut.label,
       hint: shortcut.hint,
       group: shortcut.group,
-      source: 'renderer',
+      // The list's own answer, not a constant: the palette's opener is a window `keydown` and the
+      // editor's ⌃M is a Monaco keybinding, and a sheet that called both "App" would be telling a
+      // user the escape works outside the editor (J-133).
+      source: shortcut.source,
     });
   }
 

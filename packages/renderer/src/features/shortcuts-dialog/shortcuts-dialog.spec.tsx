@@ -44,7 +44,7 @@ function declaredKeystrokes(): Set<string> {
   }
   for (const shortcut of SURFACE_SHORTCUTS) {
     for (const entry of shortcut.keys) {
-      for (const formatted of formatAcceleratorList({ source: 'renderer', keys: entry })) {
+      for (const formatted of formatAcceleratorList({ source: shortcut.source, keys: entry })) {
         keys.add(formatted);
       }
     }
@@ -96,6 +96,19 @@ describe('shortcutRows', () => {
     // All three, because the distinction is the point: a menu accelerator, a renderer keydown and a
     // Monaco binding behave differently when a text field has focus.
     expect(sources).toEqual(new Set(['menu', 'renderer', 'editor']));
+  });
+
+  it('lists the editor’s way out of the Tab trap (J-133)', () => {
+    // WCAG 2.1.2 does not stop at "an escape exists": it requires the user be ADVISED of it. ⌃M was
+    // bound in `editor/sql-editor.tsx` and named in no in-app surface at all, so the only way to
+    // learn it was to read the source or the docs site. It is a surface shortcut rather than a
+    // command because nothing dispatches it — Monaco owns the keystroke and the behaviour.
+    const escape = shortcutRows().find(row => row.keys.includes('Ctrl+M'));
+    expect(escape, 'no row advertises the tab-focus escape').toBeDefined();
+    // Bound by Monaco, so it reads Editor and not App — a user who presses it in the results grid
+    // needs the column to tell them why nothing happened.
+    expect(escape?.source).toBe('editor');
+    expect(escape?.group).toBe('editor');
   });
 
   it('carries both bindings of a command that has two', () => {

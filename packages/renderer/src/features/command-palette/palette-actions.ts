@@ -26,7 +26,7 @@
 import { Layers, Monitor, Moon, SquareX, Sun, type LucideIcon } from 'lucide-react';
 import type { ThemePreference } from '@joinery/shared';
 
-import type { AcceleratorKeys, CommandGroup } from '../../commands';
+import type { AcceleratorKeys, AcceleratorSource, CommandGroup } from '../../commands';
 import { settingsStore } from '../../state/settings';
 import { selectActiveTab, tabStore } from '../../state/tab';
 import { THEME_OPTIONS } from '../../shell/status-bar';
@@ -97,14 +97,23 @@ export const PALETTE_ACTIONS: readonly PaletteAction[] = [
 /**
  * Keystrokes that belong to a surface rather than to a command, for the cheatsheet to list.
  *
- * Today there is exactly one entry and it is this palette's own opener. It is NOT a palette entry —
- * an item that opens the thing you are looking at is noise — which is why it is a separate list from
- * `PALETTE_ACTIONS` rather than a flag on it.
+ * Two entries: this palette's own opener, and the SQL editor's tab-focus escape. Neither is a
+ * palette entry — an item that opens the thing you are looking at is noise, and an item that toggles
+ * the editor you are not in is worse — which is why this is a separate list from `PALETTE_ACTIONS`
+ * rather than a flag on it.
  */
 export interface SurfaceShortcut {
   readonly label: string;
   readonly hint: string;
   readonly group: CommandGroup;
+  /**
+   * Who holds the keystroke, in the same vocabulary a command's accelerator uses. Not a constant:
+   * the palette's opener is a window `keydown` (`renderer`) and the editor's escape is a Monaco
+   * keybinding (`editor`), and the cheatsheet's source column is how a user finds out why a key that
+   * works in one place does nothing in another. `catalogue.spec.ts`'s collision guard reads it too —
+   * only the `renderer` ones can lose a keystroke to a menu accelerator.
+   */
+  readonly source: AcceleratorSource;
   /** One or more accelerators, all doing the same thing. Rendered in order. */
   readonly keys: readonly AcceleratorKeys[];
 }
@@ -114,8 +123,24 @@ export const SURFACE_SHORTCUTS: readonly SurfaceShortcut[] = [
     label: 'Command palette',
     hint: 'Everything this app can do, by name',
     group: 'help',
+    source: 'renderer',
     // Two bindings, because both are muscle memory: ⌘K from Linear/Slack, ⇧⌘P from VS Code. Neither
     // is a menu accelerator, so the renderer owns both (`command-palette.tsx`).
     keys: ['CmdOrCtrl+K', 'CmdOrCtrl+Shift+P'],
+  },
+  {
+    label: 'Toggle tab-focus mode',
+    hint: 'Switch Tab between indenting and moving focus out of the SQL editor',
+    group: 'editor',
+    source: 'editor',
+    // The keyboard trap's advertised way out (J-133, WCAG 2.1.2). Bound in
+    // `editor/sql-editor.tsx`, which picks the modifier per platform — `WinCtrl` on macOS,
+    // `CtrlCmd` elsewhere — so that Control-M is the key on both. `'Control+M'` is the Electron
+    // spelling of exactly that: `formatAccelerator` renders it ⌃M on macOS and `Ctrl+M` off it.
+    //
+    // Here rather than in `COMMAND_CATALOGUE` because a catalogue entry is a command the bus
+    // dispatches, and this one has no handler to dispatch to: Monaco owns both the keystroke and
+    // the behaviour, and there is no window-level path that could reach it.
+    keys: ['Control+M'],
   },
 ];

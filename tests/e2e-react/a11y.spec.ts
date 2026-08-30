@@ -422,7 +422,18 @@ test.describe('focus is visible everywhere a Tab press can land', () => {
     });
   });
 
-  test('the SQL editor has a keyboard way out, which is what WCAG asks for (J-83)', async () => {
+  /**
+   * What this proves and what it does not.
+   *
+   * WCAG 2.1.2 has two halves: an escape from the trap, and ADVISING the user of it. This test
+   * drives the first half only — ⌃M frees Tab in the running app. The title used to claim it was
+   * "what WCAG asks for", which was an overclaim while ⌃M appeared in no in-app surface at all
+   * (J-133). The advisement half is now the cheat sheet's ⌃M row and the editor's `ariaLabel`, and
+   * it is checked in the unit tier: `features/shortcuts-dialog/shortcuts-dialog.spec.tsx` — 'lists
+   * the editor’s way out of the Tab trap' — and `editor/sql-editor.spec.tsx` — 'advertises the ⌃M
+   * tab-focus escape in the editor’s aria label'.
+   */
+  test('⌃M frees Tab from the SQL editor, so the trap has a way out (J-83)', async () => {
     await withJoineryReact(async ({ window }) => {
       // A query tab is only openable from a live connection — `sidebar-new-query` stays disabled
       // until one exists — so this test needs the same preamble as the other query-tab walks.
