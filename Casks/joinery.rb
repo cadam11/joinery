@@ -33,13 +33,27 @@ cask "joinery" do
     "~/Library/Saved Application State/ca.adam11.joinery.savedState",
   ]
 
+  # No `postflight` that strips com.apple.quarantine, deliberately. Homebrew quarantines what
+  # it installs and gives neither a cask stanza nor a user flag to opt out any more
+  # (`--no-quarantine` was removed upstream on 2026-07-30). A cask that quietly undid it would
+  # be Joinery deciding, on the user's machine, that Joinery is trustworthy. The caveat below
+  # tells them what to do instead and lets them decide.
   caveats <<~EOS
-    Joinery is not yet signed with an Apple Developer ID or notarized, so macOS
-    quarantines it on first launch. Open it once from Finder with right-click -> Open,
-    or run:
+    Joinery is not code-signed and not notarized, so macOS quarantines it and refuses
+    the first launch. To allow it, once:
 
-      xattr -d com.apple.quarantine "/Applications/Joinery.app"
+      1. Double-click Joinery. macOS will refuse.
+      2. Open System Settings -> Privacy & Security, scroll to Security, and click
+         "Open Anyway" next to the message about Joinery.
+      3. Confirm and authenticate. Every launch after that is normal.
 
-    This caveat is removed from the cask in the first release built with signing.
+    On macOS Sonoma and earlier, Control-click the app in Finder and choose Open
+    instead. Apple removed that shortcut in macOS Sequoia.
+
+    Or drop the quarantine flag yourself, before the first launch:
+
+      xattr -dr com.apple.quarantine "/Applications/Joinery.app"
+
+    The -r matters: Homebrew sets the flag on every file inside the bundle.
   EOS
 end

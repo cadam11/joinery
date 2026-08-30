@@ -91,21 +91,45 @@ be checked before it is opened:
 shasum -a 256 -c SHA256SUMS.txt --ignore-missing
 ```
 
-### The unsigned-build warning
+### Joinery is not code-signed
 
-Joinery is not yet signed with an Apple Developer ID and not yet notarized, and its Windows builds
-are not code-signed either. That is a missing certificate, not a missing intention: the release
-workflow signs and notarizes automatically once the credentials exist, and until then it labels
-every build unsigned in its own release notes rather than quietly shipping one.
+Joinery is not signed with an Apple Developer ID, not notarized, and its Windows builds are not
+code-signed either. There is no Apple Developer Program membership behind the project, and the
+release workflow does not pretend otherwise: it has no signing step to skip and no certificate to
+look for.
 
-What that means for you, on the first launch only:
+That costs you one extra step, once, the first time you open it.
 
-- **macOS** — the app is quarantined. Open it once from Finder with right-click → **Open**, or run
-  `xattr -d com.apple.quarantine "/Applications/Joinery.app"`. This applies to the Homebrew install
-  too: Homebrew quarantines what it downloads.
-- **Windows** — SmartScreen warns. Click **More info**, then **Run anyway**.
+#### macOS
 
-This section goes away on the release where signing first happens.
+macOS quarantines Joinery however you install it — the Homebrew cask included, because Homebrew
+quarantines what it downloads — and refuses the first launch.
+
+1. Double-click Joinery. macOS refuses, and says the developer cannot be verified.
+2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open
+   Anyway** beside the message about Joinery.
+3. Confirm, and authenticate. Every launch after that one is normal.
+
+On macOS Sonoma and earlier you can instead Control-click the app in Finder and choose **Open**.
+[Apple removed that shortcut in macOS Sequoia](https://developer.apple.com/news/?id=saqachfa), so
+on Sequoia and later the System Settings route above is the one that works.
+
+If you would rather do it from a terminal, remove the quarantine flag before the first launch:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Joinery.app"
+```
+
+The `-r` is not optional. Homebrew sets the flag on every file inside the app bundle, so removing
+it from the bundle alone leaves the app blocked.
+
+Homebrew used to accept `--no-quarantine`; that option was removed upstream, and the cask does not
+strip the flag for you either. Deciding that Joinery is safe to run on your machine is your
+decision to make, not Joinery's.
+
+#### Windows
+
+SmartScreen warns. Click **More info**, then **Run anyway**.
 
 ## What is not here yet
 
@@ -119,23 +143,25 @@ This section goes away on the release where signing first happens.
 
 Every claim above was checked against the repository at the commit this page was written from.
 
-| Claim                                                                           | Source                                                                                                      |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Joinery is MIT licensed                                                         | `LICENSE:1`, `package.json:6` (`"license": "MIT"`)                                                          |
-| No tagged releases and nothing to download                                      | `git tag` is empty; `.github/workflows/release.yml` triggers only on `push: tags: v*`                       |
-| `git clone` → `cd` → `pnpm install` → `pnpm run dev`                            | `README.md:259-262`, `CONTRIBUTING.md:31-36`                                                                |
-| `pnpm run dev` builds first, then runs renderer and main concurrently           | `package.json`, the `dev` script                                                                            |
-| Node 20+, pnpm 11+, Xcode Command Line Tools                                    | `package.json` `engines`, `CONTRIBUTING.md:26-28`                                                           |
-| `package:dmg`, `package:mac`, `package`                                         | `package.json` scripts; `package:dmg` is `node scripts/package.js --mac dmg:arm64 dmg:x64`                  |
-| The DMG file names                                                              | `electron-builder.yml` `dmg.artifactName` (`${productName}-${version}-${arch}.dmg`)                         |
-| The Windows installer file names                                                | `electron-builder.yml` `nsis.artifactName` (`${productName}-${version}-${arch}-setup.exe`)                  |
-| Both macOS architectures, both Windows architectures                            | `electron-builder.yml` `mac.target` and `win.target`                                                        |
-| The Homebrew command, and that the cask installs `Joinery.app` to /Applications | `Casks/joinery.rb` (`cask "joinery"`, `app "Joinery.app"`), pushed to `cadam11/homebrew-joinery`            |
-| `SHA256SUMS.txt` covers every asset                                             | `.github/workflows/release.yml`, the "Checksum everything that is about to be published" step               |
-| Signing and notarization run only when all five Apple secrets exist, and say so | `.github/workflows/release.yml`, the "Resolve the macOS signing mode" step; `plans/release/DISTRIBUTION.md` |
-| Windows builds are not code-signed                                              | `electron-builder.yml` has no `win.certificateFile` or `win.certificateSubjectName`                         |
-| Homebrew quarantines its downloads, hence the same first-launch step            | `Casks/joinery.rb` `caveats`                                                                                |
-| Auto-update is not implemented                                                  | `electron-builder.yml` `publish: null`; no `electron-updater` dependency                                    |
-| macOS and Windows only                                                          | `electron-builder.yml` defines `mac` and `win`, no `linux`                                                  |
+| Claim                                                                           | Source                                                                                                            |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Joinery is MIT licensed                                                         | `LICENSE:1`, `package.json:6` (`"license": "MIT"`)                                                                |
+| No tagged releases and nothing to download                                      | `git tag` is empty; `.github/workflows/release.yml` triggers only on `push: tags: v*`                             |
+| `git clone` → `cd` → `pnpm install` → `pnpm run dev`                            | `README.md:259-262`, `CONTRIBUTING.md:31-36`                                                                      |
+| `pnpm run dev` builds first, then runs renderer and main concurrently           | `package.json`, the `dev` script                                                                                  |
+| Node 20+, pnpm 11+, Xcode Command Line Tools                                    | `package.json` `engines`, `CONTRIBUTING.md:26-28`                                                                 |
+| `package:dmg`, `package:mac`, `package`                                         | `package.json` scripts; `package:dmg` is `node scripts/package.js --mac dmg:arm64 dmg:x64`                        |
+| The DMG file names                                                              | `electron-builder.yml` `dmg.artifactName` (`${productName}-${version}-${arch}.dmg`)                               |
+| The Windows installer file names                                                | `electron-builder.yml` `nsis.artifactName` (`${productName}-${version}-${arch}-setup.exe`)                        |
+| Both macOS architectures, both Windows architectures                            | `electron-builder.yml` `mac.target` and `win.target`                                                              |
+| The Homebrew command, and that the cask installs `Joinery.app` to /Applications | `Casks/joinery.rb` (`cask "joinery"`, `app "Joinery.app"`), pushed to `cadam11/homebrew-joinery`                  |
+| `SHA256SUMS.txt` covers every asset                                             | `.github/workflows/release.yml`, the "Checksum everything that is about to be published" step                     |
+| macOS builds are not signed and not notarized                                   | `electron-builder.yml` `mac.identity: null`; `.github/workflows/release.yml` holds no `CSC_*` or `APPLE_*` secret |
+| Windows builds are not code-signed                                              | `electron-builder.yml` has no `win.certificateFile` or `win.certificateSubjectName`                               |
+| Homebrew quarantines what it installs, and propagates the flag into the bundle  | Homebrew 6.0.20, `Library/Homebrew/cask/download.rb:75` and `:128`, `extend/os/mac/cask/quarantine.rb`            |
+| `--no-quarantine` was removed from Homebrew                                     | Homebrew commit `ba25213c81` (2026-07-30), "Remove leftover code for `--no-quarantine`"                           |
+| Control-click → Open no longer overrides Gatekeeper on macOS Sequoia and later  | [Apple Developer News](https://developer.apple.com/news/?id=saqachfa)                                             |
+| Auto-update is not implemented                                                  | `electron-builder.yml` `publish: null`; no `electron-updater` dependency                                          |
+| macOS and Windows only                                                          | `electron-builder.yml` defines `mac` and `win`, no `linux`                                                        |
 
 </details>

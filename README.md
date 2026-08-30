@@ -214,9 +214,12 @@ planning hasn't started. Packaged builds (macOS DMG, Windows installer) will arr
 v1 release. Until then, [build from source](#from-source) — it's three commands (see Quick
 Start below).
 
-> **macOS (once packaged):** right-click → Open to bypass Gatekeeper (not yet notarized).
+> **macOS (once packaged):** Joinery is not code-signed or notarized, so macOS quarantines it and
+> refuses the first launch. Allow it once via **System Settings → Privacy & Security → Open
+> Anyway**, or run `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` first. Full
+> instructions: [the install page](https://usejoinery.com/getting-started/install/).
 >
-> **Windows (once packaged):** if SmartScreen warns you, click "More info" → "Run anyway" (not yet code-signed).
+> **Windows (once packaged):** if SmartScreen warns you, click "More info" → "Run anyway" (not code-signed).
 
 ### Requirements
 
@@ -277,9 +280,9 @@ pnpm run package      # Build for current platform
 
 Pushing a `v*` tag runs [the release workflow](.github/workflows/release.yml): macOS and Windows
 installers for both architectures, a `SHA256SUMS.txt` covering all of them, a GitHub Release, and a
-Homebrew tap update. No tag has been pushed yet. Code signing and notarization are a gated step
-that runs when the Apple secrets exist and is skipped loudly when they do not — see
-[`plans/release/DISTRIBUTION.md`](plans/release/DISTRIBUTION.md).
+Homebrew tap update. No tag has been pushed yet. The macOS builds are **not code-signed and not
+notarized** — `electron-builder.yml` sets `mac.identity: null` and the workflow holds no Apple
+secrets — see [`plans/release/DISTRIBUTION.md`](plans/release/DISTRIBUTION.md).
 
 ### Set Up AI
 
