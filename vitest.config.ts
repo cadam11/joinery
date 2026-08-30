@@ -97,10 +97,8 @@ export default defineConfig({
         '**/dist/**',
         '**/__tests__/**',
         '**/__mocks__/**',
-        // `packages/preload` and `packages/cli` have no tests, so including them would only drag the
-        // thresholds down.
+        // `packages/preload` has no tests, so including it would only drag the thresholds down.
         'packages/preload/**',
-        'packages/cli/**',
         // `packages/renderer` is a different case and this line is a DECISION, not an oversight
         // (Task 24 review, M7): it holds ~2,190 of the repo's ~2,690 tests, and the `include` above
         // names only main and shared, so folding it in would move the thresholds' meaning entirely.

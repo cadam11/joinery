@@ -106,7 +106,7 @@ const NO_MONACO_OUTSIDE_EDITOR = [
 
 // Flat config, and therefore ESLint 9 pinned to this package rather than the
 // repo-root ESLint 8 + .eslintrc.json, which still governs `packages/main`,
-// `packages/preload`, `packages/cli` and the test tree. The two majors coexist
+// `packages/preload`, `packages/shared` and the test tree. The two majors coexist
 // deliberately (.syncpackrc ignores the mismatch): migrating the root to flat
 // config is its own change with its own verification, and it is unrelated to
 // deleting the Angular renderer, which is what this note used to be waiting on.
