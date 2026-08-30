@@ -11,6 +11,11 @@ import type {
   DeleteDatabaseOptions,
 } from '@joinery/shared';
 import { SQLDialect } from './sql-dialect';
+import {
+  unboundQuery,
+  type ParameterisedQuery,
+  type PlaceholderStyle,
+} from './parameterised-query';
 
 export class MySQLDialect extends SQLDialect {
   readonly engine = 'mysql' as const;
@@ -23,6 +28,12 @@ export class MySQLDialect extends SQLDialect {
   readonly supportsExtendedProperties = false;
   readonly supportsObjectComments = true; // MySQL supports COMMENT in DDL
   readonly supportsServerFileBrowsing = false;
+
+  /**
+   * `?` — mysql2's positional placeholder. Each occurrence consumes the next value, so the
+   * builders below bind once per occurrence rather than once per distinct name.
+   */
+  protected readonly placeholderStyle: PlaceholderStyle = 'question';
 
   /**
    * `'…'` with backslashes doubled as well as quotes (J-134).
@@ -85,9 +96,14 @@ export class MySQLDialect extends SQLDialect {
   }
 
   // ── Metadata queries ─────────────────────────────────────────
+  //
+  // Every schema, table and object name below is BOUND, not written into the SQL (J-135).
+  // `MetadataService` and `ToolRegistry` send these through mysql2's `execute`, a server-side
+  // prepared statement, so the value is never lexed as SQL — which is also the only lossless
+  // answer to `NO_BACKSLASH_ESCAPES`, where `quoteLiteral`'s doubled backslash reads back as two.
 
-  listDatabasesSQL(_isAzure?: boolean): string {
-    return `
+  listDatabasesQuery(_isAzure?: boolean): ParameterisedQuery {
+    return unboundQuery(`
 SELECT
   s.SCHEMA_NAME AS name,
   NULL AS \`databaseId\`,
@@ -104,21 +120,23 @@ LEFT JOIN (
   GROUP BY TABLE_SCHEMA
 ) t ON t.TABLE_SCHEMA = s.SCHEMA_NAME
 WHERE s.SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
-ORDER BY s.SCHEMA_NAME;`;
+ORDER BY s.SCHEMA_NAME;`);
   }
 
-  listSchemasSQL(database: string): string {
+  listSchemasQuery(database: string): ParameterisedQuery {
     // MySQL conflates database and schema — return the database as a single schema
-    return `
+    const values = this.bindings();
+    return values.query(`
 SELECT
-  ${this.quoteLiteral(database)} AS name,
+  ${values.bind(database)} AS name,
   NULL AS owner,
-  false AS \`isSystem\`;`;
+  false AS \`isSystem\`;`);
   }
 
-  listTablesSQL(_database: string, schema?: string): string {
+  listTablesQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const db = schema || _database;
-    return `
+    return values.query(`
 SELECT
   TABLE_NAME AS name,
   TABLE_SCHEMA AS \`schema\`,
@@ -126,39 +144,42 @@ SELECT
   ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024) AS \`sizeKb\`,
   CREATE_TIME AS \`createdAt\`
 FROM information_schema.TABLES
-WHERE TABLE_SCHEMA = ${this.quoteLiteral(db)}
+WHERE TABLE_SCHEMA = ${values.bind(db)}
   AND TABLE_TYPE = 'BASE TABLE'
-ORDER BY TABLE_NAME;`;
+ORDER BY TABLE_NAME;`);
   }
 
-  listViewsSQL(_database: string, schema?: string): string {
+  listViewsQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const db = schema || _database;
-    return `
+    return values.query(`
 SELECT
   TABLE_NAME AS name,
   TABLE_SCHEMA AS \`schema\`
 FROM information_schema.VIEWS
-WHERE TABLE_SCHEMA = ${this.quoteLiteral(db)}
-ORDER BY TABLE_NAME;`;
+WHERE TABLE_SCHEMA = ${values.bind(db)}
+ORDER BY TABLE_NAME;`);
   }
 
-  listProceduresSQL(_database: string, schema?: string): string {
+  listProceduresQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const db = schema || _database;
-    return `
+    return values.query(`
 SELECT
   ROUTINE_NAME AS name,
   ROUTINE_SCHEMA AS \`schema\`,
   CREATED AS \`createdAt\`,
   LAST_ALTERED AS \`modifiedAt\`
 FROM information_schema.ROUTINES
-WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(db)}
+WHERE ROUTINE_SCHEMA = ${values.bind(db)}
   AND ROUTINE_TYPE = 'PROCEDURE'
-ORDER BY ROUTINE_NAME;`;
+ORDER BY ROUTINE_NAME;`);
   }
 
-  listFunctionsSQL(_database: string, schema?: string): string {
+  listFunctionsQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const db = schema || _database;
-    return `
+    return values.query(`
 SELECT
   ROUTINE_NAME AS name,
   ROUTINE_SCHEMA AS \`schema\`,
@@ -166,13 +187,14 @@ SELECT
   CREATED AS \`createdAt\`,
   LAST_ALTERED AS \`modifiedAt\`
 FROM information_schema.ROUTINES
-WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(db)}
+WHERE ROUTINE_SCHEMA = ${values.bind(db)}
   AND ROUTINE_TYPE = 'FUNCTION'
-ORDER BY ROUTINE_NAME;`;
+ORDER BY ROUTINE_NAME;`);
   }
 
-  listColumnsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listColumnsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   COLUMN_NAME AS name,
   DATA_TYPE AS \`dataType\`,
@@ -185,13 +207,14 @@ SELECT
   COLUMN_DEFAULT AS \`defaultValue\`,
   ORDINAL_POSITION AS \`ordinalPosition\`
 FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND TABLE_NAME = ${this.quoteLiteral(table)}
-ORDER BY ORDINAL_POSITION;`;
+WHERE TABLE_SCHEMA = ${values.bind(schema)}
+  AND TABLE_NAME = ${values.bind(table)}
+ORDER BY ORDINAL_POSITION;`);
   }
 
-  listIndexesSQL(_database: string, schema: string, table: string): string {
-    return `
+  listIndexesQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   INDEX_NAME AS name,
   CASE
@@ -203,14 +226,15 @@ SELECT
   IF(INDEX_NAME = 'PRIMARY', true, false) AS \`isPrimaryKey\`,
   GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS \`columns\`
 FROM information_schema.STATISTICS
-WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND TABLE_NAME = ${this.quoteLiteral(table)}
+WHERE TABLE_SCHEMA = ${values.bind(schema)}
+  AND TABLE_NAME = ${values.bind(table)}
 GROUP BY INDEX_NAME, NON_UNIQUE
-ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME;`;
+ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME;`);
   }
 
-  listForeignKeysSQL(_database: string, schema: string, table: string): string {
-    return `
+  listForeignKeysQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   kcu.CONSTRAINT_NAME AS name,
   GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION SEPARATOR ', ') AS \`columns\`,
@@ -223,16 +247,17 @@ FROM information_schema.KEY_COLUMN_USAGE kcu
 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
   AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
-WHERE kcu.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND kcu.TABLE_NAME = ${this.quoteLiteral(table)}
+WHERE kcu.TABLE_SCHEMA = ${values.bind(schema)}
+  AND kcu.TABLE_NAME = ${values.bind(table)}
   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
 GROUP BY kcu.CONSTRAINT_NAME, kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME,
   rc.DELETE_RULE, rc.UPDATE_RULE
-ORDER BY kcu.CONSTRAINT_NAME;`;
+ORDER BY kcu.CONSTRAINT_NAME;`);
   }
 
-  listConstraintsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listConstraintsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   tc.CONSTRAINT_NAME AS name,
   CASE tc.CONSTRAINT_TYPE
@@ -250,56 +275,59 @@ LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
   AND tc.TABLE_NAME = kcu.TABLE_NAME
 LEFT JOIN information_schema.CHECK_CONSTRAINTS cc
   ON cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND cc.CONSTRAINT_SCHEMA = tc.TABLE_SCHEMA
-WHERE tc.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND tc.TABLE_NAME = ${this.quoteLiteral(table)}
+WHERE tc.TABLE_SCHEMA = ${values.bind(schema)}
+  AND tc.TABLE_NAME = ${values.bind(table)}
 GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, cc.CHECK_CLAUSE
-ORDER BY tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME;`;
+ORDER BY tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME;`);
   }
 
-  listTriggersSQL(_database: string, schema: string, table: string): string {
-    return `
+  listTriggersQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   TRIGGER_NAME AS name,
   false AS \`isDisabled\`,
   LOWER(EVENT_MANIPULATION) AS \`triggerType\`,
   CREATED AS \`createdAt\`
 FROM information_schema.TRIGGERS
-WHERE EVENT_OBJECT_SCHEMA = ${this.quoteLiteral(schema)}
-  AND EVENT_OBJECT_TABLE = ${this.quoteLiteral(table)}
-ORDER BY TRIGGER_NAME;`;
+WHERE EVENT_OBJECT_SCHEMA = ${values.bind(schema)}
+  AND EVENT_OBJECT_TABLE = ${values.bind(table)}
+ORDER BY TRIGGER_NAME;`);
   }
 
-  getObjectDefinitionSQL(_database: string, schema: string, name: string): string {
+  getObjectDefinitionQuery(_database: string, schema: string, name: string): ParameterisedQuery {
     // Try views first, then routines
-    return `
+    const values = this.bindings();
+    return values.query(`
 SELECT
   COALESCE(
     (SELECT VIEW_DEFINITION FROM information_schema.VIEWS
-     WHERE TABLE_SCHEMA = ${this.quoteLiteral(schema)} AND TABLE_NAME = ${this.quoteLiteral(name)}),
+     WHERE TABLE_SCHEMA = ${values.bind(schema)} AND TABLE_NAME = ${values.bind(name)}),
     (SELECT ROUTINE_DEFINITION FROM information_schema.ROUTINES
-     WHERE ROUTINE_SCHEMA = ${this.quoteLiteral(schema)} AND ROUTINE_NAME = ${this.quoteLiteral(name)}
+     WHERE ROUTINE_SCHEMA = ${values.bind(schema)} AND ROUTINE_NAME = ${values.bind(name)}
      LIMIT 1)
-  ) AS definition;`;
+  ) AS definition;`);
   }
 
   /**
    * List TABLE_COMMENT and COLUMN_COMMENT values.
    * Returns data shaped like ExtendedProperty for UI consistency.
    */
-  listObjectCommentsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listObjectCommentsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   'MS_Description' AS name,
   t.TABLE_COMMENT AS value,
   'SCHEMA' AS \`level0Type\`,
-  ${this.quoteLiteral(schema)} AS \`level0Name\`,
+  ${values.bind(schema)} AS \`level0Name\`,
   'TABLE' AS \`level1Type\`,
-  ${this.quoteLiteral(table)} AS \`level1Name\`,
+  ${values.bind(table)} AS \`level1Name\`,
   NULL AS \`level2Type\`,
   NULL AS \`level2Name\`
 FROM information_schema.TABLES t
-WHERE t.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND t.TABLE_NAME = ${this.quoteLiteral(table)}
+WHERE t.TABLE_SCHEMA = ${values.bind(schema)}
+  AND t.TABLE_NAME = ${values.bind(table)}
   AND t.TABLE_COMMENT IS NOT NULL AND t.TABLE_COMMENT != ''
 
 UNION ALL
@@ -308,15 +336,21 @@ SELECT
   'MS_Description' AS name,
   c.COLUMN_COMMENT AS value,
   'SCHEMA' AS \`level0Type\`,
-  ${this.quoteLiteral(schema)} AS \`level0Name\`,
+  ${values.bind(schema)} AS \`level0Name\`,
   'TABLE' AS \`level1Type\`,
-  ${this.quoteLiteral(table)} AS \`level1Name\`,
+  ${values.bind(table)} AS \`level1Name\`,
   'COLUMN' AS \`level2Type\`,
   c.COLUMN_NAME AS \`level2Name\`
 FROM information_schema.COLUMNS c
-WHERE c.TABLE_SCHEMA = ${this.quoteLiteral(schema)}
-  AND c.TABLE_NAME = ${this.quoteLiteral(table)}
+WHERE c.TABLE_SCHEMA = ${values.bind(schema)}
+  AND c.TABLE_NAME = ${values.bind(table)}
   AND c.COLUMN_COMMENT IS NOT NULL AND c.COLUMN_COMMENT != ''
-ORDER BY \`level2Type\`, \`level2Name\`;`;
+ORDER BY \`level2Type\`, \`level2Name\`;`);
+  }
+
+  override rowCountQuery(schema: string, table: string): ParameterisedQuery {
+    const values = this.assertNameArguments(schema, table);
+    return values.query(`SELECT TABLE_ROWS AS row_count FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = ${values.bind(schema)} AND TABLE_NAME = ${values.bind(table)}`);
   }
 }

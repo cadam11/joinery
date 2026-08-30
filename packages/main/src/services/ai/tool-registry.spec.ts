@@ -4,8 +4,8 @@
  * The registry is what turns an LLM tool call into SQL on a live pool, so it is
  * the boundary where model-controlled strings meet the database. Before this
  * ticket `get_table_row_count` interpolated `args.schema` / `args.table` into
- * its SQL after a local `.replace(/'/g, "''")` — see `row-count-query.spec.ts`
- * for why that is an injection on MySQL and on PostgreSQL with
+ * its SQL after a local `.replace(/'/g, "''")` — see `../sql/dialect/dialect.spec.ts`
+ * for why that was an injection on MySQL and on PostgreSQL with
  * `standard_conforming_strings` off.
  *
  * These tests assert the *wiring*: that the handler reaches the parameterised

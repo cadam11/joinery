@@ -12,6 +12,11 @@ import type {
   DeleteDatabaseOptions,
 } from '@joinery/shared';
 import { SQLDialect, textOf } from './sql-dialect';
+import {
+  unboundQuery,
+  type ParameterisedQuery,
+  type PlaceholderStyle,
+} from './parameterised-query';
 import { TsqlBuilder } from '../../../utils/tsql-builder';
 
 export class MSSQLDialect extends SQLDialect {
@@ -25,6 +30,13 @@ export class MSSQLDialect extends SQLDialect {
   readonly supportsExtendedProperties = true;
   readonly supportsObjectComments = true;
   readonly supportsServerFileBrowsing = true;
+
+  /**
+   * `@p0`, `@p1`, … — the names `ConnectionPoolManager.queryWithParams` binds its inputs to.
+   * Only `rowCountQuery` uses them: every other builder here delegates to `TsqlBuilder`, whose
+   * quote-doubling is correct for T-SQL and stays as it is (J-135).
+   */
+  protected readonly placeholderStyle: PlaceholderStyle = 'at';
 
   /**
    * `N'…'` — the national-character prefix, so a value with non-ASCII text compares as itself.
@@ -77,55 +89,55 @@ export class MSSQLDialect extends SQLDialect {
 
   // ── Metadata queries ─────────────────────────────────────────
 
-  listDatabasesSQL(isAzure = false): string {
-    return TsqlBuilder.listDatabases(isAzure);
+  listDatabasesQuery(isAzure = false): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listDatabases(isAzure));
   }
 
-  listSchemasSQL(database: string): string {
-    return TsqlBuilder.listSchemas(database);
+  listSchemasQuery(database: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listSchemas(database));
   }
 
-  listTablesSQL(database: string): string {
-    return TsqlBuilder.listTables(database);
+  listTablesQuery(database: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listTables(database));
   }
 
-  listViewsSQL(database: string): string {
-    return TsqlBuilder.listViews(database);
+  listViewsQuery(database: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listViews(database));
   }
 
-  listProceduresSQL(database: string): string {
-    return TsqlBuilder.listProcedures(database);
+  listProceduresQuery(database: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listProcedures(database));
   }
 
-  listFunctionsSQL(database: string): string {
-    return TsqlBuilder.listFunctions(database);
+  listFunctionsQuery(database: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listFunctions(database));
   }
 
-  listColumnsSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listColumns(database, schema, table);
+  listColumnsQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listColumns(database, schema, table));
   }
 
-  listIndexesSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listIndexes(database, schema, table);
+  listIndexesQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listIndexes(database, schema, table));
   }
 
-  listForeignKeysSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listForeignKeys(database, schema, table);
+  listForeignKeysQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listForeignKeys(database, schema, table));
   }
 
-  listConstraintsSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listConstraints(database, schema, table);
+  listConstraintsQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listConstraints(database, schema, table));
   }
 
-  listTriggersSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listTriggers(database, schema, table);
+  listTriggersQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listTriggers(database, schema, table));
   }
 
-  getObjectDefinitionSQL(database: string, schema: string, name: string): string {
-    return TsqlBuilder.getObjectDefinition(database, schema, name);
+  getObjectDefinitionQuery(database: string, schema: string, name: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.getObjectDefinition(database, schema, name));
   }
 
-  listObjectCommentsSQL(database: string, schema: string, table: string): string {
-    return TsqlBuilder.listExtendedProperties(database, schema, table);
+  listObjectCommentsQuery(database: string, schema: string, table: string): ParameterisedQuery {
+    return unboundQuery(TsqlBuilder.listExtendedProperties(database, schema, table));
   }
 }
