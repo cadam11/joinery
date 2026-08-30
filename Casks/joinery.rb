@@ -40,12 +40,16 @@ cask "joinery" do
   # tells them what to do instead and lets them decide.
   caveats <<~EOS
     Joinery is not code-signed and not notarized, so macOS quarantines it and refuses
-    the first launch. To allow it, once:
+    the first launch. To allow it:
 
       1. Double-click Joinery. macOS will refuse.
       2. Open System Settings -> Privacy & Security, scroll to Security, and click
          "Open Anyway" next to the message about Joinery.
       3. Confirm and authenticate. Every launch after that is normal.
+
+    Expect to do this again after each `brew upgrade`: Homebrew only carries a
+    Gatekeeper approval forward when it can verify the new app has the same signer
+    as the old one, and an unsigned app has no signer to verify.
 
     On macOS Sonoma and earlier, Control-click the app in Finder and choose Open
     instead. Apple removed that shortcut in macOS Sequoia.

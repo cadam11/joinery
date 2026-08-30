@@ -98,7 +98,7 @@ code-signed either. There is no Apple Developer Program membership behind the pr
 release workflow does not pretend otherwise: it has no signing step to skip and no certificate to
 look for.
 
-That costs you one extra step, once, the first time you open it.
+That costs you one extra step the first time you open it, and again each time you upgrade.
 
 #### macOS
 
@@ -109,6 +109,11 @@ quarantines what it downloads — and refuses the first launch.
 2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open
    Anyway** beside the message about Joinery.
 3. Confirm, and authenticate. Every launch after that one is normal.
+
+**An upgrade asks again.** Homebrew can carry your approval forward across a `brew upgrade` only
+when it can check that the new app is signed by the same developer as the old one. Joinery is not
+signed at all, so there is nothing to check, and the new bundle arrives quarantined like the first
+one did. Expect to repeat the three steps above after every upgrade.
 
 On macOS Sonoma and earlier you can instead Control-click the app in Finder and choose **Open**.
 [Apple removed that shortcut in macOS Sequoia](https://developer.apple.com/news/?id=saqachfa), so
@@ -143,25 +148,26 @@ SmartScreen warns. Click **More info**, then **Run anyway**.
 
 Every claim above was checked against the repository at the commit this page was written from.
 
-| Claim                                                                           | Source                                                                                                            |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Joinery is MIT licensed                                                         | `LICENSE:1`, `package.json:6` (`"license": "MIT"`)                                                                |
-| No tagged releases and nothing to download                                      | `git tag` is empty; `.github/workflows/release.yml` triggers only on `push: tags: v*`                             |
-| `git clone` → `cd` → `pnpm install` → `pnpm run dev`                            | `README.md:259-262`, `CONTRIBUTING.md:31-36`                                                                      |
-| `pnpm run dev` builds first, then runs renderer and main concurrently           | `package.json`, the `dev` script                                                                                  |
-| Node 20+, pnpm 11+, Xcode Command Line Tools                                    | `package.json` `engines`, `CONTRIBUTING.md:26-28`                                                                 |
-| `package:dmg`, `package:mac`, `package`                                         | `package.json` scripts; `package:dmg` is `node scripts/package.js --mac dmg:arm64 dmg:x64`                        |
-| The DMG file names                                                              | `electron-builder.yml` `dmg.artifactName` (`${productName}-${version}-${arch}.dmg`)                               |
-| The Windows installer file names                                                | `electron-builder.yml` `nsis.artifactName` (`${productName}-${version}-${arch}-setup.exe`)                        |
-| Both macOS architectures, both Windows architectures                            | `electron-builder.yml` `mac.target` and `win.target`                                                              |
-| The Homebrew command, and that the cask installs `Joinery.app` to /Applications | `Casks/joinery.rb` (`cask "joinery"`, `app "Joinery.app"`), pushed to `cadam11/homebrew-joinery`                  |
-| `SHA256SUMS.txt` covers every asset                                             | `.github/workflows/release.yml`, the "Checksum everything that is about to be published" step                     |
-| macOS builds are not signed and not notarized                                   | `electron-builder.yml` `mac.identity: null`; `.github/workflows/release.yml` holds no `CSC_*` or `APPLE_*` secret |
-| Windows builds are not code-signed                                              | `electron-builder.yml` has no `win.certificateFile` or `win.certificateSubjectName`                               |
-| Homebrew quarantines what it installs, and propagates the flag into the bundle  | Homebrew 6.0.20, `Library/Homebrew/cask/download.rb:75` and `:128`, `extend/os/mac/cask/quarantine.rb`            |
-| `--no-quarantine` was removed from Homebrew                                     | Homebrew commit `ba25213c81` (2026-07-30), "Remove leftover code for `--no-quarantine`"                           |
-| Control-click → Open no longer overrides Gatekeeper on macOS Sequoia and later  | [Apple Developer News](https://developer.apple.com/news/?id=saqachfa)                                             |
-| Auto-update is not implemented                                                  | `electron-builder.yml` `publish: null`; no `electron-updater` dependency                                          |
-| macOS and Windows only                                                          | `electron-builder.yml` defines `mac` and `win`, no `linux`                                                        |
+| Claim                                                                           | Source                                                                                                                                                            |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Joinery is MIT licensed                                                         | `LICENSE:1`, `package.json:6` (`"license": "MIT"`)                                                                                                                |
+| No tagged releases and nothing to download                                      | `git tag` is empty; `.github/workflows/release.yml` triggers only on `push: tags: v*`                                                                             |
+| `git clone` → `cd` → `pnpm install` → `pnpm run dev`                            | `README.md:259-262`, `CONTRIBUTING.md:31-36`                                                                                                                      |
+| `pnpm run dev` builds first, then runs renderer and main concurrently           | `package.json`, the `dev` script                                                                                                                                  |
+| Node 20+, pnpm 11+, Xcode Command Line Tools                                    | `package.json` `engines`, `CONTRIBUTING.md:26-28`                                                                                                                 |
+| `package:dmg`, `package:mac`, `package`                                         | `package.json` scripts; `package:dmg` is `node scripts/package.js --mac dmg:arm64 dmg:x64`                                                                        |
+| The DMG file names                                                              | `electron-builder.yml` `dmg.artifactName` (`${productName}-${version}-${arch}.dmg`)                                                                               |
+| The Windows installer file names                                                | `electron-builder.yml` `nsis.artifactName` (`${productName}-${version}-${arch}-setup.exe`)                                                                        |
+| Both macOS architectures, both Windows architectures                            | `electron-builder.yml` `mac.target` and `win.target`                                                                                                              |
+| The Homebrew command, and that the cask installs `Joinery.app` to /Applications | `Casks/joinery.rb` (`cask "joinery"`, `app "Joinery.app"`), pushed to `cadam11/homebrew-joinery`                                                                  |
+| `SHA256SUMS.txt` covers every asset                                             | `.github/workflows/release.yml`, the "Checksum everything that is about to be published" step                                                                     |
+| macOS builds are not signed and not notarized                                   | `electron-builder.yml` `mac.identity: null`; `.github/workflows/release.yml` holds no `CSC_*` or `APPLE_*` secret                                                 |
+| Windows builds are not code-signed                                              | `electron-builder.yml` has no `win.certificateFile` or `win.certificateSubjectName`                                                                               |
+| Homebrew quarantines what it installs, and propagates the flag into the bundle  | Homebrew 6.0.20, `Library/Homebrew/cask/download.rb:75` and `:128`, `extend/os/mac/cask/quarantine.rb`                                                            |
+| `--no-quarantine` was removed from Homebrew                                     | Homebrew commit `ba25213c81` (2026-07-30), "Remove leftover code for `--no-quarantine`"                                                                           |
+| A `brew upgrade` re-quarantines an unsigned app                                 | Homebrew 6.0.20, `Library/Homebrew/cask/upgrade.rb:310-334` — `quarantine_release_decision` returns `:signer_unverified` when the old app has no signing identity |
+| Control-click → Open no longer overrides Gatekeeper on macOS Sequoia and later  | [Apple Developer News](https://developer.apple.com/news/?id=saqachfa)                                                                                             |
+| Auto-update is not implemented                                                  | `electron-builder.yml` `publish: null`; no `electron-updater` dependency                                                                                          |
+| macOS and Windows only                                                          | `electron-builder.yml` defines `mac` and `win`, no `linux`                                                                                                        |
 
 </details>

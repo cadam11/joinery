@@ -22,12 +22,16 @@ next release.
 There is no Apple Developer Program membership behind Joinery, so its macOS builds are not
 signed and not notarized. Homebrew quarantines what it installs, so the first launch is refused.
 
-Allow it once, and macOS remembers:
+Allow it, and macOS remembers until the app is replaced:
 
 1. Double-click Joinery. macOS refuses.
 2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open
    Anyway** next to the message about Joinery.
 3. Confirm and authenticate.
+
+`brew upgrade` replaces the bundle, and Homebrew can only carry your approval forward when it can
+verify the new app has the same signer as the old one. An unsigned app has none, so expect the
+same three steps after each upgrade.
 
 On macOS Sonoma and earlier, Control-click the app in Finder and choose **Open** instead;
 [Apple removed that shortcut in macOS Sequoia](https://developer.apple.com/news/?id=saqachfa).

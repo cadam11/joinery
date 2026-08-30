@@ -215,9 +215,10 @@ v1 release. Until then, [build from source](#from-source) — it's three command
 Start below).
 
 > **macOS (once packaged):** Joinery is not code-signed or notarized, so macOS quarantines it and
-> refuses the first launch. Allow it once via **System Settings → Privacy & Security → Open
-> Anyway**, or run `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` first. Full
-> instructions: [the install page](https://usejoinery.com/getting-started/install/).
+> refuses the first launch. Allow it via **System Settings → Privacy & Security → Open Anyway**, or
+> run `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` first. An upgrade replaces the
+> app bundle and asks again. Full instructions:
+> [the install page](https://usejoinery.com/getting-started/install/).
 >
 > **Windows (once packaged):** if SmartScreen warns you, click "More info" → "Run anyway" (not code-signed).
 
