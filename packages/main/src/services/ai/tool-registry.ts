@@ -7,7 +7,7 @@ import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
 import { ConnectionPoolManager } from '../sql/connection-pool';
 import { getDialect } from '../sql/dialect';
-import { buildRowCountQuery, type ParameterisedQuery } from './row-count-query';
+import type { ParameterisedQuery } from '../sql/dialect';
 
 const log = createLogger('ToolRegistry');
 
@@ -138,8 +138,9 @@ export class ToolRegistry extends BaseSingleton {
    * statement. On SQL Server the binding is therefore the whole of the
    * defence, not a belt-and-braces second line of it.
    *
-   * `queryAny` above stays on the unbound path because it is handed complete,
-   * dialect-built SQL.
+   * Since J-135 every dialect metadata builder returns `{ sql, params }`, so all of them come
+   * through here. `queryAny` above is left for the two things that genuinely carry no values:
+   * `execute_query`, whose SQL the model authors whole, and the fixed `get_server_info` strings.
    */
   private async queryAnyWithParams(
     connectionId: string,
@@ -148,10 +149,14 @@ export class ToolRegistry extends BaseSingleton {
   ): Promise<Record<string, unknown>[]> {
     const pool = ConnectionPoolManager.getInstance();
     const engine = pool.getEngineForProfile(connectionId);
+    // The drivers' signatures take a mutable array; the query's own list stays readonly.
+    const params = [...query.params];
 
     if (engine === 'postgresql') {
       const pgPool = await pool.getPgPool(connectionId, database);
-      const result = await pgPool.query(query.sql, query.params);
+      const result = params.length
+        ? await pgPool.query(query.sql, params)
+        : await pgPool.query(query.sql);
       return result.rows as Record<string, unknown>[];
     }
 
@@ -161,17 +166,23 @@ export class ToolRegistry extends BaseSingleton {
       // so the values can never be lexed as SQL. Since J-137 this pool also
       // does not negotiate `CLIENT_MULTI_STATEMENTS`, so a second statement is
       // not expressible on it either.
-      const [rows] = await mysqlPool.execute(query.sql, query.params);
+      const [rows] = params.length
+        ? await mysqlPool.execute(query.sql, params)
+        : await mysqlPool.query(query.sql);
       return rows as Record<string, unknown>[];
     }
 
-    // Default: SQL Server
-    const result = await pool.queryWithParams<Record<string, unknown>>(
-      connectionId,
-      query.sql,
-      query.params,
-      database
-    );
+    // Default: SQL Server. With no values this stays on `query` (`request.batch`), which is where
+    // every `TsqlBuilder` statement went before J-135 — `queryWithParams` uses `request.query()`,
+    // a different node-mssql path, and only the parameterised statements need it.
+    const result = params.length
+      ? await pool.queryWithParams<Record<string, unknown>>(
+          connectionId,
+          query.sql,
+          params,
+          database
+        )
+      : await pool.query<Record<string, unknown>>(connectionId, query.sql, database);
     return result.recordset || [];
   }
 
@@ -250,8 +261,8 @@ export class ToolRegistry extends BaseSingleton {
         if (!connectionId) throw new Error('No active connection');
         const dialect = getDialect(this.getEngine(connectionId));
         const db = database || '';
-        const sql = dialect.listTablesSQL(db, args.schema as string | undefined);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listTablesQuery(db, args.schema as string | undefined);
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -278,8 +289,8 @@ export class ToolRegistry extends BaseSingleton {
           (args.schema as string) ||
           (engine === 'postgresql' ? 'public' : engine === 'mysql' ? database || '' : 'dbo');
         const table = args.table as string;
-        const sql = dialect.listColumnsSQL(database || '', schema, table);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listColumnsQuery(database || '', schema, table);
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -294,8 +305,8 @@ export class ToolRegistry extends BaseSingleton {
         if (!connectionId) throw new Error('No active connection');
         const dialect = getDialect(this.getEngine(connectionId));
         const isAzure = await ConnectionPoolManager.getInstance().isAzureSQL(connectionId);
-        const sql = dialect.listDatabasesSQL(isAzure);
-        return this.queryAny(connectionId, sql);
+        const query = dialect.listDatabasesQuery(isAzure);
+        return this.queryAnyWithParams(connectionId, query);
       }
     );
 
@@ -314,8 +325,8 @@ export class ToolRegistry extends BaseSingleton {
       async (args, connectionId, database) => {
         if (!connectionId) throw new Error('No active connection');
         const dialect = getDialect(this.getEngine(connectionId));
-        const sql = dialect.listViewsSQL(database || '', args.schema as string | undefined);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listViewsQuery(database || '', args.schema as string | undefined);
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -334,8 +345,11 @@ export class ToolRegistry extends BaseSingleton {
       async (args, connectionId, database) => {
         if (!connectionId) throw new Error('No active connection');
         const dialect = getDialect(this.getEngine(connectionId));
-        const sql = dialect.listProceduresSQL(database || '', args.schema as string | undefined);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listProceduresQuery(
+          database || '',
+          args.schema as string | undefined
+        );
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -405,8 +419,9 @@ export class ToolRegistry extends BaseSingleton {
         const table = args.table as string;
 
         // `schema` and `table` come from the model's tool call, so they are
-        // bound as parameters rather than written into the SQL (J-136).
-        const query = buildRowCountQuery(engine, schema, table);
+        // bound as parameters rather than written into the SQL (J-136; the builder moved into
+        // the dialect layer in J-135).
+        const query = getDialect(engine).rowCountQuery(schema, table);
         const rows = await this.queryAnyWithParams(connectionId, query, database);
         return { table: `${schema}.${table}`, rowCount: rows[0]?.row_count || 0 };
       }
@@ -434,8 +449,8 @@ export class ToolRegistry extends BaseSingleton {
           (args.schema as string) ||
           (engine === 'postgresql' ? 'public' : engine === 'mysql' ? database || '' : 'dbo');
         const table = args.table as string;
-        const sql = dialect.listIndexesSQL(database || '', schema, table);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listIndexesQuery(database || '', schema, table);
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -461,8 +476,8 @@ export class ToolRegistry extends BaseSingleton {
           (args.schema as string) ||
           (engine === 'postgresql' ? 'public' : engine === 'mysql' ? database || '' : 'dbo');
         const table = args.table as string;
-        const sql = dialect.listForeignKeysSQL(database || '', schema, table);
-        return this.queryAny(connectionId, sql, database);
+        const query = dialect.listForeignKeysQuery(database || '', schema, table);
+        return this.queryAnyWithParams(connectionId, query, database);
       }
     );
 
@@ -489,8 +504,8 @@ export class ToolRegistry extends BaseSingleton {
           (args.schema as string) ||
           (engine === 'postgresql' ? 'public' : engine === 'mysql' ? database || '' : 'dbo');
         const objectName = args.object_name as string;
-        const sql = dialect.getObjectDefinitionSQL(database || '', schema, objectName);
-        const rows = await this.queryAny(connectionId, sql, database);
+        const query = dialect.getObjectDefinitionQuery(database || '', schema, objectName);
+        const rows = await this.queryAnyWithParams(connectionId, query, database);
         const definition = rows[0]?.definition as string | undefined;
         return {
           objectName: `${schema}.${objectName}`,

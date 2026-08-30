@@ -12,6 +12,13 @@ import { PgDsqlDialect } from './pg-dsql-dialect';
 import { MySQLDialect } from './mysql-dialect';
 
 export { SQLDialect } from './sql-dialect';
+export {
+  BoundValues,
+  unboundQuery,
+  placeholderFor,
+  type ParameterisedQuery,
+  type PlaceholderStyle,
+} from './parameterised-query';
 export { MSSQLDialect } from './mssql-dialect';
 export { PgDialect } from './pg-dialect';
 export { PgDsqlDialect } from './pg-dsql-dialect';

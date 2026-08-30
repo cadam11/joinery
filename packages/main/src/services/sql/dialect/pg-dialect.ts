@@ -11,6 +11,11 @@ import type {
   DeleteDatabaseOptions,
 } from '@joinery/shared';
 import { SQLDialect, textOf } from './sql-dialect';
+import {
+  unboundQuery,
+  type ParameterisedQuery,
+  type PlaceholderStyle,
+} from './parameterised-query';
 
 export class PgDialect extends SQLDialect {
   readonly engine = 'postgresql' as const;
@@ -23,6 +28,9 @@ export class PgDialect extends SQLDialect {
   readonly supportsExtendedProperties = false; // PG uses COMMENT ON instead
   readonly supportsObjectComments = true; // PG supports COMMENT ON
   readonly supportsServerFileBrowsing = false;
+
+  /** `$1`, `$2`, … — node-pg's numbered placeholders, bound over the extended query protocol. */
+  protected readonly placeholderStyle: PlaceholderStyle = 'dollar';
 
   /**
    * `E'…'`, with backslashes doubled as well as quotes (J-52).
@@ -103,9 +111,14 @@ export class PgDialect extends SQLDialect {
   }
 
   // ── Metadata queries ─────────────────────────────────────────
+  //
+  // Every schema, table and object name below is BOUND, not written into the SQL (J-135). node-pg
+  // takes the extended query protocol as soon as a query carries values, so a bound value reaches
+  // the server out of band and is never lexed — which also ends this file's dependence on
+  // `standard_conforming_strings` for anything but `quoteLiteral`.
 
-  listDatabasesSQL(_isAzure?: boolean): string {
-    return `
+  listDatabasesQuery(_isAzure?: boolean): ParameterisedQuery {
+    return unboundQuery(`
 SELECT
   d.datname AS name,
   d.oid AS "databaseId",
@@ -117,11 +130,13 @@ SELECT
   NULL AS "createdAt"
 FROM pg_database d
 WHERE d.datistemplate = false
-ORDER BY d.datname;`;
+ORDER BY d.datname;`);
   }
 
-  listSchemasSQL(_database: string): string {
-    return `
+  listSchemasQuery(_database: string): ParameterisedQuery {
+    // The database name is not a predicate here: PostgreSQL reaches a database by connecting to
+    // it, so the name is the pool key rather than a value. Nothing to bind.
+    return unboundQuery(`
 SELECT
   n.nspname AS name,
   r.rolname AS owner,
@@ -133,14 +148,15 @@ WHERE n.nspname NOT LIKE 'pg_toast%'
   AND n.nspname NOT LIKE 'pg_temp%'
 ORDER BY
   CASE WHEN n.nspname = 'public' THEN 0 ELSE 1 END,
-  n.nspname;`;
+  n.nspname;`);
   }
 
-  listTablesSQL(_database: string, schema?: string): string {
+  listTablesQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const schemaFilter = schema
-      ? `AND t.schemaname = ${this.quoteLiteral(schema)}`
+      ? `AND t.schemaname = ${values.bind(schema)}`
       : `AND t.schemaname NOT IN ('pg_catalog', 'information_schema')`;
-    return `
+    return values.query(`
 SELECT
   t.schemaname AS schema,
   t.tablename AS name,
@@ -153,27 +169,29 @@ LEFT JOIN pg_class c ON c.relname = t.tablename
   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.schemaname)
 WHERE t.tableowner IS NOT NULL
   ${schemaFilter}
-ORDER BY t.schemaname, t.tablename;`;
+ORDER BY t.schemaname, t.tablename;`);
   }
 
-  listViewsSQL(_database: string, schema?: string): string {
+  listViewsQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const schemaFilter = schema
-      ? `AND v.schemaname = ${this.quoteLiteral(schema)}`
+      ? `AND v.schemaname = ${values.bind(schema)}`
       : `AND v.schemaname NOT IN ('pg_catalog', 'information_schema')`;
-    return `
+    return values.query(`
 SELECT
   v.schemaname AS schema,
   v.viewname AS name
 FROM pg_views v
 WHERE true ${schemaFilter}
-ORDER BY v.schemaname, v.viewname;`;
+ORDER BY v.schemaname, v.viewname;`);
   }
 
-  listProceduresSQL(_database: string, schema?: string): string {
+  listProceduresQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const schemaFilter = schema
-      ? `AND n.nspname = ${this.quoteLiteral(schema)}`
+      ? `AND n.nspname = ${values.bind(schema)}`
       : `AND n.nspname NOT IN ('pg_catalog', 'information_schema')`;
-    return `
+    return values.query(`
 SELECT
   n.nspname AS schema,
   p.proname AS name,
@@ -183,14 +201,15 @@ FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
 WHERE p.prokind = 'p'
   ${schemaFilter}
-ORDER BY n.nspname, p.proname;`;
+ORDER BY n.nspname, p.proname;`);
   }
 
-  listFunctionsSQL(_database: string, schema?: string): string {
+  listFunctionsQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const schemaFilter = schema
-      ? `AND n.nspname = ${this.quoteLiteral(schema)}`
+      ? `AND n.nspname = ${values.bind(schema)}`
       : `AND n.nspname NOT IN ('pg_catalog', 'information_schema')`;
-    return `
+    return values.query(`
 SELECT
   n.nspname AS schema,
   p.proname AS name,
@@ -204,11 +223,12 @@ FROM pg_proc p
 JOIN pg_namespace n ON p.pronamespace = n.oid
 WHERE p.prokind = 'f'
   ${schemaFilter}
-ORDER BY n.nspname, p.proname;`;
+ORDER BY n.nspname, p.proname;`);
   }
 
-  listColumnsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listColumnsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   c.column_name AS name,
   c.data_type AS "dataType",
@@ -226,8 +246,8 @@ LEFT JOIN (
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-  WHERE tc.table_schema = ${this.quoteLiteral(schema)}
-    AND tc.table_name = ${this.quoteLiteral(table)}
+  WHERE tc.table_schema = ${values.bind(schema)}
+    AND tc.table_name = ${values.bind(table)}
     AND tc.constraint_type = 'PRIMARY KEY'
 ) tc ON c.column_name = tc.column_name
 LEFT JOIN (
@@ -235,17 +255,18 @@ LEFT JOIN (
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-  WHERE tc.table_schema = ${this.quoteLiteral(schema)}
-    AND tc.table_name = ${this.quoteLiteral(table)}
+  WHERE tc.table_schema = ${values.bind(schema)}
+    AND tc.table_name = ${values.bind(table)}
     AND tc.constraint_type = 'FOREIGN KEY'
 ) fk ON c.column_name = fk.column_name
-WHERE c.table_schema = ${this.quoteLiteral(schema)}
-  AND c.table_name = ${this.quoteLiteral(table)}
-ORDER BY c.ordinal_position;`;
+WHERE c.table_schema = ${values.bind(schema)}
+  AND c.table_name = ${values.bind(table)}
+ORDER BY c.ordinal_position;`);
   }
 
-  listIndexesSQL(_database: string, schema: string, table: string): string {
-    return `
+  listIndexesQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   i.relname AS name,
   CASE
@@ -262,14 +283,15 @@ JOIN pg_class t ON t.oid = ix.indrelid
 JOIN pg_class i ON i.oid = ix.indexrelid
 JOIN pg_namespace n ON t.relnamespace = n.oid
 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-WHERE n.nspname = ${this.quoteLiteral(schema)}
-  AND t.relname = ${this.quoteLiteral(table)}
+WHERE n.nspname = ${values.bind(schema)}
+  AND t.relname = ${values.bind(table)}
 GROUP BY i.relname, ix.indisclustered, ix.indisunique, ix.indisprimary
-ORDER BY ix.indisprimary DESC, i.relname;`;
+ORDER BY ix.indisprimary DESC, i.relname;`);
   }
 
-  listForeignKeysSQL(_database: string, schema: string, table: string): string {
-    return `
+  listForeignKeysQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   tc.constraint_name AS name,
   string_agg(kcu.column_name, ', ' ORDER BY kcu.ordinal_position) AS columns,
@@ -286,14 +308,15 @@ JOIN information_schema.constraint_column_usage ccu
 JOIN information_schema.referential_constraints rc
   ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
 WHERE tc.constraint_type = 'FOREIGN KEY'
-  AND tc.table_schema = ${this.quoteLiteral(schema)}
-  AND tc.table_name = ${this.quoteLiteral(table)}
+  AND tc.table_schema = ${values.bind(schema)}
+  AND tc.table_name = ${values.bind(table)}
 GROUP BY tc.constraint_name, ccu.table_schema, ccu.table_name, rc.delete_rule, rc.update_rule
-ORDER BY tc.constraint_name;`;
+ORDER BY tc.constraint_name;`);
   }
 
-  listConstraintsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listConstraintsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   tc.constraint_name AS name,
   CASE tc.constraint_type
@@ -310,17 +333,25 @@ LEFT JOIN information_schema.key_column_usage kcu
   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
 LEFT JOIN information_schema.check_constraints cc
   ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.table_schema
-WHERE tc.table_schema = ${this.quoteLiteral(schema)}
-  AND tc.table_name = ${this.quoteLiteral(table)}
+WHERE tc.table_schema = ${values.bind(schema)}
+  AND tc.table_name = ${values.bind(table)}
 GROUP BY tc.constraint_name, tc.constraint_type, cc.check_clause
-ORDER BY tc.constraint_type, tc.constraint_name;`;
+ORDER BY tc.constraint_type, tc.constraint_name;`);
   }
 
-  listTriggersSQL(_database: string, schema: string, table: string): string {
-    return `
+  /**
+   * `pg_trigger.tgenabled` is the `"char"` type, which PostgreSQL will not cast to boolean: the
+   * `NOT t.tgenabled::boolean` this used to select raised `cannot cast type "char" to boolean` on
+   * every call, so the PostgreSQL trigger list — and the table-properties dialog that fans out to
+   * it — has never worked. Verified against the harness PostgreSQL 16.15. The values are 'O'
+   * origin, 'D' disabled, 'R' replica, 'A' always; only 'D' means disabled.
+   */
+  listTriggersQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT
   t.tgname AS name,
-  NOT t.tgenabled::boolean AS "isDisabled",
+  (t.tgenabled = 'D') AS "isDisabled",
   CASE
     WHEN t.tgtype & 1 = 1 THEN 'insert'
     WHEN t.tgtype & 4 = 4 THEN 'update'
@@ -333,45 +364,50 @@ FROM pg_trigger t
 JOIN pg_class c ON t.tgrelid = c.oid
 JOIN pg_namespace n ON c.relnamespace = n.oid
 WHERE NOT t.tgisinternal
-  AND n.nspname = ${this.quoteLiteral(schema)}
-  AND c.relname = ${this.quoteLiteral(table)}
-ORDER BY t.tgname;`;
+  AND n.nspname = ${values.bind(schema)}
+  AND c.relname = ${values.bind(table)}
+ORDER BY t.tgname;`);
   }
 
-  getObjectDefinitionSQL(_database: string, schema: string, name: string): string {
+  getObjectDefinitionQuery(_database: string, schema: string, name: string): ParameterisedQuery {
     // Try view first, then function/procedure
-    return `
+    const values = this.bindings();
+    return values.query(`
 SELECT
   COALESCE(
-    (SELECT definition FROM pg_views WHERE schemaname = ${this.quoteLiteral(schema)} AND viewname = ${this.quoteLiteral(name)}),
+    (SELECT definition FROM pg_views WHERE schemaname = ${values.bind(schema)} AND viewname = ${values.bind(name)}),
     (SELECT pg_get_functiondef(p.oid)
      FROM pg_proc p
      JOIN pg_namespace n ON p.pronamespace = n.oid
-     WHERE n.nspname = ${this.quoteLiteral(schema)} AND p.proname = ${this.quoteLiteral(name)}
+     WHERE n.nspname = ${values.bind(schema)} AND p.proname = ${values.bind(name)}
      LIMIT 1)
-  ) AS definition;`;
+  ) AS definition;`);
   }
 
   /**
    * List COMMENT ON descriptions for a table and its columns.
    * Returns data shaped like ExtendedProperty for UI consistency.
+   *
+   * The four select-list occurrences are cast to `text`: PostgreSQL cannot infer the type of a
+   * bare parameter in a target list, and answers `could not determine data type of parameter $1`.
    */
-  listObjectCommentsSQL(_database: string, schema: string, table: string): string {
-    return `
+  listObjectCommentsQuery(_database: string, schema: string, table: string): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 -- Table comment
 SELECT
   'MS_Description' AS name,
   obj_description(c.oid) AS value,
   'SCHEMA' AS "level0Type",
-  ${this.quoteLiteral(schema)} AS "level0Name",
+  ${values.bind(schema)}::text AS "level0Name",
   'TABLE' AS "level1Type",
-  ${this.quoteLiteral(table)} AS "level1Name",
+  ${values.bind(table)}::text AS "level1Name",
   NULL AS "level2Type",
   NULL AS "level2Name"
 FROM pg_class c
 JOIN pg_namespace n ON c.relnamespace = n.oid
-WHERE n.nspname = ${this.quoteLiteral(schema)}
-  AND c.relname = ${this.quoteLiteral(table)}
+WHERE n.nspname = ${values.bind(schema)}
+  AND c.relname = ${values.bind(table)}
   AND obj_description(c.oid) IS NOT NULL
 
 UNION ALL
@@ -381,17 +417,31 @@ SELECT
   'MS_Description' AS name,
   col_description(c.oid, a.attnum) AS value,
   'SCHEMA' AS "level0Type",
-  ${this.quoteLiteral(schema)} AS "level0Name",
+  ${values.bind(schema)}::text AS "level0Name",
   'TABLE' AS "level1Type",
-  ${this.quoteLiteral(table)} AS "level1Name",
+  ${values.bind(table)}::text AS "level1Name",
   'COLUMN' AS "level2Type",
   a.attname AS "level2Name"
 FROM pg_class c
 JOIN pg_namespace n ON c.relnamespace = n.oid
 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-WHERE n.nspname = ${this.quoteLiteral(schema)}
-  AND c.relname = ${this.quoteLiteral(table)}
+WHERE n.nspname = ${values.bind(schema)}
+  AND c.relname = ${values.bind(table)}
   AND col_description(c.oid, a.attnum) IS NOT NULL
-ORDER BY "level2Type" NULLS FIRST, "level2Name";`;
+ORDER BY "level2Type" NULLS FIRST, "level2Name";`);
+  }
+
+  /**
+   * `pg_class.reltuples` works on standard PostgreSQL and on Aurora DSQL (which lacks
+   * `pg_stat_user_tables`), and is the AWS-recommended way to approximate a row count without a
+   * full scan.
+   */
+  override rowCountQuery(schema: string, table: string): ParameterisedQuery {
+    const values = this.assertNameArguments(schema, table);
+    return values.query(`SELECT COALESCE(c.reltuples, 0)::bigint AS row_count
+      FROM pg_class c
+      JOIN pg_namespace n ON c.relnamespace = n.oid
+      WHERE n.nspname = ${values.bind(schema)} AND c.relname = ${values.bind(table)}
+        AND c.relkind = 'r'`);
   }
 }

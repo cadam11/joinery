@@ -15,6 +15,7 @@ import type {
   EngineVariant,
 } from '@joinery/shared';
 import { PgDialect } from './pg-dialect';
+import { unboundQuery, type ParameterisedQuery } from './parameterised-query';
 
 export class PgDsqlDialect extends PgDialect {
   override readonly label: string = 'Aurora DSQL';
@@ -62,8 +63,8 @@ export class PgDsqlDialect extends PgDialect {
   // ── Metadata queries ─────────────────────────────────────────
 
   /** pg_database is unsupported; the only database is the current one. */
-  override listDatabasesSQL(_isAzure?: boolean): string {
-    return `
+  override listDatabasesQuery(_isAzure?: boolean): ParameterisedQuery {
+    return unboundQuery(`
 SELECT
   current_database() AS name,
   NULL AS "databaseId",
@@ -71,15 +72,16 @@ SELECT
   'online' AS state,
   'C' AS collation,
   false AS "isSystemDb",
-  NULL AS "createdAt";`;
+  NULL AS "createdAt";`);
   }
 
   /** pg_stat_user_tables and pg_relation_size are unsupported; use reltuples. */
-  override listTablesSQL(_database: string, schema?: string): string {
+  override listTablesQuery(_database: string, schema?: string): ParameterisedQuery {
+    const values = this.bindings();
     const schemaFilter = schema
-      ? `AND t.schemaname = ${this.quoteLiteral(schema)}`
+      ? `AND t.schemaname = ${values.bind(schema)}`
       : `AND t.schemaname NOT IN ('pg_catalog', 'information_schema')`;
-    return `
+    return values.query(`
 SELECT
   t.schemaname AS schema,
   t.tablename AS name,
@@ -91,39 +93,48 @@ LEFT JOIN pg_class c ON c.relname = t.tablename
   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.schemaname)
 WHERE true
   ${schemaFilter}
-ORDER BY t.schemaname, t.tablename;`;
+ORDER BY t.schemaname, t.tablename;`);
   }
 
   /** pg_proc is unsupported — return an empty, correctly-shaped result. */
-  override listProceduresSQL(_database: string, _schema?: string): string {
-    return `
+  override listProceduresQuery(_database: string, _schema?: string): ParameterisedQuery {
+    return unboundQuery(`
 SELECT NULL::text AS schema, NULL::text AS name,
   NULL::text AS "createdAt", NULL::text AS "modifiedAt"
-WHERE false;`;
+WHERE false;`);
   }
 
-  override listFunctionsSQL(_database: string, _schema?: string): string {
-    return `
+  override listFunctionsQuery(_database: string, _schema?: string): ParameterisedQuery {
+    return unboundQuery(`
 SELECT NULL::text AS schema, NULL::text AS name, NULL::text AS type,
   NULL::text AS "createdAt", NULL::text AS "modifiedAt"
-WHERE false;`;
+WHERE false;`);
   }
 
   /** pg_trigger is unsupported and DSQL has no triggers. */
-  override listTriggersSQL(_database: string, _schema: string, _table: string): string {
-    return `
+  override listTriggersQuery(
+    _database: string,
+    _schema: string,
+    _table: string
+  ): ParameterisedQuery {
+    return unboundQuery(`
 SELECT NULL::text AS name, NULL::boolean AS "isDisabled",
   NULL::text AS "triggerType", NULL::text AS "createdAt"
-WHERE false;`;
+WHERE false;`);
   }
 
   /** pg_get_functiondef/pg_proc are unsupported — resolve views only. */
-  override getObjectDefinitionSQL(_database: string, schema: string, name: string): string {
-    return `
+  override getObjectDefinitionQuery(
+    _database: string,
+    schema: string,
+    name: string
+  ): ParameterisedQuery {
+    const values = this.bindings();
+    return values.query(`
 SELECT (
   SELECT definition FROM pg_views
-  WHERE schemaname = ${this.quoteLiteral(schema)}
-    AND viewname = ${this.quoteLiteral(name)}
-) AS definition;`;
+  WHERE schemaname = ${values.bind(schema)}
+    AND viewname = ${values.bind(name)}
+) AS definition;`);
   }
 }

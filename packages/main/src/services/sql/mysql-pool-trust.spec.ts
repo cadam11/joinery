@@ -14,6 +14,8 @@
  *   - `getEngineForProfile(profileId): DatabaseEngine`
  *   - `getDialectForProfile(profileId): SQLDialect`
  *   - `getMySQLPool(profileId, database?, trust?): Promise<MySQLPool>`
+ *     → `.query(sql)` / `.execute(sql, values)` — since J-135 the metadata path takes the
+ *       second, a server-side prepared statement, so the stub answers both the same way
  *   - `isAzureSQL(profileId): Promise<boolean>`
  * The behaviour against a live MySQL server is proved in
  * `tests/integration/sql/mysql-pool-trust.spec.ts`.
@@ -33,8 +35,10 @@ vi.mock('./connection-pool', async () => {
   const dialect = new MySQLDialect();
   const pool = {
     query: async () => [recorder.rows, []],
+    execute: async () => [recorder.rows, []],
     getConnection: async () => ({
       query: async () => [recorder.rows, []],
+      execute: async () => [recorder.rows, []],
       release: () => undefined,
     }),
   };

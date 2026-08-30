@@ -13,6 +13,9 @@ import type {
   DeleteDatabaseOptions,
   EngineVariant,
 } from '@joinery/shared';
+import { BoundValues, type ParameterisedQuery, type PlaceholderStyle } from './parameterised-query';
+
+export type { ParameterisedQuery, PlaceholderStyle } from './parameterised-query';
 
 // Re-export engine type for convenience
 export type { DatabaseEngine };
@@ -118,24 +121,91 @@ export abstract class SQLDialect {
   abstract renameDatabaseSQL(options: RenameDatabaseOptions): string;
   abstract dropDatabaseSQL(options: DeleteDatabaseOptions): string;
 
+  // ── Bound values ────────────────────────────────────────────
+
+  /** How this engine spells its bind placeholders. */
+  protected abstract readonly placeholderStyle: PlaceholderStyle;
+
+  /**
+   * Start collecting the values a metadata query binds.
+   *
+   * `protected` on purpose: the accumulator is mutable, and the only place that may hand out a
+   * placeholder is the builder that writes the SQL around it.
+   */
+  protected bindings(): BoundValues {
+    return new BoundValues(this.placeholderStyle);
+  }
+
   // ── Metadata queries ────────────────────────────────────────
+  //
+  // Each returns the SQL together with the values to bind to it (J-135). The schema, table and
+  // object names these take reach the dialect from the explorer, from IPC arguments, and —
+  // through `ToolRegistry` — from an LLM tool call, so on the engines whose drivers bind they are
+  // bound rather than escaped into the statement. SQL Server's builders bind nothing: `TsqlBuilder`
+  // writes its own literals, correctly, because T-SQL has no backslash escape in any
+  // configuration.
 
   /**
    * `isAzure` is consulted only by MSSQLDialect — Azure SQL Database lacks
    * msdb.dbo.backupset, so the query must be split. PG/MySQL ignore the flag.
    */
-  abstract listDatabasesSQL(isAzure?: boolean): string;
-  abstract listSchemasSQL(database: string): string;
-  abstract listTablesSQL(database: string, schema?: string): string;
-  abstract listViewsSQL(database: string, schema?: string): string;
-  abstract listProceduresSQL(database: string, schema?: string): string;
-  abstract listFunctionsSQL(database: string, schema?: string): string;
-  abstract listColumnsSQL(database: string, schema: string, table: string): string;
-  abstract listIndexesSQL(database: string, schema: string, table: string): string;
-  abstract listForeignKeysSQL(database: string, schema: string, table: string): string;
-  abstract listConstraintsSQL(database: string, schema: string, table: string): string;
-  abstract listTriggersSQL(database: string, schema: string, table: string): string;
-  abstract getObjectDefinitionSQL(database: string, schema: string, name: string): string;
+  abstract listDatabasesQuery(isAzure?: boolean): ParameterisedQuery;
+  abstract listSchemasQuery(database: string): ParameterisedQuery;
+  abstract listTablesQuery(database: string, schema?: string): ParameterisedQuery;
+  abstract listViewsQuery(database: string, schema?: string): ParameterisedQuery;
+  abstract listProceduresQuery(database: string, schema?: string): ParameterisedQuery;
+  abstract listFunctionsQuery(database: string, schema?: string): ParameterisedQuery;
+  abstract listColumnsQuery(database: string, schema: string, table: string): ParameterisedQuery;
+  abstract listIndexesQuery(database: string, schema: string, table: string): ParameterisedQuery;
+  abstract listForeignKeysQuery(
+    database: string,
+    schema: string,
+    table: string
+  ): ParameterisedQuery;
+  abstract listConstraintsQuery(
+    database: string,
+    schema: string,
+    table: string
+  ): ParameterisedQuery;
+  abstract listTriggersQuery(database: string, schema: string, table: string): ParameterisedQuery;
+  abstract getObjectDefinitionQuery(
+    database: string,
+    schema: string,
+    name: string
+  ): ParameterisedQuery;
+
+  /**
+   * The approximate row count for one table, behind the AI `get_table_row_count` tool.
+   *
+   * Its arguments come straight out of an LLM tool call, and the model's context includes text it
+   * has read out of the user's database, so these are the least trustworthy strings in the main
+   * process. They are bound on every engine, SQL Server included — this is the one query where
+   * T-SQL binds too (J-136, promoted into the dialect layer by J-135).
+   *
+   * The default is the T-SQL form; PostgreSQL and MySQL override it.
+   *
+   * @throws if `schema` or `table` is not a string — they arrive as untyped JSON from a tool
+   * call, and a non-string would otherwise be coerced into the parameter list.
+   */
+  rowCountQuery(schema: string, table: string): ParameterisedQuery {
+    const values = this.assertNameArguments(schema, table);
+    return values.query(`SELECT SUM(p.rows) AS row_count FROM sys.partitions p
+      JOIN sys.tables t ON p.object_id = t.object_id
+      JOIN sys.schemas s ON t.schema_id = s.schema_id
+      WHERE s.name = ${values.bind(schema)} AND t.name = ${values.bind(table)}
+        AND p.index_id IN (0, 1)`);
+  }
+
+  /** Shared precondition for `rowCountQuery`: both arguments must be strings. */
+  protected assertNameArguments(schema: string, table: string): BoundValues {
+    if (typeof schema !== 'string') {
+      throw new Error(`rowCountQuery: schema must be a string, got ${typeof schema}`);
+    }
+    if (typeof table !== 'string') {
+      throw new Error(`rowCountQuery: table must be a string, got ${typeof table}`);
+    }
+    return this.bindings();
+  }
 
   // ── Syntax patterns ─────────────────────────────────────────
 
@@ -162,7 +232,11 @@ export abstract class SQLDialect {
    * SQL Server: uses fn_listextendedproperty
    * PostgreSQL: uses pg_description + obj_description
    */
-  abstract listObjectCommentsSQL(database: string, schema: string, table: string): string | null;
+  abstract listObjectCommentsQuery(
+    database: string,
+    schema: string,
+    table: string
+  ): ParameterisedQuery | null;
 
   /** Whether this dialect supports server-side file browsing (xp_dirtree etc.) */
   abstract readonly supportsServerFileBrowsing: boolean;

@@ -364,6 +364,15 @@ describe('PgDialect', () => {
       expect(sql).toContain('pg_trigger');
     });
 
+    it('does not cast tgenabled to boolean — PostgreSQL refuses it', () => {
+      // `NOT t.tgenabled::boolean` raised `cannot cast type "char" to boolean` on every call, so
+      // the PostgreSQL trigger list never returned. Found by the J-135 integration tier and
+      // confirmed against the harness PostgreSQL 16.15.
+      const { sql } = dialect.listTriggersQuery('mydb', 'public', 'users');
+      expect(sql).not.toContain('tgenabled::boolean');
+      expect(sql).toContain("(t.tgenabled = 'D')");
+    });
+
     it('generates getObjectDefinition SQL', () => {
       const { sql } = dialect.getObjectDefinitionQuery('mydb', 'public', 'my_view');
       expect(sql).toContain('pg_views');

@@ -25,7 +25,20 @@ import { ObjectCache } from '../../utils/object-cache';
 import { TsqlBuilder } from '../../utils/tsql-builder';
 import { ConnectionPoolManager } from './connection-pool';
 import type { SQLDialect } from './dialect';
-import { tablePropertiesPgDsqlSql, tablePropertiesPgStandardSql } from './pg-table-properties';
+import type { ParameterisedQuery } from './dialect/parameterised-query';
+import { tablePropertiesPgDsqlQuery, tablePropertiesPgStandardQuery } from './pg-table-properties';
+
+/**
+ * A MySQL statement with the values its `?` placeholders bind, in order.
+ *
+ * The four MySQL-only queries in this file are written here rather than in `MySQLDialect` because
+ * they serve `MetadataService`'s own scripting paths, not the dialect's metadata contract. MySQL's
+ * placeholder is positional and identical at every position, so unlike the dialect builders these
+ * need no ordinal bookkeeping — hence a plain literal rather than `BoundValues`.
+ */
+function mysqlQuery(sql: string, params: readonly string[]): ParameterisedQuery {
+  return { sql, params };
+}
 
 export class MetadataService extends BaseSingleton {
   private poolManager: ConnectionPoolManager;
@@ -44,31 +57,51 @@ export class MetadataService extends BaseSingleton {
   }
 
   /**
-   * Execute a query on any engine (MSSQL or PG).
-   * Routes to the correct pool based on the connection's engine.
+   * Execute one metadata query on any engine, routing to the correct pool for the connection.
    *
-   * Every statement that reaches here is one dialect-built metadata query, so
-   * the MySQL arm asks for the restricted pool (J-137): a second statement is
-   * not expressible on that connection, whatever a schema or table name in the
-   * predicate contains.
+   * A query carrying values goes through the call that BINDS them (J-135) — node-pg's extended
+   * query protocol, and mysql2's `execute`, a server-side prepared statement. A bound value
+   * reaches the server out of band and is never lexed as SQL, so a schema or table name cannot
+   * close a literal or start a statement whatever it contains, on any engine, under any server
+   * setting.
+   *
+   * A query carrying none stays on the call it used before: the MySQL arm's `query` and, on SQL
+   * Server, `ConnectionPoolManager.query` (`request.batch`), which is where every `TsqlBuilder`
+   * statement still goes — T-SQL has no backslash escape in any configuration, so its
+   * quote-doubling is correct and J-135 leaves it alone.
+   *
+   * The MySQL arm asks for the restricted pool either way (J-137): a second statement is not
+   * expressible on that connection, which is defence in depth behind the binding rather than the
+   * fix itself.
    */
-  private async queryAny<T>(connectionId: string, sql: string, database?: string): Promise<T[]> {
+  private async queryAny<T>(
+    connectionId: string,
+    query: ParameterisedQuery,
+    database?: string
+  ): Promise<T[]> {
     const engine = this.poolManager.getEngineForProfile(connectionId);
+    const params = [...query.params];
 
     if (engine === 'postgresql') {
       const pool = await this.poolManager.getPgPool(connectionId, database);
-      const result = await pool.query(sql);
+      const result = params.length
+        ? await pool.query(query.sql, params)
+        : await pool.query(query.sql);
       return result.rows as T[];
     }
 
     if (engine === 'mysql') {
       const pool = await this.poolManager.getMySQLPool(connectionId, database, 'restricted');
-      const [rows] = await pool.query(sql);
+      const [rows] = params.length
+        ? await pool.execute(query.sql, params)
+        : await pool.query(query.sql);
       return rows as T[];
     }
 
     // Default: SQL Server
-    const result = await this.poolManager.query<T>(connectionId, sql, database);
+    const result = params.length
+      ? await this.poolManager.queryWithParams<T>(connectionId, query.sql, params, database)
+      : await this.poolManager.query<T>(connectionId, query.sql, database);
     return result.recordset;
   }
 
@@ -100,8 +133,8 @@ export class MetadataService extends BaseSingleton {
 
     const dialect = this.getDialect(connectionId);
     const isAzure = await this.poolManager.isAzureSQL(connectionId);
-    const sql = dialect.listDatabasesSQL(isAzure);
-    const rows = await this.queryAny<DatabaseInfo>(connectionId, sql);
+    const query = dialect.listDatabasesQuery(isAzure);
+    const rows = await this.queryAny<DatabaseInfo>(connectionId, query);
 
     const databases = rows.map(row => ({
       ...row,
@@ -133,8 +166,8 @@ export class MetadataService extends BaseSingleton {
     }
 
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listSchemasSQL(database);
-    const rows = await this.queryAny<SchemaInfo>(connectionId, sql, database);
+    const query = dialect.listSchemasQuery(database);
+    const rows = await this.queryAny<SchemaInfo>(connectionId, query, database);
 
     const schemas = rows.map(row => ({
       ...row,
@@ -163,8 +196,8 @@ export class MetadataService extends BaseSingleton {
     }
 
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listTablesSQL(database);
-    const rows = await this.queryAny<TableInfo>(connectionId, sql, database);
+    const query = dialect.listTablesQuery(database);
+    const rows = await this.queryAny<TableInfo>(connectionId, query, database);
 
     this.tableCache.set(cacheKey, rows);
     return rows;
@@ -188,8 +221,8 @@ export class MetadataService extends BaseSingleton {
     }
 
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listViewsSQL(database);
-    const rows = await this.queryAny<ViewInfo>(connectionId, sql, database);
+    const query = dialect.listViewsQuery(database);
+    const rows = await this.queryAny<ViewInfo>(connectionId, query, database);
 
     this.viewCache.set(cacheKey, rows);
     return rows;
@@ -213,8 +246,8 @@ export class MetadataService extends BaseSingleton {
     }
 
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listProceduresSQL(database);
-    const rows = await this.queryAny<ProcedureInfo>(connectionId, sql, database);
+    const query = dialect.listProceduresQuery(database);
+    const rows = await this.queryAny<ProcedureInfo>(connectionId, query, database);
 
     this.procedureCache.set(cacheKey, rows);
     return rows;
@@ -238,8 +271,8 @@ export class MetadataService extends BaseSingleton {
     }
 
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listFunctionsSQL(database);
-    const rows = await this.queryAny<FunctionInfo>(connectionId, sql, database);
+    const query = dialect.listFunctionsQuery(database);
+    const rows = await this.queryAny<FunctionInfo>(connectionId, query, database);
 
     this.functionCache.set(cacheKey, rows);
     return rows;
@@ -256,8 +289,8 @@ export class MetadataService extends BaseSingleton {
     objectType: string
   ): Promise<ObjectDefinition> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.getObjectDefinitionSQL(database, schema, name);
-    const rows = await this.queryAny<{ definition: string }>(connectionId, sql, database);
+    const query = dialect.getObjectDefinitionQuery(database, schema, name);
+    const rows = await this.queryAny<{ definition: string }>(connectionId, query, database);
 
     return {
       objectType: objectType as ObjectDefinition['objectType'],
@@ -277,8 +310,8 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<ColumnInfo[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listColumnsSQL(database, schema, table);
-    const rows = await this.queryAny<ColumnInfo>(connectionId, sql, database);
+    const query = dialect.listColumnsQuery(database, schema, table);
+    const rows = await this.queryAny<ColumnInfo>(connectionId, query, database);
     return rows.map(row => ({
       ...row,
       isNullable: Boolean(row.isNullable),
@@ -297,14 +330,14 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<IndexInfo[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listIndexesSQL(database, schema, table);
+    const query = dialect.listIndexesQuery(database, schema, table);
     const rows = await this.queryAny<{
       name: string;
       type: string;
       isUnique: boolean;
       isPrimaryKey: boolean;
       columns: string;
-    }>(connectionId, sql, database);
+    }>(connectionId, query, database);
     return rows.map(row => ({
       name: row.name,
       type: row.type as IndexInfo['type'],
@@ -324,7 +357,7 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<ForeignKeyInfo[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listForeignKeysSQL(database, schema, table);
+    const query = dialect.listForeignKeysQuery(database, schema, table);
     const rows = await this.queryAny<{
       name: string;
       columns: string;
@@ -333,7 +366,7 @@ export class MetadataService extends BaseSingleton {
       referencedColumns: string;
       onDelete: string;
       onUpdate: string;
-    }>(connectionId, sql, database);
+    }>(connectionId, query, database);
     return rows.map(row => ({
       name: row.name,
       columns: row.columns ? row.columns.split(', ') : [],
@@ -355,13 +388,13 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<ConstraintInfo[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listConstraintsSQL(database, schema, table);
+    const query = dialect.listConstraintsQuery(database, schema, table);
     const rows = await this.queryAny<{
       name: string;
       type: string;
       columns: string;
       definition: string;
-    }>(connectionId, sql, database);
+    }>(connectionId, query, database);
     return rows.map(row => ({
       name: row.name,
       type: row.type as ConstraintInfo['type'],
@@ -380,13 +413,13 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<TriggerInfo[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listTriggersSQL(database, schema, table);
+    const query = dialect.listTriggersQuery(database, schema, table);
     const rows = await this.queryAny<{
       name: string;
       isDisabled: boolean;
       triggerType: string;
       createdAt: string;
-    }>(connectionId, sql, database);
+    }>(connectionId, query, database);
     return rows.map(row => ({
       name: row.name,
       isEnabled: !row.isDisabled,
@@ -406,10 +439,10 @@ export class MetadataService extends BaseSingleton {
     table: string
   ): Promise<ExtendedProperty[]> {
     const dialect = this.getDialect(connectionId);
-    const sql = dialect.listObjectCommentsSQL(database, schema, table);
-    if (!sql) return [];
+    const query = dialect.listObjectCommentsQuery(database, schema, table);
+    if (!query) return [];
 
-    const rows = await this.queryAny<ExtendedProperty>(connectionId, sql, database);
+    const rows = await this.queryAny<ExtendedProperty>(connectionId, query, database);
     return rows;
   }
 
@@ -510,11 +543,11 @@ export class MetadataService extends BaseSingleton {
     schema: string,
     table: string
   ): Promise<TableProperties> {
-    const sql = this.poolManager.isDsqlCached(connectionId)
-      ? tablePropertiesPgDsqlSql(schema, table)
-      : tablePropertiesPgStandardSql(schema, table);
+    const query = this.poolManager.isDsqlCached(connectionId)
+      ? tablePropertiesPgDsqlQuery(schema, table)
+      : tablePropertiesPgStandardQuery(schema, table);
 
-    const rows = await this.queryAny<TableProperties>(connectionId, sql, database);
+    const rows = await this.queryAny<TableProperties>(connectionId, query, database);
     const props = rows[0] || ({} as TableProperties);
 
     // Fetch sub-resources using dialect-routed methods
@@ -548,8 +581,10 @@ export class MetadataService extends BaseSingleton {
     schema: string,
     table: string
   ): Promise<TableProperties> {
-    const dialect = this.getDialect(connectionId);
-    const sql = `
+    // MySQL's placeholder is positional, so this needs no ordinal bookkeeping: two `?`, two
+    // values, in order (J-135).
+    const query = mysqlQuery(
+      `
 SELECT
   TABLE_SCHEMA AS \`schema\`,
   TABLE_NAME AS name,
@@ -564,10 +599,12 @@ SELECT
   IF(AUTO_INCREMENT IS NOT NULL, true, false) AS \`hasIdentity\`,
   ENGINE AS filegroup
 FROM information_schema.TABLES
-WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
-  AND TABLE_NAME = ${dialect.quoteLiteral(table)};`;
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_NAME = ?;`,
+      [schema, table]
+    );
 
-    const rows = await this.queryAny<TableProperties>(connectionId, sql, database);
+    const rows = await this.queryAny<TableProperties>(connectionId, query, database);
     const props = rows[0] || ({} as TableProperties);
 
     // Fetch sub-resources using dialect-routed methods
@@ -901,7 +938,8 @@ WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
     const dialect = this.getDialect(connectionId);
 
     // Query column details including auto_increment from EXTRA field
-    const colSql = `
+    const colQuery = mysqlQuery(
+      `
 SELECT
   COLUMN_NAME AS name,
   COLUMN_TYPE AS columnType,
@@ -910,9 +948,11 @@ SELECT
   EXTRA,
   COLUMN_KEY
 FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
-  AND TABLE_NAME = ${dialect.quoteLiteral(table)}
-ORDER BY ORDINAL_POSITION;`;
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_NAME = ?
+ORDER BY ORDINAL_POSITION;`,
+      [schema, table]
+    );
 
     const colRows = await this.queryAny<{
       name: string;
@@ -921,7 +961,7 @@ ORDER BY ORDINAL_POSITION;`;
       defaultValue: string | null;
       EXTRA: string;
       COLUMN_KEY: string;
-    }>(connectionId, colSql, database);
+    }>(connectionId, colQuery, database);
 
     const fullName = dialect.quoteSchemaObject(schema, table);
 
@@ -972,14 +1012,17 @@ ORDER BY ORDINAL_POSITION;`;
 
     if (engine === 'mysql') {
       // MySQL insert template — skip auto_increment columns
-      const extraSql = `
+      const extraQuery = mysqlQuery(
+        `
 SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
-  AND TABLE_NAME = ${dialect.quoteLiteral(table)}
-  AND EXTRA LIKE '%auto_increment%'`;
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_NAME = ?
+  AND EXTRA LIKE '%auto_increment%'`,
+        [schema, table]
+      );
       const autoIncRows = await this.queryAny<{ COLUMN_NAME: string }>(
         connectionId,
-        extraSql,
+        extraQuery,
         database
       );
       const autoIncCols = new Set(autoIncRows.map(r => r.COLUMN_NAME));
@@ -1060,16 +1103,18 @@ WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
       }
     } else if (engine === 'mysql') {
       // MySQL: detect auto_increment from information_schema.COLUMNS.EXTRA
-      const dialect = this.getDialect(connectionId);
-      const extraSql = `
+      const extraQuery = mysqlQuery(
+        `
 SELECT COLUMN_NAME, EXTRA, COLUMN_DEFAULT FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
-  AND TABLE_NAME = ${dialect.quoteLiteral(table)}`;
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_NAME = ?`,
+        [schema, table]
+      );
       const extraRows = await this.queryAny<{
         COLUMN_NAME: string;
         EXTRA: string;
         COLUMN_DEFAULT: string | null;
-      }>(connectionId, extraSql, database);
+      }>(connectionId, extraQuery, database);
       for (const r of extraRows) {
         identityMap.set(r.COLUMN_NAME, {
           isIdentity: r.EXTRA?.includes('auto_increment') ?? false,

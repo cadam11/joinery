@@ -3,7 +3,7 @@
  *
  * Two layers, because they answer different questions.
  *
- * 1. **Query layer.** `buildRowCountQuery` is the exact SQL the tool sends; it
+ * 1. **Query layer.** `SQLDialect.rowCountQuery` is the exact SQL the tool sends; it
  *    is executed here through each engine's real driver, bound the way
  *    `ToolRegistry` binds it:
  *      - PostgreSQL: `client.query(sql, values)` — extended query protocol
@@ -24,7 +24,7 @@
  * arms run with `standard_conforming_strings` off, the per-database setting
  * that makes quote-doubling alone an injection there.
  *
- * Mutation-checked: reverting `buildRowCountQuery` to the pre-J-136
+ * Mutation-checked: reverting `rowCountQuery` to the pre-J-136
  * interpolated form turns the MySQL and PostgreSQL arms red (MySQL fails with
  * `Table '…probe_victim' doesn't exist` — the DROP really executes). The SQL
  * Server arms cannot go red: T-SQL has no backslash escape, so the old
@@ -37,7 +37,7 @@ import sqlserver from 'mssql';
 import { Client as PgClient } from 'pg';
 import mysql from 'mysql2/promise';
 
-import { buildRowCountQuery } from '@joinery/main/services/ai/row-count-query';
+import { getDialect } from '@joinery/main/services/sql/dialect';
 import type { DatabaseEngine } from '@joinery/shared';
 
 import { TEST_CONNECTIONS, withFreshDatabase, type Engine } from '../../helpers/db-fixtures.js';
@@ -88,7 +88,7 @@ describe.each(ENGINES)('get_table_row_count against %s', engine => {
       await withConnection(engine, db.databaseName, async conn => {
         await conn.exec(`CREATE TABLE ${quoteIdent(engine, BACKSLASH_NAME)} (id INT)`);
 
-        const query = buildRowCountQuery(dialectEngine, schema, BACKSLASH_NAME);
+        const query = getDialect(dialectEngine).rowCountQuery(schema, BACKSLASH_NAME);
         const rows = await conn.run(query.sql, query.params);
 
         // Exactly one metadata row: the predicate matched this table and no other.
@@ -104,7 +104,7 @@ describe.each(ENGINES)('get_table_row_count against %s', engine => {
         await conn.exec('CREATE TABLE probe_victim (label INT)');
         await conn.exec(`CREATE TABLE ${quoteIdent(engine, INJECTION_NAME)} (id INT)`);
 
-        const query = buildRowCountQuery(dialectEngine, schema, INJECTION_NAME);
+        const query = getDialect(dialectEngine).rowCountQuery(schema, INJECTION_NAME);
         const rows = await conn.run(query.sql, query.params);
 
         // Asserted first, because it is the security claim: if the payload was

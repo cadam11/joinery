@@ -16,6 +16,7 @@ import { Client as PgClient } from 'pg';
 import mysql from 'mysql2/promise';
 
 import { getDialect } from '@joinery/main/services/sql/dialect';
+import type { ParameterisedQuery } from '@joinery/main/services/sql/dialect';
 import type { DatabaseEngine } from '@joinery/shared';
 
 import {
@@ -42,7 +43,11 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
     await withFreshDatabase(engine, async db => {
       await applyFixture(engine, db.databaseName, 'seed');
       const { database, schema } = dialectArgs(engine, db.databaseName);
-      const rows = await runQuery(engine, db.databaseName, dialect.listTablesSQL(database, schema));
+      const rows = await runQuery(
+        engine,
+        db.databaseName,
+        dialect.listTablesQuery(database, schema)
+      );
       const names = rows.map(r => String(r.name).toLowerCase()).sort();
       expect(names).toEqual(FIXTURE_TABLES);
     });
@@ -54,7 +59,7 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
       const rows = await runQuery(
         engine,
         db.databaseName,
-        dialect.listColumnsSQL(database, schema, 'products')
+        dialect.listColumnsQuery(database, schema, 'products')
       );
       const names = rows.map(r => String(r.name).toLowerCase());
       expect(names).toEqual(expect.arrayContaining(PRODUCT_COLUMNS));
@@ -71,7 +76,7 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
       const rows = await runQuery(
         engine,
         db.databaseName,
-        dialect.listIndexesSQL(database, schema, 'products')
+        dialect.listIndexesQuery(database, schema, 'products')
       );
       const names = rows.map(r => String(r.name).toLowerCase());
       expect(names).toContain('ix_products_category');
@@ -84,7 +89,7 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
       const rows = await runQuery(
         engine,
         db.databaseName,
-        dialect.listForeignKeysSQL(database, schema, 'orders')
+        dialect.listForeignKeysQuery(database, schema, 'orders')
       );
       expect(rows.length).toBeGreaterThanOrEqual(1);
       const referenced = rows.map(r => String(r.referencedTable ?? '').toLowerCase());
@@ -140,7 +145,7 @@ describe.each(ENGINES)('dialect roundtrip — %s', engine => {
       const rows = await runQuery(
         engine,
         db.databaseName,
-        dialect.listColumnsSQL(database, schema, table)
+        dialect.listColumnsQuery(database, schema, table)
       );
       expect(rows.map(r => String(r.name).toLowerCase())).toEqual(['id']);
     });
@@ -177,19 +182,27 @@ function asBool(v: unknown): boolean {
 async function runQuery(
   engine: Engine,
   dbName: string,
-  sql: string
+  query: string | ParameterisedQuery
 ): Promise<Record<string, unknown>[]> {
+  // Since J-135 the metadata builders return `{ sql, params }`; the ad-hoc probe SQL in this file
+  // is still a bare string, so both are accepted and the values (if any) are bound by the driver.
+  const { sql, params } = typeof query === 'string' ? { sql: query, params: [] } : query;
+
   switch (engine) {
     case 'mssql':
-      return runMssql(dbName, sql);
+      return runMssql(dbName, sql, params);
     case 'postgres':
-      return runPostgres(dbName, sql);
+      return runPostgres(dbName, sql, params);
     case 'mysql':
-      return runMysql(dbName, sql);
+      return runMysql(dbName, sql, params);
   }
 }
 
-async function runMssql(dbName: string, sql: string): Promise<Record<string, unknown>[]> {
+async function runMssql(
+  dbName: string,
+  sql: string,
+  params: readonly string[]
+): Promise<Record<string, unknown>[]> {
   const c = TEST_CONNECTIONS.mssql;
   const pool = new sqlserver.ConnectionPool({
     server: c.host,
@@ -201,7 +214,9 @@ async function runMssql(dbName: string, sql: string): Promise<Record<string, unk
   });
   await pool.connect();
   try {
-    // batch() handles `USE [db];` prefixes that the MSSQL dialect emits.
+    // batch() handles `USE [db];` prefixes that the MSSQL dialect emits. The MSSQL builders bind
+    // nothing (TsqlBuilder writes its own literals), so this branch never has params.
+    if (params.length > 0) throw new Error('runMssql: the MSSQL dialect should bind no values');
     const result = await pool.request().batch(sql);
     const recordsets = (result.recordsets ?? []) as unknown as Record<string, unknown>[][];
     return recordsets[recordsets.length - 1] ?? [];
@@ -210,7 +225,11 @@ async function runMssql(dbName: string, sql: string): Promise<Record<string, unk
   }
 }
 
-async function runPostgres(dbName: string, sql: string): Promise<Record<string, unknown>[]> {
+async function runPostgres(
+  dbName: string,
+  sql: string,
+  params: readonly string[]
+): Promise<Record<string, unknown>[]> {
   const c = TEST_CONNECTIONS.postgres;
   const client = new PgClient({
     host: c.host,
@@ -221,7 +240,8 @@ async function runPostgres(dbName: string, sql: string): Promise<Record<string, 
   });
   await client.connect();
   try {
-    const result = await client.query(sql);
+    // With values node-pg uses the extended query protocol, exactly as `MetadataService` does.
+    const result = params.length ? await client.query(sql, [...params]) : await client.query(sql);
     const results = Array.isArray(result) ? result : [result];
     return results[results.length - 1].rows as Record<string, unknown>[];
   } finally {
@@ -229,7 +249,11 @@ async function runPostgres(dbName: string, sql: string): Promise<Record<string, 
   }
 }
 
-async function runMysql(dbName: string, sql: string): Promise<Record<string, unknown>[]> {
+async function runMysql(
+  dbName: string,
+  sql: string,
+  params: readonly string[]
+): Promise<Record<string, unknown>[]> {
   const c = TEST_CONNECTIONS.mysql;
   const conn = await mysql.createConnection({
     host: c.host,
@@ -240,7 +264,8 @@ async function runMysql(dbName: string, sql: string): Promise<Record<string, unk
     multipleStatements: true,
   });
   try {
-    const [rows] = await conn.query(sql);
+    // `execute` = server-side prepared statement, exactly as `MetadataService` does.
+    const [rows] = params.length ? await conn.execute(sql, [...params]) : await conn.query(sql);
     if (Array.isArray(rows) && rows.length > 0 && Array.isArray(rows[0])) {
       const arr = rows as unknown[][];
       return arr[arr.length - 1] as Record<string, unknown>[];
