@@ -7,6 +7,7 @@ import { MSSQLDialect } from './mssql-dialect';
 import { PgDialect } from './pg-dialect';
 import { MySQLDialect } from './mysql-dialect';
 import { getDialect, capabilitiesForDialect } from './index';
+import type { ParameterisedQuery, SQLDialect } from './sql-dialect';
 import { PgDsqlDialect } from './pg-dsql-dialect';
 
 describe('getDialect factory', () => {
@@ -124,78 +125,78 @@ describe('MSSQLDialect', () => {
 
   describe('metadata queries', () => {
     it('generates listDatabases SQL for on-prem (with msdb backup history)', () => {
-      const sql = dialect.listDatabasesSQL(false);
+      const { sql } = dialect.listDatabasesQuery(false);
       expect(sql).toContain('sys.databases');
       expect(sql).toContain('msdb.dbo.backupset');
     });
 
     it('generates listDatabases SQL for Azure SQL (no msdb references)', () => {
-      const sql = dialect.listDatabasesSQL(true);
+      const { sql } = dialect.listDatabasesQuery(true);
       expect(sql).toContain('sys.databases');
       expect(sql).not.toContain('msdb.dbo.backupset');
     });
 
     it('generates listSchemas SQL', () => {
-      const sql = dialect.listSchemasSQL('mydb');
+      const { sql } = dialect.listSchemasQuery('mydb');
       expect(sql).toContain('sys.schemas');
       expect(sql).toContain('USE [mydb]');
     });
 
     it('generates listTables SQL', () => {
-      const sql = dialect.listTablesSQL('mydb');
+      const { sql } = dialect.listTablesQuery('mydb');
       expect(sql).toContain('sys.tables');
       expect(sql).toContain('USE [mydb]');
     });
 
     it('generates listViews SQL', () => {
-      const sql = dialect.listViewsSQL('mydb');
+      const { sql } = dialect.listViewsQuery('mydb');
       expect(sql).toContain('sys.views');
     });
 
     it('generates listProcedures SQL', () => {
-      const sql = dialect.listProceduresSQL('mydb');
+      const { sql } = dialect.listProceduresQuery('mydb');
       expect(sql).toContain('sys.procedures');
     });
 
     it('generates listFunctions SQL', () => {
-      const sql = dialect.listFunctionsSQL('mydb');
+      const { sql } = dialect.listFunctionsQuery('mydb');
       expect(sql).toContain('sys.objects');
     });
 
     it('generates listColumns SQL', () => {
-      const sql = dialect.listColumnsSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listColumnsQuery('mydb', 'dbo', 'Users');
       expect(sql).toContain('sys.columns');
       expect(sql).toContain("'dbo'");
       expect(sql).toContain("'Users'");
     });
 
     it('generates listIndexes SQL', () => {
-      const sql = dialect.listIndexesSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listIndexesQuery('mydb', 'dbo', 'Users');
       expect(sql).toContain('sys.indexes');
     });
 
     it('generates listForeignKeys SQL', () => {
-      const sql = dialect.listForeignKeysSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listForeignKeysQuery('mydb', 'dbo', 'Users');
       expect(sql).toContain('sys.foreign_keys');
     });
 
     it('generates listConstraints SQL', () => {
-      const sql = dialect.listConstraintsSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listConstraintsQuery('mydb', 'dbo', 'Users');
       expect(sql).toContain('sys.key_constraints');
     });
 
     it('generates listTriggers SQL', () => {
-      const sql = dialect.listTriggersSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listTriggersQuery('mydb', 'dbo', 'Users');
       expect(sql).toContain('sys.triggers');
     });
 
     it('generates getObjectDefinition SQL', () => {
-      const sql = dialect.getObjectDefinitionSQL('mydb', 'dbo', 'myView');
+      const { sql } = dialect.getObjectDefinitionQuery('mydb', 'dbo', 'myView');
       expect(sql).toContain('OBJECT_DEFINITION');
     });
 
     it('generates listObjectComments SQL (extended properties)', () => {
-      const sql = dialect.listObjectCommentsSQL('mydb', 'dbo', 'Users');
+      const { sql } = dialect.listObjectCommentsQuery('mydb', 'dbo', 'Users');
       expect(sql).toBeDefined();
       expect(sql.length).toBeGreaterThan(0);
     });
@@ -298,81 +299,97 @@ describe('PgDialect', () => {
 
   describe('metadata queries', () => {
     it('generates listDatabases SQL using pg_database', () => {
-      const sql = dialect.listDatabasesSQL();
+      const { sql } = dialect.listDatabasesQuery();
       expect(sql).toContain('pg_database');
       expect(sql).not.toContain('sys.databases');
     });
 
     it('generates listSchemas SQL using pg_namespace', () => {
-      const sql = dialect.listSchemasSQL('mydb');
+      const { sql } = dialect.listSchemasQuery('mydb');
       expect(sql).toContain('pg_namespace');
       expect(sql).not.toContain('sys.schemas');
     });
 
     it('generates listTables SQL using pg_tables', () => {
-      const sql = dialect.listTablesSQL('mydb');
+      const { sql } = dialect.listTablesQuery('mydb');
       expect(sql).toContain('pg_tables');
       expect(sql).not.toContain('sys.tables');
     });
 
     it('generates listViews SQL using pg_views', () => {
-      const sql = dialect.listViewsSQL('mydb');
+      const { sql } = dialect.listViewsQuery('mydb');
       expect(sql).toContain('pg_views');
     });
 
     it('generates listProcedures SQL using pg_proc', () => {
-      const sql = dialect.listProceduresSQL('mydb');
+      const { sql } = dialect.listProceduresQuery('mydb');
       expect(sql).toContain('pg_proc');
       expect(sql).toContain("prokind = 'p'");
     });
 
     it('generates listFunctions SQL using pg_proc', () => {
-      const sql = dialect.listFunctionsSQL('mydb');
+      const { sql } = dialect.listFunctionsQuery('mydb');
       expect(sql).toContain('pg_proc');
       expect(sql).toContain("prokind = 'f'");
     });
 
-    it('generates listColumns SQL using information_schema', () => {
-      const sql = dialect.listColumnsSQL('mydb', 'public', 'users');
+    it('generates listColumns SQL using information_schema, with bound names', () => {
+      const { sql, params } = dialect.listColumnsQuery('mydb', 'public', 'users');
       expect(sql).toContain('information_schema.columns');
-      expect(sql).toContain("'public'");
-      expect(sql).toContain("'users'");
+      // Three predicates each for schema and table, so six placeholders in call order.
+      expect(params).toEqual(['public', 'users', 'public', 'users', 'public', 'users']);
+      expect(sql).toContain('c.table_schema = $5');
+      expect(sql).toContain('c.table_name = $6');
     });
 
     it('generates listIndexes SQL using pg_index', () => {
-      const sql = dialect.listIndexesSQL('mydb', 'public', 'users');
+      const { sql } = dialect.listIndexesQuery('mydb', 'public', 'users');
       expect(sql).toContain('pg_index');
       expect(sql).toContain('string_agg');
     });
 
     it('generates listForeignKeys SQL using information_schema', () => {
-      const sql = dialect.listForeignKeysSQL('mydb', 'public', 'users');
+      const { sql } = dialect.listForeignKeysQuery('mydb', 'public', 'users');
       expect(sql).toContain('information_schema.table_constraints');
       expect(sql).toContain('FOREIGN KEY');
     });
 
     it('generates listConstraints SQL', () => {
-      const sql = dialect.listConstraintsSQL('mydb', 'public', 'users');
+      const { sql } = dialect.listConstraintsQuery('mydb', 'public', 'users');
       expect(sql).toContain('information_schema.table_constraints');
     });
 
     it('generates listTriggers SQL using pg_trigger', () => {
-      const sql = dialect.listTriggersSQL('mydb', 'public', 'users');
+      const { sql } = dialect.listTriggersQuery('mydb', 'public', 'users');
       expect(sql).toContain('pg_trigger');
     });
 
     it('generates getObjectDefinition SQL', () => {
-      const sql = dialect.getObjectDefinitionSQL('mydb', 'public', 'my_view');
+      const { sql } = dialect.getObjectDefinitionQuery('mydb', 'public', 'my_view');
       expect(sql).toContain('pg_views');
       expect(sql).toContain('pg_get_functiondef');
     });
 
-    it('generates listObjectComments SQL using pg_description', () => {
-      const sql = dialect.listObjectCommentsSQL('mydb', 'public', 'users');
+    it('generates listObjectComments SQL using pg_description, with bound names', () => {
+      const { sql, params } = dialect.listObjectCommentsQuery('mydb', 'public', 'users');
       expect(sql).toContain('obj_description');
       expect(sql).toContain('col_description');
-      expect(sql).toContain("'public'");
-      expect(sql).toContain("'users'");
+      expect(sql).not.toContain("'public'");
+      expect(sql).not.toContain("'users'");
+      // Both UNION arms name the schema and table twice: once in the select list, once in
+      // the predicate. The select-list ones are cast, because PostgreSQL cannot infer the type
+      // of a bare parameter in a target list.
+      expect(sql).toContain('$1::text AS "level0Name"');
+      expect(params).toEqual([
+        'public',
+        'users',
+        'public',
+        'users',
+        'public',
+        'users',
+        'public',
+        'users',
+      ]);
     });
   });
 
@@ -383,14 +400,21 @@ describe('PgDialect', () => {
   });
 
   describe('SQL injection prevention', () => {
-    it('escapes single quotes in schema names', () => {
-      const sql = dialect.listColumnsSQL('db', "sch'ema", 'table');
-      expect(sql).toContain("sch''ema");
+    // These two used to assert that a quote in a name was DOUBLED INTO the SQL text. Since J-135
+    // the name never reaches the SQL text at all — it is bound — so escaping it would be a
+    // regression, not the fix. The assertion is inverted accordingly.
+    it('binds a schema name containing a quote instead of escaping it into the SQL', () => {
+      const { sql, params } = dialect.listColumnsQuery('db', "sch'ema", 'table');
+      expect(sql).not.toContain("sch''ema");
+      expect(sql).not.toContain("sch'ema");
+      expect(params).toContain("sch'ema");
     });
 
-    it('escapes single quotes in table names', () => {
-      const sql = dialect.listColumnsSQL('db', 'schema', "tab'le");
-      expect(sql).toContain("tab''le");
+    it('binds a table name containing a quote instead of escaping it into the SQL', () => {
+      const { sql, params } = dialect.listColumnsQuery('db', 'schema', "tab'le");
+      expect(sql).not.toContain("tab''le");
+      expect(sql).not.toContain("tab'le");
+      expect(params).toContain("tab'le");
     });
 
     it('escapes double quotes in identifiers', () => {
@@ -477,77 +501,80 @@ describe('MySQLDialect', () => {
 
   describe('metadata queries', () => {
     it('generates listDatabases SQL using information_schema.SCHEMATA', () => {
-      const sql = dialect.listDatabasesSQL();
+      const { sql } = dialect.listDatabasesQuery();
       expect(sql).toContain('information_schema.SCHEMATA');
       expect(sql).not.toContain('sys.databases');
       expect(sql).not.toContain('pg_database');
     });
 
-    it('generates listSchemas SQL returning database as schema', () => {
-      const sql = dialect.listSchemasSQL('mydb');
-      expect(sql).toContain("'mydb'");
+    it('generates listSchemas SQL returning the database as a bound schema name', () => {
+      const { sql, params } = dialect.listSchemasQuery('mydb');
+      expect(sql).not.toContain("'mydb'");
+      expect(sql).toContain('? AS name');
+      expect(params).toEqual(['mydb']);
     });
 
     it('generates listTables SQL using information_schema.TABLES', () => {
-      const sql = dialect.listTablesSQL('mydb');
+      const { sql } = dialect.listTablesQuery('mydb');
       expect(sql).toContain('information_schema.TABLES');
       expect(sql).toContain('BASE TABLE');
     });
 
     it('generates listViews SQL using information_schema.VIEWS', () => {
-      const sql = dialect.listViewsSQL('mydb');
+      const { sql } = dialect.listViewsQuery('mydb');
       expect(sql).toContain('information_schema.VIEWS');
     });
 
     it('generates listProcedures SQL using information_schema.ROUTINES', () => {
-      const sql = dialect.listProceduresSQL('mydb');
+      const { sql } = dialect.listProceduresQuery('mydb');
       expect(sql).toContain('information_schema.ROUTINES');
       expect(sql).toContain("'PROCEDURE'");
     });
 
     it('generates listFunctions SQL using information_schema.ROUTINES', () => {
-      const sql = dialect.listFunctionsSQL('mydb');
+      const { sql } = dialect.listFunctionsQuery('mydb');
       expect(sql).toContain('information_schema.ROUTINES');
       expect(sql).toContain("'FUNCTION'");
     });
 
-    it('generates listColumns SQL using information_schema.COLUMNS', () => {
-      const sql = dialect.listColumnsSQL('mydb', 'mydb', 'users');
+    it('generates listColumns SQL using information_schema.COLUMNS, with bound names', () => {
+      const { sql, params } = dialect.listColumnsQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('information_schema.COLUMNS');
-      expect(sql).toContain("'mydb'");
-      expect(sql).toContain("'users'");
+      expect(sql).toContain('TABLE_SCHEMA = ?');
+      expect(sql).toContain('TABLE_NAME = ?');
+      expect(params).toEqual(['mydb', 'users']);
     });
 
     it('generates listIndexes SQL using information_schema.STATISTICS', () => {
-      const sql = dialect.listIndexesSQL('mydb', 'mydb', 'users');
+      const { sql } = dialect.listIndexesQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('information_schema.STATISTICS');
       expect(sql).toContain('GROUP_CONCAT');
     });
 
     it('generates listForeignKeys SQL using KEY_COLUMN_USAGE', () => {
-      const sql = dialect.listForeignKeysSQL('mydb', 'mydb', 'users');
+      const { sql } = dialect.listForeignKeysQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('KEY_COLUMN_USAGE');
       expect(sql).toContain('REFERENCED_TABLE_NAME');
     });
 
     it('generates listConstraints SQL using TABLE_CONSTRAINTS', () => {
-      const sql = dialect.listConstraintsSQL('mydb', 'mydb', 'users');
+      const { sql } = dialect.listConstraintsQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('TABLE_CONSTRAINTS');
     });
 
     it('generates listTriggers SQL using information_schema.TRIGGERS', () => {
-      const sql = dialect.listTriggersSQL('mydb', 'mydb', 'users');
+      const { sql } = dialect.listTriggersQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('information_schema.TRIGGERS');
     });
 
     it('generates getObjectDefinition SQL', () => {
-      const sql = dialect.getObjectDefinitionSQL('mydb', 'mydb', 'my_view');
+      const { sql } = dialect.getObjectDefinitionQuery('mydb', 'mydb', 'my_view');
       expect(sql).toContain('VIEW_DEFINITION');
       expect(sql).toContain('ROUTINE_DEFINITION');
     });
 
     it('generates listObjectComments SQL using TABLE_COMMENT and COLUMN_COMMENT', () => {
-      const sql = dialect.listObjectCommentsSQL('mydb', 'mydb', 'users');
+      const { sql } = dialect.listObjectCommentsQuery('mydb', 'mydb', 'users');
       expect(sql).toContain('TABLE_COMMENT');
       expect(sql).toContain('COLUMN_COMMENT');
     });
@@ -560,14 +587,20 @@ describe('MySQLDialect', () => {
   });
 
   describe('SQL injection prevention', () => {
-    it('escapes single quotes in schema names', () => {
-      const sql = dialect.listColumnsSQL('db', "sch'ema", 'table');
-      expect(sql).toContain("sch''ema");
+    // Inverted for J-135, for the same reason as the PostgreSQL pair above: the name is bound,
+    // so it must be absent from the SQL text rather than escaped inside it.
+    it('binds a schema name containing a quote instead of escaping it into the SQL', () => {
+      const { sql, params } = dialect.listColumnsQuery('db', "sch'ema", 'table');
+      expect(sql).not.toContain("sch''ema");
+      expect(sql).not.toContain("sch'ema");
+      expect(params).toContain("sch'ema");
     });
 
-    it('escapes single quotes in table names', () => {
-      const sql = dialect.listColumnsSQL('db', 'schema', "tab'le");
-      expect(sql).toContain("tab''le");
+    it('binds a table name containing a quote instead of escaping it into the SQL', () => {
+      const { sql, params } = dialect.listColumnsQuery('db', 'schema', "tab'le");
+      expect(sql).not.toContain("tab''le");
+      expect(sql).not.toContain("tab'le");
+      expect(params).toContain("tab'le");
     });
 
     it('escapes backticks in identifiers', () => {
@@ -583,27 +616,27 @@ describe('dialect cross-engine consistency', () => {
   const mysql = new MySQLDialect();
 
   it('all generate non-empty listDatabases SQL', () => {
-    expect(mssql.listDatabasesSQL().trim().length).toBeGreaterThan(0);
-    expect(pg.listDatabasesSQL().trim().length).toBeGreaterThan(0);
-    expect(mysql.listDatabasesSQL().trim().length).toBeGreaterThan(0);
+    expect(mssql.listDatabasesQuery().sql.trim().length).toBeGreaterThan(0);
+    expect(pg.listDatabasesQuery().sql.trim().length).toBeGreaterThan(0);
+    expect(mysql.listDatabasesQuery().sql.trim().length).toBeGreaterThan(0);
   });
 
   it('all generate non-empty listSchemas SQL', () => {
-    expect(mssql.listSchemasSQL('db').trim().length).toBeGreaterThan(0);
-    expect(pg.listSchemasSQL('db').trim().length).toBeGreaterThan(0);
-    expect(mysql.listSchemasSQL('db').trim().length).toBeGreaterThan(0);
+    expect(mssql.listSchemasQuery('db').sql.trim().length).toBeGreaterThan(0);
+    expect(pg.listSchemasQuery('db').sql.trim().length).toBeGreaterThan(0);
+    expect(mysql.listSchemasQuery('db').sql.trim().length).toBeGreaterThan(0);
   });
 
   it('all generate non-empty listTables SQL', () => {
-    expect(mssql.listTablesSQL('db').trim().length).toBeGreaterThan(0);
-    expect(pg.listTablesSQL('db').trim().length).toBeGreaterThan(0);
-    expect(mysql.listTablesSQL('db').trim().length).toBeGreaterThan(0);
+    expect(mssql.listTablesQuery('db').sql.trim().length).toBeGreaterThan(0);
+    expect(pg.listTablesQuery('db').sql.trim().length).toBeGreaterThan(0);
+    expect(mysql.listTablesQuery('db').sql.trim().length).toBeGreaterThan(0);
   });
 
   it('all generate non-empty listColumns SQL', () => {
-    expect(mssql.listColumnsSQL('db', 's', 't').trim().length).toBeGreaterThan(0);
-    expect(pg.listColumnsSQL('db', 's', 't').trim().length).toBeGreaterThan(0);
-    expect(mysql.listColumnsSQL('db', 's', 't').trim().length).toBeGreaterThan(0);
+    expect(mssql.listColumnsQuery('db', 's', 't').sql.trim().length).toBeGreaterThan(0);
+    expect(pg.listColumnsQuery('db', 's', 't').sql.trim().length).toBeGreaterThan(0);
+    expect(mysql.listColumnsQuery('db', 's', 't').sql.trim().length).toBeGreaterThan(0);
   });
 
   it('quoteLiteral does NOT work the same across all dialects (J-134)', () => {
@@ -680,26 +713,28 @@ describe('PgDsqlDialect', () => {
     expect(dialect.supportsBackupTooling).toBe(false);
   });
 
-  it('listDatabasesSQL avoids pg_database and returns the current database', () => {
-    const sql = dialect.listDatabasesSQL();
+  it('listDatabasesQuery avoids pg_database and returns the current database', () => {
+    const { sql } = dialect.listDatabasesQuery();
     expect(sql).not.toContain('pg_database');
     expect(sql).toContain('current_database()');
     expect(sql).toContain('"isSystemDb"');
   });
 
-  it('listTablesSQL avoids pg_stat_user_tables and pg_relation_size', () => {
-    const sql = dialect.listTablesSQL('postgres', 'public');
+  it('listTablesQuery avoids pg_stat_user_tables and pg_relation_size', () => {
+    const { sql, params } = dialect.listTablesQuery('postgres', 'public');
     expect(sql).not.toContain('pg_stat_user_tables');
     expect(sql).not.toContain('pg_relation_size');
     expect(sql).toContain('reltuples');
-    expect(sql).toContain("t.schemaname = E'public'");
+    // The schema filter is a bound parameter, not a literal (J-135).
+    expect(sql).toContain('t.schemaname = $1');
+    expect(params).toEqual(['public']);
   });
 
-  it('listProceduresSQL / listFunctionsSQL / listTriggersSQL return empty-set queries', () => {
-    for (const sql of [
-      dialect.listProceduresSQL('postgres'),
-      dialect.listFunctionsSQL('postgres'),
-      dialect.listTriggersSQL('postgres', 'public', 't'),
+  it('listProcedures/listFunctions/listTriggers queries return empty sets', () => {
+    for (const { sql } of [
+      dialect.listProceduresQuery('postgres'),
+      dialect.listFunctionsQuery('postgres'),
+      dialect.listTriggersQuery('postgres', 'public', 't'),
     ]) {
       expect(sql).toContain('WHERE false');
       expect(sql).not.toContain('pg_proc');
@@ -707,8 +742,8 @@ describe('PgDsqlDialect', () => {
     }
   });
 
-  it('getObjectDefinitionSQL only consults pg_views', () => {
-    const sql = dialect.getObjectDefinitionSQL('postgres', 'public', 'v');
+  it('getObjectDefinitionQuery only consults pg_views', () => {
+    const { sql } = dialect.getObjectDefinitionQuery('postgres', 'public', 'v');
     expect(sql).toContain('pg_views');
     expect(sql).not.toContain('pg_proc');
   });
@@ -722,9 +757,9 @@ describe('PgDsqlDialect', () => {
   });
 
   it('inherits working PG SQL for schemas, views, indexes and comments', () => {
-    expect(dialect.listSchemasSQL('postgres')).toContain('pg_namespace');
-    expect(dialect.listViewsSQL('postgres')).toContain('pg_views');
-    expect(dialect.listIndexesSQL('postgres', 'public', 't')).toContain('pg_index');
+    expect(dialect.listSchemasQuery('postgres').sql).toContain('pg_namespace');
+    expect(dialect.listViewsQuery('postgres').sql).toContain('pg_views');
+    expect(dialect.listIndexesQuery('postgres', 'public', 't').sql).toContain('pg_index');
   });
 });
 
@@ -898,26 +933,34 @@ describe('quoteLiteral — engine-correct string literals (J-134)', () => {
     expect(getDialect('mssql').quoteLiteral('C:\\path')).toBe("'C:\\path'");
   });
 
-  it('escapes the metadata predicates, not just the result-set literals', () => {
-    // The J-52 work fixed `formatLiteral` and left every metadata query on the old escape. These
-    // are the schema/table names that reach the dialect from the explorer and from IPC arguments.
+  it('binds the metadata predicates rather than escaping into them (J-135)', () => {
+    // J-134 asserted here that the schema name was ESCAPED INTO the predicate. J-135 removes the
+    // escaping question from this surface entirely: the name is bound, so the predicate carries a
+    // placeholder and the name travels beside the SQL. Escaping it back in would be the
+    // regression this now catches.
     const hostile = 'x\\'; // a schema name ending in a backslash
 
-    expect(getDialect('mysql').listTablesSQL('db', hostile)).toContain(
-      String.raw`TABLE_SCHEMA = 'x\\'`
-    );
-    expect(getDialect('postgresql').listTablesSQL('db', hostile)).toContain(
-      String.raw`t.schemaname = E'x\\'`
-    );
-    expect(getDialect('postgresql', 'dsql').listTablesSQL('db', hostile)).toContain(
-      String.raw`t.schemaname = E'x\\'`
-    );
+    const mysql = getDialect('mysql').listTablesQuery('db', hostile);
+    expect(mysql.sql).toContain('TABLE_SCHEMA = ?');
+    expect(mysql.sql).not.toContain(hostile);
+    expect(mysql.params).toEqual([hostile]);
+
+    const pg = getDialect('postgresql').listTablesQuery('db', hostile);
+    expect(pg.sql).toContain('t.schemaname = $1');
+    expect(pg.sql).not.toContain(hostile);
+    expect(pg.params).toEqual([hostile]);
+
+    const dsql = getDialect('postgresql', 'dsql').listTablesQuery('db', hostile);
+    expect(dsql.sql).toContain('t.schemaname = $1');
+    expect(dsql.sql).not.toContain(hostile);
+    expect(dsql.params).toEqual([hostile]);
   });
 
-  it('escapes both halves of a schema-qualified metadata lookup', () => {
-    const sql = getDialect('mysql').listColumnsSQL('db', 's\\', 't\\');
-    expect(sql).toContain(String.raw`TABLE_SCHEMA = 's\\'`);
-    expect(sql).toContain(String.raw`TABLE_NAME = 't\\'`);
+  it('binds both halves of a schema-qualified metadata lookup (J-135)', () => {
+    const { sql, params } = getDialect('mysql').listColumnsQuery('db', 's\\', 't\\');
+    expect(sql).toContain('TABLE_SCHEMA = ?');
+    expect(sql).toContain('TABLE_NAME = ?');
+    expect(params).toEqual(['s\\', 't\\']);
   });
 
   it('formatLiteral and quoteLiteral agree on every engine', () => {
@@ -933,3 +976,125 @@ describe('quoteLiteral — engine-correct string literals (J-134)', () => {
     expect(getDialect('mysql').formatLiteral(value)).toBe(getDialect('mysql').quoteLiteral(value));
   });
 });
+
+describe('metadata queries bind their arguments (J-135)', () => {
+  /**
+   * The schema, table and object names below reach the dialect from the explorer, from IPC
+   * arguments, and — through `ToolRegistry` — from an LLM tool call. J-134 made the escaping of
+   * those names engine-correct; J-135 takes them out of the SQL text altogether.
+   *
+   * These sweeps are deliberately mechanical: they run every metadata builder on every engine
+   * that binds, so a new builder written with `quoteLiteral` in a predicate fails here rather
+   * than waiting for someone to notice it.
+   */
+
+  /** A name carrying every character that has ever been an escape problem on this surface. */
+  const HOSTILE = "p'; DROP TABLE victim; -- \\";
+
+  interface BuilderCase {
+    readonly name: string;
+    readonly run: (dialect: SQLDialect) => ParameterisedQuery | null;
+  }
+
+  const CASES: BuilderCase[] = [
+    { name: 'listSchemasQuery', run: d => d.listSchemasQuery(HOSTILE) },
+    { name: 'listTablesQuery', run: d => d.listTablesQuery(HOSTILE, HOSTILE) },
+    { name: 'listViewsQuery', run: d => d.listViewsQuery(HOSTILE, HOSTILE) },
+    { name: 'listProceduresQuery', run: d => d.listProceduresQuery(HOSTILE, HOSTILE) },
+    { name: 'listFunctionsQuery', run: d => d.listFunctionsQuery(HOSTILE, HOSTILE) },
+    { name: 'listColumnsQuery', run: d => d.listColumnsQuery(HOSTILE, HOSTILE, HOSTILE) },
+    { name: 'listIndexesQuery', run: d => d.listIndexesQuery(HOSTILE, HOSTILE, HOSTILE) },
+    { name: 'listForeignKeysQuery', run: d => d.listForeignKeysQuery(HOSTILE, HOSTILE, HOSTILE) },
+    { name: 'listConstraintsQuery', run: d => d.listConstraintsQuery(HOSTILE, HOSTILE, HOSTILE) },
+    { name: 'listTriggersQuery', run: d => d.listTriggersQuery(HOSTILE, HOSTILE, HOSTILE) },
+    {
+      name: 'getObjectDefinitionQuery',
+      run: d => d.getObjectDefinitionQuery(HOSTILE, HOSTILE, HOSTILE),
+    },
+    {
+      name: 'listObjectCommentsQuery',
+      run: d => d.listObjectCommentsQuery(HOSTILE, HOSTILE, HOSTILE),
+    },
+    { name: 'rowCountQuery', run: d => d.rowCountQuery(HOSTILE, HOSTILE) },
+  ];
+
+  const BINDING_DIALECTS: ReadonlyArray<readonly [string, SQLDialect]> = [
+    ['postgresql', getDialect('postgresql')],
+    ['postgresql/dsql', getDialect('postgresql', 'dsql')],
+    ['mysql', getDialect('mysql')],
+  ];
+
+  describe.each(BINDING_DIALECTS)('%s', (label, dialect) => {
+    it.each(CASES.map(c => [c.name, c] as const))(
+      '%s keeps the hostile name out of the SQL text',
+      (_name, builder) => {
+        const query = builder.run(dialect);
+        if (query === null) return; // only listObjectCommentsQuery may decline; none do here
+
+        expect(query.sql).not.toContain(HOSTILE);
+        // Nor any escaped rendering of it — the point is that no form of the value is present.
+        expect(query.sql).not.toContain('DROP TABLE victim');
+        // Every value this builder bound is one we passed in; nothing else got bound.
+        for (const value of query.params) expect(value).toBe(HOSTILE);
+      }
+    );
+
+    it.each(CASES.map(c => [c.name, c] as const))(
+      '%s emits exactly as many placeholders as it binds',
+      (_name, builder) => {
+        const query = builder.run(dialect);
+        if (query === null) return;
+        expect(countPlaceholders(label, query.sql)).toBe(query.params.length);
+      }
+    );
+  });
+
+  it('SQL Server carries no metadata parameters — TsqlBuilder still writes its own literals', () => {
+    // MSSQL is deliberately untouched by J-135. T-SQL has no backslash escape in any
+    // configuration, so `TsqlBuilder.escapeString` is correct, and rewriting its 65 call sites to
+    // bind would be risk without a security gain. The empty `params` array is what keeps these
+    // on `ConnectionPoolManager.query` (`request.batch`), byte-identical to before.
+    const mssql = getDialect('mssql');
+    for (const builder of CASES) {
+      if (builder.name === 'rowCountQuery') continue; // binds on every engine, see below
+      const query = builder.run(mssql);
+      expect(query, `${builder.name} returned null on mssql`).not.toBeNull();
+      expect(query?.params, `${builder.name} bound values on mssql`).toEqual([]);
+    }
+  });
+
+  it('rowCountQuery binds on every engine, SQL Server included (J-136)', () => {
+    // The one query whose arguments come from an LLM tool call rather than the explorer.
+    expect(getDialect('mssql').rowCountQuery(HOSTILE, HOSTILE)).toEqual({
+      sql: expect.stringContaining('@p0'),
+      params: [HOSTILE, HOSTILE],
+    });
+    expect(getDialect('postgresql').rowCountQuery(HOSTILE, HOSTILE).params).toEqual([
+      HOSTILE,
+      HOSTILE,
+    ]);
+    expect(getDialect('mysql').rowCountQuery(HOSTILE, HOSTILE).params).toEqual([HOSTILE, HOSTILE]);
+  });
+
+  it('rowCountQuery rejects a non-string argument', () => {
+    // The arguments arrive as untyped JSON from a tool call; a non-string would otherwise be
+    // coerced into the parameter list and surprise the driver.
+    const mysql = getDialect('mysql');
+    expect(() => mysql.rowCountQuery(7 as unknown as string, 't')).toThrow(/must be a string/);
+    expect(() => mysql.rowCountQuery('s', null as unknown as string)).toThrow(/must be a string/);
+  });
+});
+
+/**
+ * Count bind placeholders in `sql`.
+ *
+ * PostgreSQL numbers its placeholders and may repeat one, so the count is the highest ordinal
+ * seen; MySQL's are positional, so the count is the number of `?` characters. Neither engine's
+ * metadata SQL contains a `?` or a `$n` inside a quoted literal, and this asserts it stays
+ * that way — one that did would make the count silently wrong.
+ */
+function countPlaceholders(label: string, sql: string): number {
+  if (label === 'mysql') return (sql.match(/\?/g) ?? []).length;
+  const ordinals = [...sql.matchAll(/\$(\d+)/g)].map(m => Number(m[1]));
+  return ordinals.length === 0 ? 0 : Math.max(...ordinals);
+}
