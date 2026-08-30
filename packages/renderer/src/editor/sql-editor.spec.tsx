@@ -874,6 +874,145 @@ describe('live prop changes', () => {
   });
 });
 
+// ── Every preference, one field at a time (J-44) ───────────────────────────────────────────
+
+/**
+ * One `EditorSettings` field: two settings objects differing only in it, and the Monaco option each
+ * of them must produce.
+ *
+ * TWO values per field, never one, because a single value cannot tell a derived option from a
+ * hardcoded one that happens to agree with it — which is the exact shape of the defect J-44 exists
+ * for. The Angular editor hardcoded `minimap: { enabled: false }` (`query.component.ts:1271`) and
+ * the shipped default is `false` as well, so a test that only ever asks for the default is green
+ * against the bug. Asserting both values is what makes these tests discriminating.
+ *
+ * `surface` is which of Monaco's two option bags the value belongs in, and it is not a detail:
+ * `tabSize` is `ITextModelUpdateOptions` (`monaco-editor/esm/vs/editor/editor.api.d.ts:1987-1993`),
+ * NOT `IEditorOptions`, so it reaches the model and asserting it on the editor would assert nothing.
+ */
+interface PreferenceCase {
+  readonly field: keyof AppSettings['editor'];
+  readonly surface: 'editor' | 'model';
+  readonly settings: readonly [AppSettings['editor'], AppSettings['editor']];
+  readonly expected: readonly [Record<string, unknown>, Record<string, unknown>];
+}
+
+/** Builds a case, erasing the field's generic so `it.each` can carry all six in one array. */
+function preference<K extends keyof AppSettings['editor']>(
+  field: K,
+  surface: 'editor' | 'model',
+  values: readonly [AppSettings['editor'][K], AppSettings['editor'][K]],
+  optionFor: (value: AppSettings['editor'][K]) => Record<string, unknown>
+): PreferenceCase {
+  const [first, second] = values;
+  if (first === second) {
+    throw new Error(`[spec] "${field}" needs two DIFFERENT values to discriminate`);
+  }
+  return {
+    field,
+    surface,
+    settings: [
+      { ...DEFAULT_SETTINGS.editor, [field]: first },
+      { ...DEFAULT_SETTINGS.editor, [field]: second },
+    ],
+    expected: [optionFor(first), optionFor(second)],
+  };
+}
+
+const PREFERENCES: readonly PreferenceCase[] = [
+  preference('fontSize', 'editor', [13, 20], value => ({ fontSize: value })),
+  preference('tabSize', 'model', [4, 2], value => ({ tabSize: value })),
+  preference('wordWrap', 'editor', [false, true], value => ({ wordWrap: value ? 'on' : 'off' })),
+  preference('minimap', 'editor', [false, true], value => ({ minimap: { enabled: value } })),
+  preference('lineNumbers', 'editor', [true, false], value => ({
+    lineNumbers: value ? 'on' : 'off',
+  })),
+  // One switch, two Monaco options: it splits "as you type" from "on demand", and the setting's
+  // label promises only the first — ⌃Space still works with it off.
+  preference('autoComplete', 'editor', [true, false], value => ({
+    quickSuggestions: value,
+    suggestOnTriggerCharacters: value,
+  })),
+];
+
+/** The last options handed to the model, at create or on a live change. */
+function lastModelOptions(): Record<string, unknown> {
+  const call = state.model.updateOptions.mock.calls.at(-1);
+  if (call === undefined) throw new Error('[spec] the model was never given options');
+  return call[0] as Record<string, unknown>;
+}
+
+/** What the component handed Monaco when it CREATED the editor, on the surface named. */
+function optionsAtCreate(surface: 'editor' | 'model'): Record<string, unknown> {
+  if (surface === 'model') return lastModelOptions();
+  const created = lastCreate();
+  if (created === undefined) throw new Error('[spec] no editor was created');
+  return created.options;
+}
+
+/** What a LIVE settings change pushed, on the surface named. */
+function optionsAtUpdate(surface: 'editor' | 'model'): Record<string, unknown> {
+  if (surface === 'model') return lastModelOptions();
+  const call = lastEditor().updateOptions.mock.calls.at(-1);
+  if (call === undefined) throw new Error('[spec] updateOptions was never called');
+  return call[0] as Record<string, unknown>;
+}
+
+/** Renders with one settings object and hands back the function that swaps in another. */
+function renderThenChange(initial: AppSettings['editor']) {
+  const props = {
+    handleRef: createRef<SqlEditorHandle>(),
+    defaultValue: 'select 1',
+    language: 'sql' as const,
+    theme: 'dark' as const,
+    onChange: () => undefined,
+    onCursorPositionChange: () => undefined,
+    onExecuteShortcut: () => undefined,
+    onExecute: () => undefined,
+  };
+  const { rerender } = render(<SqlEditor {...props} editorSettings={initial} />);
+  return (next: AppSettings['editor']) => {
+    rerender(<SqlEditor {...props} editorSettings={next} />);
+  };
+}
+
+describe('every editor preference is live', () => {
+  it('has a case for every EditorSettings field', () => {
+    // The completeness guard: a seventh preference added to `EditorSettings` without a case here
+    // fails this, rather than silently shipping inert like the first six did.
+    expect([...PREFERENCES.map(preferenceCase => preferenceCase.field)].sort()).toEqual(
+      Object.keys(DEFAULT_SETTINGS.editor).sort()
+    );
+  });
+
+  it.each(PREFERENCES)('$field reaches Monaco at create, at either value', preferenceCase => {
+    const { settings, expected, surface } = preferenceCase;
+
+    mount({ editorSettings: settings[0] });
+    expect(optionsAtCreate(surface)).toMatchObject(expected[0]);
+
+    mount({ editorSettings: settings[1] });
+    expect(optionsAtCreate(surface)).toMatchObject(expected[1]);
+  });
+
+  it.each(PREFERENCES)('$field follows a change made while the editor is open', preferenceCase => {
+    const { settings, expected, surface } = preferenceCase;
+
+    // BOTH directions, and that is not belt-and-braces: asserting only the change to the second
+    // value passes against an option hardcoded to that value, which a mutation run caught doing
+    // exactly that for `tabSize` and `wordWrap` (the Angular constants were `2` and `'on'`).
+    const change = renderThenChange(settings[0]);
+    change(settings[1]);
+    expect(optionsAtUpdate(surface)).toMatchObject(expected[1]);
+
+    change(settings[0]);
+    expect(optionsAtUpdate(surface)).toMatchObject(expected[0]);
+
+    // And not by reopening: recreating the editor would discard the document and the undo stack.
+    expect(state.created).toHaveLength(1);
+  });
+});
+
 describe('teardown', () => {
   it('disposes both subscriptions and the editor', () => {
     const { view } = mount();
