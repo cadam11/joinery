@@ -8,9 +8,8 @@ this page and nothing else describes it.
 ```
 git tag v1.0.0 && git push origin v1.0.0
         │
-        ├─ build (macos-latest)  ── DMG + zip, arm64 and x64
-        │     └─ sign + notarize IF the five Apple secrets exist, else a loud skip
-        ├─ build (windows-latest) ── NSIS + zip, x64 and arm64   (never signed today)
+        ├─ build (macos-latest)  ── DMG + zip, arm64 and x64      (unsigned)
+        ├─ build (windows-latest) ── NSIS + zip, x64 and arm64    (unsigned)
         │
         ├─ release (ubuntu) ── collect artifacts → SHA256SUMS.txt → GitHub Release
         │
@@ -22,58 +21,104 @@ git tag v1.0.0 && git push origin v1.0.0
 Nothing here runs on a branch, a PR, or a manual dispatch of `main`. The trigger is `push: tags: v*`
 and there is no other way in — a release is a tag, and a tag is a release.
 
-## The signing gate
+## Signing: there isn't any
 
-Apple Developer credentials do not exist yet. The workflow is written so that the day they do,
-adding five repository secrets is the entire change; no YAML edit, no config edit.
+**Craig's ruling, 2026-08-30: no Apple Developer Program membership.** That is a decision about
+money and administrative overhead, not an oversight, and this design takes it at face value rather
+than leaving a dormant signing path in the workflow pretending otherwise.
 
-| Secret                        | What it is                                                   |
-| ----------------------------- | ------------------------------------------------------------ |
-| `CSC_LINK`                    | base64 of the Developer ID Application `.p12`                |
-| `CSC_KEY_PASSWORD`            | that `.p12`'s export password                                |
-| `APPLE_ID`                    | the Apple ID that owns the Developer Program membership      |
-| `APPLE_APP_SPECIFIC_PASSWORD` | an app-specific password for that Apple ID, for `notarytool` |
-| `APPLE_TEAM_ID`               | the 10-character team identifier                             |
+What that means concretely:
 
-All five, or none. The `Resolve signing mode` step counts them and sets one output:
+- `electron-builder.yml` sets `mac.identity: null`. app-builder-lib's own schema documents the
+  three states: unset means "search the keychain", `null` means "skip signing entirely", `"-"`
+  means "ad-hoc". `null` is the only one whose behaviour does not depend on which certificates
+  happen to be installed on the machine running the build, so a developer's local
+  `pnpm run package:dmg` produces the same unsigned artifact CI does.
+- `MacPackager.sign()` returns at `handleNullIdentity()` before it would reach
+  `notarizeIfProvided()`, so notarization is not merely unconfigured — it is unreachable.
+- The workflow carries **no** `CSC_*` or `APPLE_*` secret, no signing gate, no `spctl --assess`
+  step, and no conditional release notes. `scripts/release/unsigned-release.spec.ts` fails if any
+  of that comes back by accident.
 
-- **All five present** → the build step gets them as environment variables. electron-builder imports
-  the `.p12` into a temporary keychain, finds the Developer ID identity, signs with the hardened
-  runtime already configured in `electron-builder.yml`, then notarizes and staples — its
-  `notarizeIfProvided` reads `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` straight
-  off `process.env` (`app-builder-lib/out/mac/MacTargetHelper.js:219-270`), so no `notarize` block
-  is needed and none is added.
-- **Any missing** → `CSC_IDENTITY_AUTO_DISCOVERY=false` goes into the build environment, which is
-  electron-builder's documented "do not look for an identity" switch. It skips signing, and because
-  `MacPackager.sign` returns before `notarizeIfProvided` when there is no identity
-  (`macPackager.js:295-320`), notarization is never attempted either. The workflow emits a
-  `::warning::` annotation, the job summary says **UNSIGNED**, and the release notes carry the
-  Gatekeeper instructions.
+### Why not ad-hoc signing
 
-There is no third state. Nothing ad-hoc signs, nothing sets `identity: "-"`, nothing strips a
-quarantine attribute on the user's behalf. An unsigned build is labelled unsigned everywhere it is
-mentioned: the annotation, the job summary, the release body, and the install page.
+`mac.identity: "-"` would ad-hoc sign the bundle, which would give it a stable code-signing
+identifier (`ca.adam11.joinery` instead of the Electron binary's inherited `Electron`) and sealed
+resources. It was considered and rejected for v1:
 
-Windows is deliberately outside the gate. It has never been signed, `electron-builder.yml` has no
-`win.certificateFile`, and the v1 checklist proposes Windows signing as optional. The Windows leg
-builds and uploads exactly as it does today, and the release notes say SmartScreen will warn.
+- It buys **nothing** from Gatekeeper. An ad-hoc signature is not a Developer ID signature; the
+  quarantine refusal on first launch is identical.
+- It would apply `hardenedRuntime: true` and `resources/entitlements.mac.plist` to the app for the
+  first time. That plist contains `com.apple.security.keychain-access-groups` with an unresolved
+  `$(AppIdentifierPrefix)` — an Xcode build-setting variable that `codesign` does not substitute.
+  Joinery's entire credential store is keytar over the macOS Keychain, so the failure mode of
+  getting that wrong is "v1 cannot save a connection password", discoverable only by launching a
+  packaged build and connecting to a database.
+- The artifact shipped today is the artifact that has been built, mounted, `verify:package`-ed and
+  run. Changing its signing state for zero user-visible benefit is risk without return.
+
+Filed as a follow-up rather than done here.
+
+### What a user actually has to do
+
+An unsigned app that arrives with `com.apple.quarantine` set is refused on first launch. Three
+facts govern the advice we give, and each of them was checked rather than assumed:
+
+1. **Homebrew quarantines what it installs, and the flag lands on every file in the bundle.**
+   `Cask::Download#fetch` calls `quarantine(downloaded_path)`, and
+   `#extract_primary_container` then calls `Quarantine.propagate`, which globs `to/**/*` and
+   writes the attribute onto every path it finds (Homebrew 6.0.20,
+   `Library/Homebrew/cask/download.rb:75` and `:128`). So the removal command is
+   `xattr -dr`, with the `-r`; the non-recursive form leaves the app blocked.
+2. **There is no opt-out.** Homebrew removed `--no-quarantine` on 2026-07-30 (commit
+   `ba25213c81`, "Remove leftover code for `--no-quarantine`"), and there is no `quarantine:`
+   cask stanza. On macOS, `Quarantine.available?` is true whenever `xattr` is present
+   (`extend/os/mac/cask/quarantine.rb`), so this is not a thing that quietly stops happening.
+3. **Control-click → Open no longer works.** Apple: _"In macOS Sequoia, users will no longer be
+   able to Control-click to override Gatekeeper when opening software that isn't signed correctly
+   or notarized. They'll need to visit System Settings > Privacy & Security to review security
+   information for software before allowing it to run."_
+   (<https://developer.apple.com/news/?id=saqachfa>). Every place Joinery documented
+   right-click → Open was wrong for macOS 15 and later, which includes the macOS 26 this is
+   written on.
+
+So the instruction everywhere — cask `caveats`, tap README, release notes, install page, README —
+is: **System Settings → Privacy & Security → Open Anyway**, with Control-click → Open named as the
+Sonoma-and-earlier alternative and `xattr -dr` as the terminal route.
+
+### Why the cask has no `postflight`
+
+A cask can run arbitrary Ruby in a `postflight` block, and one line there would strip the
+quarantine flag on the user's behalf. It is not there. Homebrew quarantines deliberately and no
+longer lets the user turn that off; a cask that undoes it is the software asserting its own
+trustworthiness on a machine that has not agreed to that. It would also make the caveat a lie, and
+the caveat is the only place a user learns what is going on. The user does the one extra step, or
+runs `xattr -dr` themselves, and either way it is their decision.
+
+Windows is unsigned for the same reason and always has been: `electron-builder.yml` has no
+`win.certificateFile`, and the release notes say SmartScreen will warn.
 
 ## Token permissions
 
 The workflow defaults to `permissions: contents: read` and each job re-declares what it needs, so
 that adding a job cannot silently inherit write access:
 
-| Job        | `GITHUB_TOKEN`    | Why                                                     |
-| ---------- | ----------------- | ------------------------------------------------------- |
-| `guard`    | `contents: read`  | checkout only                                           |
-| `build`    | `contents: read`  | checkout; artifact upload uses the runner's own token   |
-| `release`  | `contents: write` | `gh release create` — the only writer in the workflow   |
-| `homebrew` | `contents: read`  | checkout and `gh release download`                      |
+| Job        | `GITHUB_TOKEN`    | Why                                                   |
+| ---------- | ----------------- | ----------------------------------------------------- |
+| `guard`    | `contents: read`  | checkout; reads the tap through `HOMEBREW_TAP_TOKEN`  |
+| `build`    | `contents: read`  | checkout; artifact upload uses the runner's own token |
+| `release`  | `contents: write` | `gh release create` — the only writer in the workflow |
+| `homebrew` | `contents: read`  | checkout and `gh release download`                    |
 
 The `build` job matters most: it runs third-party install and build scripts (pnpm lifecycle hooks,
-`node-gyp`, electron-builder) on a runner that also holds the Apple signing secrets, so it must not
-also hold a token that can write to the repository. The tap push is a different repository and is
+`node-gyp`, electron-builder), so it must not hold a token that can write to the repository. It now
+holds no secret at all — not even `GITHUB_TOKEN` on the electron-builder step, which was dead
+credential-passing under `publish: null`. The tap push is a different repository and is
 authenticated by `HOMEBREW_TAP_TOKEN`, never by `GITHUB_TOKEN`.
+
+`HOMEBREW_TAP_TOKEN` is the workflow's only secret, and `guard` spends one API call proving it can
+read the tap **before** anything is published — the failure it prevents is a permanent public
+GitHub Release that Homebrew users cannot `brew upgrade` into.
 
 ## Checksums
 
@@ -92,12 +137,11 @@ The tap is `github.com/cadam11/homebrew-joinery`, public, holding `Casks/joinery
 `cadam11/joinery/joinery` is how Homebrew spells "the `joinery` cask in the `joinery` tap owned by
 `cadam11`".
 
-**It does not exist yet.** Creating it is one command —
-`./scripts/release/bootstrap-tap.sh`, which copies `Casks/joinery.rb`, `Casks/TAP_README.md` and
-`LICENSE` into a fresh repository and pushes it. The script is idempotent: run against an existing
-tap it says so and touches nothing, so it is safe to leave in the tree. `--dry-run` stages the
-commit in a temp directory and stops. The bootstrap has to run before the first tag is pushed, or
-the `homebrew` job fails on a checkout of a repository that is not there.
+**It exists** (created 2026-08-30 by `./scripts/release/bootstrap-tap.sh`, which copies
+`Casks/joinery.rb`, `Casks/TAP_README.md` and `LICENSE` into a fresh repository and pushes it). The
+script is idempotent — run against an existing tap it says so and touches nothing — so it stays in
+the tree for the day the tap has to be rebuilt. Its cask is still the `0.0.0` template; the first
+tag replaces it.
 
 **`Casks/joinery.rb` in _this_ repo is the template and the single source of truth.** It is committed
 with `version "0.0.0"` and all-zero checksums, which is not installable and is not meant to be. On a
@@ -114,11 +158,9 @@ The push crosses a repository boundary, so `GITHUB_TOKEN` cannot do it. It needs
 Absent, the `homebrew` job fails loudly rather than skipping — a release whose tap was not updated is
 a release nobody can `brew upgrade` into, and that should be visible, not quiet.
 
-**The cask installs an unsigned app until notarization exists.** Homebrew quarantines what it
-installs; on an unsigned build the first launch is refused. The cask does not carry a
-`quarantine: false` stanza to paper over that, because that would be Joinery telling the user's
-machine to trust Joinery. The install page documents the one-time right-click → Open instead, and
-that paragraph is deleted on the release where the notarization secrets first exist.
+The cask's `caveats` and the tap README both carry the first-launch instructions, and
+`scripts/release/unsigned-release.spec.ts` asserts every `xattr` line in the repository is
+recursive. See "What a user actually has to do" above.
 
 ## Version, checksums, and the script
 
@@ -156,9 +198,9 @@ Rewritten or dropped:
   release job asserts what it publishes.
 - **Step 8, the wiki.** The wiki does not exist; J-100 repointed Help ▸ Documentation at
   <https://usejoinery.com/>. The whole wiki-author section is gone, replaced by the docs-site pass
-  the v1 checklist §4 identified. That page is written in the future tense today, because there is
-  no release to download; the rewritten command carries the instruction to flip it to the present
-  tense on the first tag, and to delete its unsigned-build section on the first signed one.
+  the v1 checklist identified. That page is written in the future tense today, because there is no
+  release to download; the rewritten command carries the instruction to flip it to the present
+  tense on the first tag. Its unsigned-build section is not temporary and does not get deleted.
 - **Nothing about signing, notarization, checksums or Homebrew was in the skill**, because none of it
   existed. All of it is new here.
 
@@ -172,3 +214,8 @@ choose, running the harness before tagging, and the human judgement about releas
 - **Linux.** `electron-builder.yml` targets mac and win, deliberately.
 - **Mac App Store.** Craig's ruling: no MAS distribution. No `mas` target, no provisioning profile.
 - **A Windows package manager** (winget, Scoop). Homebrew first because macOS is the primary target.
+- **Apple Developer ID signing and notarization.** Craig's ruling, 2026-08-30. If that changes, the
+  work is: buy the membership, export the `.p12`, add five secrets, set `mac.identity` back to
+  unset (or to the identity name), restore the `spctl --assess` gate, and delete the unsigned
+  paragraphs from the cask `caveats`, the tap README, the install page and the README. It is a
+  contained change and it is written down here so it does not have to be rediscovered.
