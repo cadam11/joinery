@@ -94,7 +94,7 @@ export function generateQueryTitle(sql: string | undefined, index: number): stri
   return preview.length < cleaned.length ? `${preview}…` : preview;
 }
 
-/** The subset of a saved GoldenLayout/Dockview component state a tab can be rebuilt from. */
+/** The subset of a saved Dockview component state a tab can be rebuilt from. */
 export interface LayoutTabState {
   tabId: string;
   tabType: string;

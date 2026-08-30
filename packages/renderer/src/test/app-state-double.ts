@@ -94,12 +94,12 @@ export function createAppStateDouble(initial?: AppStateWithReactRenderer): AppSt
       },
       saveLayout: config => {
         calls.saveLayout += 1;
-        persisted = { ...persisted, goldenLayoutConfig: structuredClone(config) };
+        persisted = { ...persisted, workspaceLayout: structuredClone(config) };
         return Promise.resolve();
       },
       getLayout: () => {
         calls.getLayout += 1;
-        return Promise.resolve(structuredClone(persisted.goldenLayoutConfig));
+        return Promise.resolve(structuredClone(persisted.workspaceLayout));
       },
     },
     snapshot: () => structuredClone(persisted),

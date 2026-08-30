@@ -211,17 +211,17 @@ export class AppStateStore extends BaseSingleton {
   }
 
   /**
-   * Get golden layout config
+   * Get the persisted workspace layout
    */
-  getGoldenLayoutConfig(): LayoutConfig | undefined {
-    return this.getState().goldenLayoutConfig;
+  getWorkspaceLayout(): LayoutConfig | undefined {
+    return this.getState().workspaceLayout;
   }
 
   /**
-   * Set golden layout config
+   * Set the persisted workspace layout
    */
-  setGoldenLayoutConfig(config: LayoutConfig | undefined): void {
-    this.setState({ goldenLayoutConfig: config });
+  setWorkspaceLayout(config: LayoutConfig | undefined): void {
+    this.setState({ workspaceLayout: config });
   }
 
   /**

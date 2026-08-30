@@ -387,7 +387,7 @@ export interface JoineryAPI {
     setState: (partial: Partial<AppState>) => Promise<void>;
     saveTabs: (tabs: TabState[], activeTabId: string | null) => Promise<void>;
     getTabs: () => Promise<{ tabs: TabState[]; activeTabId: string | null }>;
-    // GoldenLayout persistence
+    // Workspace layout persistence
     saveLayout: (config: LayoutConfig | undefined) => Promise<void>;
     getLayout: () => Promise<LayoutConfig | undefined>;
     // Atomic save-dialog + file write (main process shows dialog and writes)
@@ -813,7 +813,7 @@ const joineryAPI: JoineryAPI = {
     saveTabs: (tabs, activeTabId) =>
       ipcRenderer.invoke(IPC_CHANNELS.APP.SAVE_TABS, tabs, activeTabId),
     getTabs: () => ipcRenderer.invoke(IPC_CHANNELS.APP.GET_TABS),
-    // GoldenLayout persistence
+    // Workspace layout persistence
     saveLayout: config => ipcRenderer.invoke(IPC_CHANNELS.APP.SAVE_LAYOUT, config),
     getLayout: () => ipcRenderer.invoke(IPC_CHANNELS.APP.GET_LAYOUT),
     saveToFile: (options, content) =>

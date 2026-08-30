@@ -32,7 +32,6 @@ import type {
   AppState,
   EditorSettings,
   GridSettings,
-  LayoutConfig,
   QuerySettings,
   ThemePreference,
 } from '@joinery/shared';
@@ -127,13 +126,6 @@ export interface ReactRendererState {
   confirmedCtrlEExecute?: boolean;
   /** From `joinery-flyway-placeholder-values`: remembered placeholder substitutions. */
   flywayPlaceholderValues?: Record<string, string>;
-  /**
-   * The Golden Layout tree the Angular renderer had saved, kept verbatim the first time the React
-   * renderer overwrites `goldenLayoutConfig` (Decision C: migrate by reset). Nothing reads it —
-   * it exists so "the swap deleted a user's window arrangement" is not true even though the
-   * decision would have allowed it. See `layout.ts`.
-   */
-  legacyGoldenLayoutConfig?: LayoutConfig;
 }
 
 /**
@@ -264,15 +256,6 @@ export function validateReactRendererState(value: unknown): ReactRendererState {
   }
   if (isStringRecord(value['flywayPlaceholderValues'])) {
     validated.flywayPlaceholderValues = value['flywayPlaceholderValues'];
-  }
-  // Opaque by design: nothing reads it, so it is kept exactly as it was found and checked only for
-  // being an object. The double assertion says so out loud — a Golden Layout tree written by an
-  // older app version need not satisfy today's `LayoutConfig`, and this field's job is to preserve
-  // whatever was there, not to vouch for it.
-  if (isRecord(value['legacyGoldenLayoutConfig'])) {
-    validated.legacyGoldenLayoutConfig = value[
-      'legacyGoldenLayoutConfig'
-    ] as unknown as LayoutConfig;
   }
   return validated;
 }

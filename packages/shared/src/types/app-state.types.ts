@@ -40,8 +40,8 @@ export interface AppState {
   activeTabId: string | null;
   recentWorkspaces: string[];
   currentWorkspacePath: string | null;
-  /** Serialized GoldenLayout configuration */
-  goldenLayoutConfig?: LayoutConfig;
+  /** Serialized workspace arrangement. See `renderer/src/persistence/layout.ts` for the envelope. */
+  workspaceLayout?: LayoutConfig;
   /** AI settings */
   aiSettings?: AISettings;
   /** Chat panel width in pixels */
@@ -74,13 +74,13 @@ export interface WorkspaceInfo {
 }
 
 /**
- * GoldenLayout-based workspace configuration for flexible tab layouts
+ * Workspace configuration for flexible tab layouts
  */
 export interface WorkspaceLayoutConfig {
   /** Schema version for future migrations */
   version: number;
 
-  /** Golden Layout state (may be undefined if cleared due to corruption) */
+  /** Serialized workspace layout (may be undefined if cleared due to corruption) */
   layout?: LayoutConfig;
 
   /** ID of currently active tab */
@@ -91,7 +91,7 @@ export interface WorkspaceLayoutConfig {
 }
 
 /**
- * Layout configuration (Golden Layout serialized state)
+ * Layout configuration: the serialized workspace tree, as written by the renderer.
  */
 export interface LayoutConfig {
   root: LayoutNode;
@@ -116,7 +116,7 @@ export interface LayoutNode {
 }
 
 /**
- * Individual tab definition for GoldenLayout
+ * Individual tab definition for the workspace layout
  */
 export interface WorkspaceTab {
   /** Unique ID for this tab */

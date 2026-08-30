@@ -3,11 +3,11 @@
  *
  * ── The decision ─────────────────────────────────────────────────────────────────────────────
  *
- * Craig's binding answer to Decision C (PLAN.md §5): *migrate by reset*. `AppState.goldenLayoutConfig`
- * holds Golden Layout's serialized tree; Dockview's is a different shape and no translator gets
- * written. On its first launch the React renderer IGNORES whatever is stored, rebuilds the workspace
- * from the still-valid `saveTabs`/`getTabs` list, and writes its own shape from then on. The
- * `LayoutConfig` type in `app-state.types.ts` keeps serializing — it just holds something else.
+ * Craig's binding answer to Decision C (PLAN.md §5): *migrate by reset*. The renderer rebuilds the
+ * workspace from the still-valid `saveTabs`/`getTabs` list and writes its own shape from then on.
+ * J-89 finished the job by renaming the persisted key from `goldenLayoutConfig` to
+ * `AppState.workspaceLayout` with no migration: anything left under the old key is dead bytes that
+ * nothing in this app reads.
  *
  * ── The shape, and why it is this shape ──────────────────────────────────────────────────────
  *
@@ -15,25 +15,17 @@
  * `componentType: string` and `componentState: Record<string, unknown>`. So a React layout is a
  * single component node — no `content` array — carrying the opaque Dockview blob in its
  * `componentState`. That satisfies the existing type with no change to `packages/shared`, and it
- * gives two properties for free:
+ * makes the stored value **self-identifying**: `decodeReactLayout` returns `undefined` for anything
+ * that is not a current-version React envelope, so a corrupted, foreign or future-version blob
+ * degrades to "rebuild from the tab list" instead of to a crash.
  *
- * 1. **It is self-identifying.** A Golden Layout root is a `row`/`column`/`stack` with children; a
- *    React root is a `component` whose `componentType` is the marker below. `decodeReactLayout`
- *    returns `undefined` for anything else, which is exactly the "ignore it" half of Decision C.
- * 2. **The Angular renderer already ignores it.** Its loader guards with
- *    `savedLayout.root.content?.length` (`golden-layout-container.component.ts:404`) before touching
- *    a stored config, and a React root has no `content`. So during coexistence Angular falls
- *    straight through to its "no saved layout" branch and rebuilds from tabs, rather than trying to
- *    mount a panel type it has never heard of. `layout.spec.ts` asserts that guard directly.
- *
- * Task 7 owns the Dockview wiring and decides what goes in `dockview`; this module owns the envelope
- * and refuses to look inside it.
+ * `workspace.tsx` owns the Dockview wiring and decides what goes in `dockview`; this module owns the
+ * envelope and refuses to look inside it.
  */
 
 import type { LayoutConfig } from '@joinery/shared';
 import { ipc, isIpcAvailable } from '../ipc';
 import { diagnostics } from '../state/diagnostics';
-import { rendererStatePersistence, type RendererStatePersistence } from './renderer-state';
 
 /** The marker that makes a stored `LayoutConfig` recognisably ours. Never change it in place. */
 export const REACT_LAYOUT_COMPONENT_TYPE = 'joinery:react-workspace';
@@ -68,7 +60,7 @@ export function encodeReactLayout(payload: ReactLayoutPayload): LayoutConfig {
 
 /**
  * The payload if this config is a React one of a version we understand, `undefined` otherwise —
- * which covers a Golden Layout tree, a future version, and a corrupted blob alike. Never throws.
+ * which covers a foreign tree, a future version, and a corrupted blob alike. Never throws.
  */
 export function decodeReactLayout(
   config: LayoutConfig | undefined
@@ -97,21 +89,16 @@ export function decodeReactLayout(
   };
 }
 
-/** True for a config the Angular renderer wrote — the thing Decision C says to ignore. */
-export function isLegacyGoldenLayout(config: LayoutConfig | undefined): config is LayoutConfig {
-  return config !== undefined && decodeReactLayout(config) === undefined;
-}
-
 /** `locked` is the restore-before-save gate refusing the write — see `LayoutPersistence.unlock`. */
 export type LayoutWriteResult = 'saved' | 'locked' | 'unavailable' | 'failed';
 
 export interface LayoutPersistence {
   /**
-   * The stored React layout, or `undefined` when there is none to honour. Read-only: a Golden
-   * Layout config found here is left exactly where it is.
+   * The stored React layout, or `undefined` when there is none to honour. Read-only: a value it
+   * does not recognise is left exactly where it is.
    */
   read(): Promise<ReactLayoutPayload | undefined>;
-  /** Persists a React layout, archiving an Angular one on the way past. */
+  /** Persists a React layout. */
   save(payload: ReactLayoutPayload): Promise<LayoutWriteResult>;
   /**
    * Opens the write path. Called by `shell/boot.ts`'s `markRestoreApplied` — that is, by the
@@ -131,16 +118,7 @@ export interface LayoutPersistence {
   isUnlocked(): boolean;
 }
 
-export function createLayoutPersistence(
-  persistence: RendererStatePersistence = rendererStatePersistence
-): LayoutPersistence {
-  /**
-   * Whether the archive step below has already been settled this session. A resource, not state:
-   * it exists only to keep the common case at one IPC call instead of two, and being wrong about
-   * it costs a redundant no-op `update()`, never a wrong write.
-   */
-  let archiveSettled = false;
-
+export function createLayoutPersistence(): LayoutPersistence {
   /** The restore-before-save gate. See `LayoutPersistence.unlock`. */
   let writesUnlocked = false;
 
@@ -165,31 +143,6 @@ export function createLayoutPersistence(
       if (!writesUnlocked) return 'locked';
       if (!isIpcAvailable()) return 'unavailable';
       try {
-        // Decision C authorises discarding the Golden Layout tree. Keeping a copy anyway costs one
-        // write, once, and makes "the swap deleted a user's window arrangement" false rather than
-        // merely allowed. Nothing reads the copy; a future translator could.
-        if (!archiveSettled) {
-          const existing = await ipc().app.getLayout();
-          if (isLegacyGoldenLayout(existing)) {
-            const archived = await persistence.update(current =>
-              current.legacyGoldenLayoutConfig
-                ? undefined
-                : { ...current, legacyGoldenLayoutConfig: existing }
-            );
-            // `unchanged` means a copy was already there. Anything other than that or a fresh write
-            // means the copy did NOT land, and overwriting anyway would destroy the only remaining
-            // copy of the user's window arrangement — so the layout save is abandoned instead. The
-            // next save retries the archive, because `archiveSettled` stays false.
-            if (archived !== 'written' && archived !== 'unchanged') {
-              diagnostics.error('not overwriting the Golden Layout config: archiving it failed', {
-                result: archived,
-              });
-              return 'failed';
-            }
-          }
-          archiveSettled = true;
-        }
-
         await ipc().app.saveLayout(encodeReactLayout(payload));
         return 'saved';
       } catch (error) {

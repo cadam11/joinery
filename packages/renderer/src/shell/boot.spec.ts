@@ -154,7 +154,7 @@ describe('the boot sequence', () => {
 describe('the restore-before-save contract', () => {
   it('keeps both write paths shut until the workspace restore has run', async () => {
     const tabs = createTabStore(createRendererStatePersistence());
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
 
     expect(tabs.getState().isPersistenceUnlocked()).toBe(false);
     expect(layout.isUnlocked()).toBe(false);
@@ -189,7 +189,7 @@ describe('the restore-before-save contract', () => {
     expect((await seeded.app.getTabs()).tabs).toHaveLength(1);
 
     // Now the real sequence, which restores and only then unlocks.
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
     await hydrateWorkspace('profile-a', { tabs, layout });
 
     expect(tabs.getState().tabs.map(tab => tab.title)).toEqual(['Important']);
@@ -210,7 +210,7 @@ describe('the restore-before-save contract', () => {
     // The Angular renderer skipped the restore entirely in this case, which under a gate would mean
     // tabs silently stop persisting for the whole session.
     const tabs = createTabStore(createRendererStatePersistence());
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
 
     await hydrateWorkspace(null, { tabs, layout });
 
@@ -222,7 +222,7 @@ describe('the restore-before-save contract', () => {
     // `workspace.tsx` applies it an effect and a 500ms debounce later, and Dockview's
     // `onDidLayoutChange` is already subscribed to its own initial empty state by then. So the gate
     // is opened by the apply — `markRestoreApplied` — and nothing before it can write.
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
     const boot = createBootStore({ layout });
 
     await hydrateWorkspace(null, {
@@ -244,7 +244,7 @@ describe('the restore-before-save contract', () => {
 
   it('leaves the gates open for the rest of the session', async () => {
     const tabs = createTabStore(createRendererStatePersistence());
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
     await hydrateWorkspace(null, { tabs, layout });
 
     tabs.getState().openTab({ type: 'query', title: 'Query 1', icon: 'code' });
@@ -272,7 +272,7 @@ describe('the pre-restore interactive window', () => {
       releaseReconnect = resolve;
     });
 
-    const layout = createLayoutPersistence(createRendererStatePersistence());
+    const layout = createLayoutPersistence();
     const boot = createBootStore({ layout });
     const connection = {
       getState: () => ({
