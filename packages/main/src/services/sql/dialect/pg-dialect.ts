@@ -39,16 +39,22 @@ export class PgDialect extends SQLDialect {
    * ordinary data — a Windows path in a text column.
    *
    * This reasoning is the renderer's, from `features/query/fk-lookup.ts`, which had it first and
-   * whose SQL this replaces on the main side.
+   * whose SQL this replaces on the main side. J-134 moved it from `formatLiteral` — the
+   * result-set path alone — down to `quoteLiteral`, which every metadata query now goes
+   * through as well.
    */
+  override quoteLiteral(value: string): string {
+    const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "''");
+    return `E'${escaped}'`;
+  }
+
   override formatLiteral(value: unknown): string {
     if (value === null || value === undefined) return 'NULL';
     if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
     if (typeof value === 'bigint') return String(value);
     if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
 
-    const escaped = textOf(value).replace(/\\/g, '\\\\').replace(/'/g, "''");
-    return `E'${escaped}'`;
+    return this.quoteLiteral(textOf(value));
   }
 
   quoteIdentifier(name: string): string {
@@ -68,7 +74,7 @@ export class PgDialect extends SQLDialect {
     const name = this.quoteIdentifier(options.name);
     let sql = `CREATE DATABASE ${name}`;
     if (options.collation) {
-      sql += ` LC_COLLATE = '${this.escapeString(options.collation)}'`;
+      sql += ` LC_COLLATE = ${this.quoteLiteral(options.collation)}`;
     }
     sql += ';';
     return sql;
@@ -81,7 +87,7 @@ export class PgDialect extends SQLDialect {
     let sql = '';
     if (options.closeConnections) {
       // Terminate active connections to the database
-      sql += `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${this.escapeString(options.currentName)}' AND pid <> pg_backend_pid();\n\n`;
+      sql += `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${this.quoteLiteral(options.currentName)} AND pid <> pg_backend_pid();\n\n`;
     }
     sql += `ALTER DATABASE ${current} RENAME TO ${next};`;
     return sql;
@@ -90,7 +96,7 @@ export class PgDialect extends SQLDialect {
   dropDatabaseSQL(options: DeleteDatabaseOptions): string {
     let sql = '';
     if (options.closeConnections) {
-      sql += `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${this.escapeString(options.name)}' AND pid <> pg_backend_pid();\n\n`;
+      sql += `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${this.quoteLiteral(options.name)} AND pid <> pg_backend_pid();\n\n`;
     }
     sql += `DROP DATABASE ${this.quoteIdentifier(options.name)};`;
     return sql;
@@ -132,7 +138,7 @@ ORDER BY
 
   listTablesSQL(_database: string, schema?: string): string {
     const schemaFilter = schema
-      ? `AND t.schemaname = '${this.escapeString(schema)}'`
+      ? `AND t.schemaname = ${this.quoteLiteral(schema)}`
       : `AND t.schemaname NOT IN ('pg_catalog', 'information_schema')`;
     return `
 SELECT
@@ -152,7 +158,7 @@ ORDER BY t.schemaname, t.tablename;`;
 
   listViewsSQL(_database: string, schema?: string): string {
     const schemaFilter = schema
-      ? `AND v.schemaname = '${this.escapeString(schema)}'`
+      ? `AND v.schemaname = ${this.quoteLiteral(schema)}`
       : `AND v.schemaname NOT IN ('pg_catalog', 'information_schema')`;
     return `
 SELECT
@@ -165,7 +171,7 @@ ORDER BY v.schemaname, v.viewname;`;
 
   listProceduresSQL(_database: string, schema?: string): string {
     const schemaFilter = schema
-      ? `AND n.nspname = '${this.escapeString(schema)}'`
+      ? `AND n.nspname = ${this.quoteLiteral(schema)}`
       : `AND n.nspname NOT IN ('pg_catalog', 'information_schema')`;
     return `
 SELECT
@@ -182,7 +188,7 @@ ORDER BY n.nspname, p.proname;`;
 
   listFunctionsSQL(_database: string, schema?: string): string {
     const schemaFilter = schema
-      ? `AND n.nspname = '${this.escapeString(schema)}'`
+      ? `AND n.nspname = ${this.quoteLiteral(schema)}`
       : `AND n.nspname NOT IN ('pg_catalog', 'information_schema')`;
     return `
 SELECT
@@ -220,8 +226,8 @@ LEFT JOIN (
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-  WHERE tc.table_schema = '${this.escapeString(schema)}'
-    AND tc.table_name = '${this.escapeString(table)}'
+  WHERE tc.table_schema = ${this.quoteLiteral(schema)}
+    AND tc.table_name = ${this.quoteLiteral(table)}
     AND tc.constraint_type = 'PRIMARY KEY'
 ) tc ON c.column_name = tc.column_name
 LEFT JOIN (
@@ -229,12 +235,12 @@ LEFT JOIN (
   FROM information_schema.table_constraints tc
   JOIN information_schema.key_column_usage kcu
     ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-  WHERE tc.table_schema = '${this.escapeString(schema)}'
-    AND tc.table_name = '${this.escapeString(table)}'
+  WHERE tc.table_schema = ${this.quoteLiteral(schema)}
+    AND tc.table_name = ${this.quoteLiteral(table)}
     AND tc.constraint_type = 'FOREIGN KEY'
 ) fk ON c.column_name = fk.column_name
-WHERE c.table_schema = '${this.escapeString(schema)}'
-  AND c.table_name = '${this.escapeString(table)}'
+WHERE c.table_schema = ${this.quoteLiteral(schema)}
+  AND c.table_name = ${this.quoteLiteral(table)}
 ORDER BY c.ordinal_position;`;
   }
 
@@ -256,8 +262,8 @@ JOIN pg_class t ON t.oid = ix.indrelid
 JOIN pg_class i ON i.oid = ix.indexrelid
 JOIN pg_namespace n ON t.relnamespace = n.oid
 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-WHERE n.nspname = '${this.escapeString(schema)}'
-  AND t.relname = '${this.escapeString(table)}'
+WHERE n.nspname = ${this.quoteLiteral(schema)}
+  AND t.relname = ${this.quoteLiteral(table)}
 GROUP BY i.relname, ix.indisclustered, ix.indisunique, ix.indisprimary
 ORDER BY ix.indisprimary DESC, i.relname;`;
   }
@@ -280,8 +286,8 @@ JOIN information_schema.constraint_column_usage ccu
 JOIN information_schema.referential_constraints rc
   ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
 WHERE tc.constraint_type = 'FOREIGN KEY'
-  AND tc.table_schema = '${this.escapeString(schema)}'
-  AND tc.table_name = '${this.escapeString(table)}'
+  AND tc.table_schema = ${this.quoteLiteral(schema)}
+  AND tc.table_name = ${this.quoteLiteral(table)}
 GROUP BY tc.constraint_name, ccu.table_schema, ccu.table_name, rc.delete_rule, rc.update_rule
 ORDER BY tc.constraint_name;`;
   }
@@ -304,8 +310,8 @@ LEFT JOIN information_schema.key_column_usage kcu
   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
 LEFT JOIN information_schema.check_constraints cc
   ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.table_schema
-WHERE tc.table_schema = '${this.escapeString(schema)}'
-  AND tc.table_name = '${this.escapeString(table)}'
+WHERE tc.table_schema = ${this.quoteLiteral(schema)}
+  AND tc.table_name = ${this.quoteLiteral(table)}
 GROUP BY tc.constraint_name, tc.constraint_type, cc.check_clause
 ORDER BY tc.constraint_type, tc.constraint_name;`;
   }
@@ -327,8 +333,8 @@ FROM pg_trigger t
 JOIN pg_class c ON t.tgrelid = c.oid
 JOIN pg_namespace n ON c.relnamespace = n.oid
 WHERE NOT t.tgisinternal
-  AND n.nspname = '${this.escapeString(schema)}'
-  AND c.relname = '${this.escapeString(table)}'
+  AND n.nspname = ${this.quoteLiteral(schema)}
+  AND c.relname = ${this.quoteLiteral(table)}
 ORDER BY t.tgname;`;
   }
 
@@ -337,11 +343,11 @@ ORDER BY t.tgname;`;
     return `
 SELECT
   COALESCE(
-    (SELECT definition FROM pg_views WHERE schemaname = '${this.escapeString(schema)}' AND viewname = '${this.escapeString(name)}'),
+    (SELECT definition FROM pg_views WHERE schemaname = ${this.quoteLiteral(schema)} AND viewname = ${this.quoteLiteral(name)}),
     (SELECT pg_get_functiondef(p.oid)
      FROM pg_proc p
      JOIN pg_namespace n ON p.pronamespace = n.oid
-     WHERE n.nspname = '${this.escapeString(schema)}' AND p.proname = '${this.escapeString(name)}'
+     WHERE n.nspname = ${this.quoteLiteral(schema)} AND p.proname = ${this.quoteLiteral(name)}
      LIMIT 1)
   ) AS definition;`;
   }
@@ -357,15 +363,15 @@ SELECT
   'MS_Description' AS name,
   obj_description(c.oid) AS value,
   'SCHEMA' AS "level0Type",
-  '${this.escapeString(schema)}' AS "level0Name",
+  ${this.quoteLiteral(schema)} AS "level0Name",
   'TABLE' AS "level1Type",
-  '${this.escapeString(table)}' AS "level1Name",
+  ${this.quoteLiteral(table)} AS "level1Name",
   NULL AS "level2Type",
   NULL AS "level2Name"
 FROM pg_class c
 JOIN pg_namespace n ON c.relnamespace = n.oid
-WHERE n.nspname = '${this.escapeString(schema)}'
-  AND c.relname = '${this.escapeString(table)}'
+WHERE n.nspname = ${this.quoteLiteral(schema)}
+  AND c.relname = ${this.quoteLiteral(table)}
   AND obj_description(c.oid) IS NOT NULL
 
 UNION ALL
@@ -375,16 +381,16 @@ SELECT
   'MS_Description' AS name,
   col_description(c.oid, a.attnum) AS value,
   'SCHEMA' AS "level0Type",
-  '${this.escapeString(schema)}' AS "level0Name",
+  ${this.quoteLiteral(schema)} AS "level0Name",
   'TABLE' AS "level1Type",
-  '${this.escapeString(table)}' AS "level1Name",
+  ${this.quoteLiteral(table)} AS "level1Name",
   'COLUMN' AS "level2Type",
   a.attname AS "level2Name"
 FROM pg_class c
 JOIN pg_namespace n ON c.relnamespace = n.oid
 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-WHERE n.nspname = '${this.escapeString(schema)}'
-  AND c.relname = '${this.escapeString(table)}'
+WHERE n.nspname = ${this.quoteLiteral(schema)}
+  AND c.relname = ${this.quoteLiteral(table)}
   AND col_description(c.oid, a.attnum) IS NOT NULL
 ORDER BY "level2Type" NULLS FIRST, "level2Name";`;
   }

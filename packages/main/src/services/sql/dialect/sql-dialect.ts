@@ -54,17 +54,28 @@ export abstract class SQLDialect {
     return `${this.quoteIdentifier(schema)}.${this.quoteIdentifier(object)}`;
   }
 
-  /** Escape a string literal value (caller wraps in quotes) */
-  escapeString(value: string): string {
-    return value.replace(/'/g, "''");
+  /**
+   * A string as a complete literal this engine will read as DATA (J-134).
+   *
+   * This returns the quotes as well as the escaped body. The shape matters: the escaping an engine
+   * needs is not always expressible inside the quotes — PostgreSQL's is `E'…'`, which is a prefix —
+   * so a helper that escaped only the body and left the caller to write `'…'` could not be made
+   * correct for every engine, and read at each call site as though quote-doubling were the whole
+   * job. It was not: see the `MySQLDialect` and `PgDialect` overrides.
+   *
+   * The default is the ANSI shape — quote-doubling — which is exactly right for T-SQL, the one
+   * engine here with no backslash escape in any configuration.
+   */
+  quoteLiteral(value: string): string {
+    return `'${value.replace(/'/g, "''")}'`;
   }
 
   /**
    * A JavaScript value as a literal this engine will read as DATA (J-52).
    *
-   * Separate from `escapeString`, which only doubles quotes and leaves the caller to add them.
-   * That is not enough for every engine — see `PgDialect`'s override — and the values reaching
-   * this one come from result-set cells rather than from Joinery's own strings.
+   * The escaping itself is `quoteLiteral`'s job; this adds the type handling on top of it — NULL,
+   * numbers, and the boolean spelling each engine reads — because the values reaching this one come
+   * from result-set cells rather than from Joinery's own strings.
    *
    * The default is the ANSI shape: quote-doubling, and `1`/`0` for booleans.
    */
@@ -74,7 +85,7 @@ export abstract class SQLDialect {
     if (typeof value === 'bigint') return String(value);
     if (typeof value === 'boolean') return value ? '1' : '0';
 
-    return `'${this.escapeString(textOf(value))}'`;
+    return this.quoteLiteral(textOf(value));
   }
 
   /**

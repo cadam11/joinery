@@ -71,11 +71,6 @@ export class MetadataService extends BaseSingleton {
     return name.replace(/\]/g, ']]');
   }
 
-  /** Escape a string value for use inside single quotes (doubles any `'` characters) */
-  private escStr(value: string): string {
-    return value.replace(/'/g, "''");
-  }
-
   constructor() {
     super();
     this.poolManager = ConnectionPoolManager.getInstance();
@@ -615,6 +610,7 @@ WHERE n.nspname = '${this.escId(schema)}'
     schema: string,
     table: string
   ): Promise<TableProperties> {
+    const dialect = this.getDialect(connectionId);
     const sql = `
 SELECT
   TABLE_SCHEMA AS \`schema\`,
@@ -630,8 +626,8 @@ SELECT
   IF(AUTO_INCREMENT IS NOT NULL, true, false) AS \`hasIdentity\`,
   ENGINE AS filegroup
 FROM information_schema.TABLES
-WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
-  AND TABLE_NAME = '${this.escStr(table)}';`;
+WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
+  AND TABLE_NAME = ${dialect.quoteLiteral(table)};`;
 
     const rows = await this.queryAny<TableProperties>(connectionId, sql, database);
     const props = rows[0] || ({} as TableProperties);
@@ -964,6 +960,8 @@ WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
     schema: string,
     table: string
   ): Promise<string> {
+    const dialect = this.getDialect(connectionId);
+
     // Query column details including auto_increment from EXTRA field
     const colSql = `
 SELECT
@@ -974,8 +972,8 @@ SELECT
   EXTRA,
   COLUMN_KEY
 FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
-  AND TABLE_NAME = '${this.escStr(table)}'
+WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
+  AND TABLE_NAME = ${dialect.quoteLiteral(table)}
 ORDER BY ORDINAL_POSITION;`;
 
     const colRows = await this.queryAny<{
@@ -987,7 +985,6 @@ ORDER BY ORDINAL_POSITION;`;
       COLUMN_KEY: string;
     }>(connectionId, colSql, database);
 
-    const dialect = this.getDialect(connectionId);
     const fullName = dialect.quoteSchemaObject(schema, table);
 
     const colDefs = colRows.map(col => {
@@ -1039,8 +1036,8 @@ ORDER BY ORDINAL_POSITION;`;
       // MySQL insert template — skip auto_increment columns
       const extraSql = `
 SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
-  AND TABLE_NAME = '${this.escStr(table)}'
+WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
+  AND TABLE_NAME = ${dialect.quoteLiteral(table)}
   AND EXTRA LIKE '%auto_increment%'`;
       const autoIncRows = await this.queryAny<{ COLUMN_NAME: string }>(
         connectionId,
@@ -1125,10 +1122,11 @@ WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
       }
     } else if (engine === 'mysql') {
       // MySQL: detect auto_increment from information_schema.COLUMNS.EXTRA
+      const dialect = this.getDialect(connectionId);
       const extraSql = `
 SELECT COLUMN_NAME, EXTRA, COLUMN_DEFAULT FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = '${this.escStr(schema)}'
-  AND TABLE_NAME = '${this.escStr(table)}'`;
+WHERE TABLE_SCHEMA = ${dialect.quoteLiteral(schema)}
+  AND TABLE_NAME = ${dialect.quoteLiteral(table)}`;
       const extraRows = await this.queryAny<{
         COLUMN_NAME: string;
         EXTRA: string;
