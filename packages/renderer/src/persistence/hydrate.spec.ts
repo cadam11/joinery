@@ -419,7 +419,7 @@ describe('hydrateWorkspace', () => {
     const seeded = createAppStateDouble({
       openTabs: SAVED_TABS,
       activeTabId: 'tab-2',
-      goldenLayoutConfig: layoutConfig,
+      workspaceLayout: layoutConfig,
     });
     removeJoineryMock();
     teardowns.push(installJoineryMock({ app: seeded.app }));
@@ -427,7 +427,7 @@ describe('hydrateWorkspace', () => {
 
     const payload = await hydrateWorkspace('profile-a', {
       tabs: renderer.tabs,
-      layout: createLayoutPersistence(renderer.persistence),
+      layout: createLayoutPersistence(),
     });
 
     const tabs = renderer.tabs.getState();
@@ -439,21 +439,21 @@ describe('hydrateWorkspace', () => {
     expect(payload?.activeTabId).toBe('tab-1');
   });
 
-  it('returns undefined for a Golden Layout config, leaving it in place', async () => {
-    const golden: LayoutConfig = { root: { type: 'row', content: [{ type: 'stack' }] } };
-    const seeded = createAppStateDouble({ openTabs: SAVED_TABS, goldenLayoutConfig: golden });
+  it('returns undefined for an unrecognised layout config, leaving it in place', async () => {
+    const foreign: LayoutConfig = { root: { type: 'row', content: [{ type: 'stack' }] } };
+    const seeded = createAppStateDouble({ openTabs: SAVED_TABS, workspaceLayout: foreign });
     removeJoineryMock();
     teardowns.push(installJoineryMock({ app: seeded.app }));
     const renderer = makeRenderer();
 
     const payload = await hydrateWorkspace('profile-a', {
       tabs: renderer.tabs,
-      layout: createLayoutPersistence(renderer.persistence),
+      layout: createLayoutPersistence(),
     });
 
     // Decision C: rebuild from the tab list, which is still fully intact.
     expect(payload).toBeUndefined();
     expect(renderer.tabs.getState().tabs).toHaveLength(2);
-    expect(seeded.snapshot().goldenLayoutConfig).toEqual(golden);
+    expect(seeded.snapshot().workspaceLayout).toEqual(foreign);
   });
 });

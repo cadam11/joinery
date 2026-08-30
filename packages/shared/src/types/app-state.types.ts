@@ -40,8 +40,8 @@ export interface AppState {
   activeTabId: string | null;
   recentWorkspaces: string[];
   currentWorkspacePath: string | null;
-  /** Serialized GoldenLayout configuration */
-  goldenLayoutConfig?: LayoutConfig;
+  /** Serialized workspace arrangement. See `renderer/src/persistence/layout.ts` for the envelope. */
+  workspaceLayout?: LayoutConfig;
   /** AI settings */
   aiSettings?: AISettings;
   /** Chat panel width in pixels */
@@ -91,7 +91,7 @@ export interface WorkspaceLayoutConfig {
 }
 
 /**
- * Layout configuration (Golden Layout serialized state)
+ * Layout configuration: the serialized workspace tree, as written by the renderer.
  */
 export interface LayoutConfig {
   root: LayoutNode;

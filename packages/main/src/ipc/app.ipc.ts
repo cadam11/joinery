@@ -97,16 +97,16 @@ export function registerAppHandlers(): void {
     }
   );
 
-  // Save golden layout config
+  // Save the persisted workspace layout
   safeHandle(
     IPC_CHANNELS.APP.SAVE_LAYOUT,
     async (_event, config: LayoutConfig | undefined): Promise<void> => {
-      appState.setGoldenLayoutConfig(config);
+      appState.setWorkspaceLayout(config);
     }
   );
 
-  // Get golden layout config
+  // Get the persisted workspace layout
   safeHandle(IPC_CHANNELS.APP.GET_LAYOUT, async (): Promise<LayoutConfig | undefined> => {
-    return appState.getGoldenLayoutConfig();
+    return appState.getWorkspaceLayout();
   });
 }

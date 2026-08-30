@@ -8,7 +8,7 @@
  *   legacy-local-storage.ts the six Angular keys: read them, and remove the ones that were lifted
  *   migration.ts            the one-shot lift-then-remove, idempotent via a marker in AppState
  *   theme-mirror.ts         the one localStorage key React writes, for the pre-mount FOUC script
- *   layout.ts               Decision C — the `LayoutConfig` shape the React app writes
+ *   layout.ts               the `LayoutConfig` shape the React app writes to `workspaceLayout`
  *   hydrate.ts              the startup path that ties the above to the Task 4 stores
  *
  * `state/settings.ts` and `state/tab.ts` import the leaf modules DIRECTLY, never this barrel:
@@ -36,7 +36,6 @@ export {
   createLayoutPersistence,
   decodeReactLayout,
   encodeReactLayout,
-  isLegacyGoldenLayout,
   layoutPersistence,
   REACT_LAYOUT_COMPONENT_TYPE,
   REACT_LAYOUT_VERSION,
