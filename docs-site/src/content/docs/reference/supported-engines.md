@@ -80,12 +80,12 @@ goes away.
 
 **MySQL has two pools per database because a MySQL connection decides once, when it opens, whether
 it will accept more than one statement at a time.** The query editor needs a connection that does —
-running `SELECT …; UPDATE …;` as one script is the point of the editor. Nothing else in Joinery ever
-sends two statements, so schema browsing, foreign-key lookups and everything the AI assistant runs
-go on a second connection that never asked for the capability. If a table name or a cell value ever
-smuggled a `;` into one of those queries, the MySQL server rejects it as a syntax error rather than
-running whatever followed. You do not configure this and it is not visible in the app; the only
-trace is that a MySQL database you both browse and query holds two sets of connections.
+running `SELECT …; UPDATE …;` as one script is the point of the editor. Schema browsing and
+everything the AI assistant runs never send two statements, so they go on a second connection that
+never asked for the capability: if a table name ever smuggled a `;` into one of those queries, the
+MySQL server rejects it as a syntax error instead of running whatever followed. You do not configure
+this and it is not visible in the app; the only trace is that a MySQL database you both browse and
+query holds two sets of connections.
 
 ## Aurora DSQL
 
