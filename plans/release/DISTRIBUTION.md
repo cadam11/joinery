@@ -138,8 +138,10 @@ Rewritten or dropped:
   workflow does and one thing the human does. The skill no longer describes 16 expected files; the
   release job asserts what it publishes.
 - **Step 8, the wiki.** The wiki does not exist; J-100 repointed Help ▸ Documentation at
-  <https://usejoinery.com/>. The whole wiki-author section is gone, replaced by the docs-site edit
-  that the v1 checklist §4 identified: `getting-started/install.md` becomes download-first.
+  <https://usejoinery.com/>. The whole wiki-author section is gone, replaced by the docs-site pass
+  the v1 checklist §4 identified. That page is written in the future tense today, because there is
+  no release to download; the rewritten command carries the instruction to flip it to the present
+  tense on the first tag, and to delete its unsigned-build section on the first signed one.
 - **Nothing about signing, notarization, checksums or Homebrew was in the skill**, because none of it
   existed. All of it is new here.
 
