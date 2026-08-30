@@ -87,19 +87,16 @@ import {
   Tooltip,
 } from '../../ui';
 import { keyHint } from '../../utils/platform';
+import { DEFAULT_COL_DEF, ROW_NUMBER_COL_ID, buildColumnDefs } from './grid-columns';
 import {
-  DEFAULT_COL_DEF,
-  ROW_NUMBER_COL_ID,
-  buildColumnDefs,
-  isDataColumnId,
-} from './grid-columns';
+  MAX_VIEW_ROWS,
+  cappedMessage,
+  readGridView,
+  viewResultSet,
+  type GridView,
+} from './grid-view';
 import type { DisplayedRows, RowDetailTarget } from './row-detail-panel';
-import {
-  buildClipboardText,
-  copyScopeLabel,
-  type ClipboardColumn,
-  type ClipboardRow,
-} from './results-clipboard';
+import { buildClipboardText, copyScopeLabel, type ClipboardRow } from './results-clipboard';
 
 /**
  * Every community feature, registered once on import. AG Grid 36 requires an explicit registration —
@@ -247,33 +244,14 @@ export const ResultsGrid = memo(function ResultsGrid({
   }, [gridSettings.showRowNumbers]);
 
   /**
-   * The columns a copy or an export covers: what the grid is displaying, minus the ordinal gutter and
-   * AG Grid's checkbox column. Read from the grid rather than from `resultSet.columns` so a hidden or
-   * reordered column is honoured — the user copies what they can see.
+   * What the user is looking at: the displayed rows in displayed order, and the displayed data columns
+   * in displayed order. Copy and Export both start here — that is J-47's whole ruling — and the read
+   * itself lives in `grid-view.ts`, which documents which AG Grid accessors are the honest ones.
+   *
+   * The `GridApi` argument is also the compile-time check on that module's narrow `GridViewSource`:
+   * if AG Grid's signatures move, this call stops type-checking.
    */
-  const clipboardColumns = useCallback((grid: GridApi): ClipboardColumn[] => {
-    return grid
-      .getAllDisplayedColumns()
-      .filter(column => isDataColumnId(column.getColId()))
-      .map(column => ({
-        id: column.getColId(),
-        header: column.getColDef().headerName ?? column.getColId(),
-      }));
-  }, []);
-
-  /**
-   * Every row currently displayed, in displayed order. Bounded by the grid's own reported count, and
-   * it is the post-sort, post-filter set — which is what "copy what I am looking at" means.
-   */
-  const displayedRowData = useCallback((grid: GridApi): ClipboardRow[] => {
-    const rows: ClipboardRow[] = [];
-    const total = grid.getDisplayedRowCount();
-    for (let index = 0; index < total; index += 1) {
-      const data = grid.getDisplayedRowAtIndex(index)?.data as ClipboardRow | undefined;
-      if (data !== undefined) rows.push(data);
-    }
-    return rows;
-  }, []);
+  const gridView = useCallback((grid: GridApi): GridView => readGridView(grid, MAX_VIEW_ROWS), []);
 
   /**
    * Copy, in the user's format. Selection first; with nothing selected it copies ALL displayed rows,
@@ -294,17 +272,21 @@ export const ResultsGrid = memo(function ResultsGrid({
       const format = formatOverride?.format ?? gridSettings.copyFormat;
       const includeHeaders = formatOverride?.includeHeaders ?? gridSettings.copyIncludeHeaders;
 
+      const view = gridView(grid);
       const selected = grid.getSelectedRows() as ClipboardRow[];
       const fromSelection = selected.length > 0;
-      const rows = fromSelection ? selected : displayedRowData(grid);
+      const rows = fromSelection ? selected : view.rows;
       if (rows.length === 0) {
         notify.info('No rows to copy');
         return;
       }
+      // The bound is not a silent truncation: if it bit, the user is told before the toast that
+      // says how much was copied. A selection is bounded by what is displayed, so it cannot bite there.
+      if (!fromSelection && view.capped) notify.warning(cappedMessage(view, 'Copied'));
 
       const text = buildClipboardText({
         rows,
-        columns: clipboardColumns(grid),
+        columns: view.columns,
         format,
         includeHeaders,
       });
@@ -323,37 +305,55 @@ export const ResultsGrid = memo(function ResultsGrid({
           diagnostics.error('clipboard write failed', error);
         });
     },
-    [clipboardColumns, displayedRowData, gridSettings.copyFormat, gridSettings.copyIncludeHeaders]
+    [gridView, gridSettings.copyFormat, gridSettings.copyIncludeHeaders]
   );
 
   /**
    * Export through the main process: it shows the save dialog, formats, and writes the file
-   * (`main/src/ipc/query.ipc.ts:111-166`). The renderer sends the result set and gets a verdict.
+   * (`main/src/ipc/query.ipc.ts`). The renderer sends a result set and gets a verdict.
    *
-   * **What gets exported, precisely: the WHOLE capped result set — every row the executor sent, in the
-   * order it sent them, with every column it described.** Sorting, the quick filter, the column filters
-   * and any hidden or reordered column are all ignored, because what crosses IPC is `resultSet`, not the
-   * grid's view of it. That is deliberately NOT what Copy does (Copy is the selection, or every
-   * *displayed* row in *displayed* order with only the *displayed* data columns), so the two now make
-   * different promises about the word "results". **J-47 records that for Craig to rule on**, with the
-   * shape of an "export what the grid shows" option if he wants one.
+   * **What gets exported, precisely: what you are looking at** — the displayed rows in displayed
+   * order, with the displayed data columns in displayed order, so a sort, a quick filter, a column
+   * filter, a hidden column and a re-ordered column are all honoured. That is Craig's J-47 ruling:
+   * Copy and Export make the same promise about the word "results", and `grid-view.ts` is the one
+   * place that promise is defined.
    *
-   * This is the seam the Angular *menu* used (`query.component.ts:1963-1987`); the Angular grid's own
-   * CSV button instead called `gridApi.exportDataAsCsv`, which exports the grid VIEW — but through the
-   * `valueFormatter`, so its CSV carried locale-grouped numbers (`1,234.5`) and the display string
-   * `NULL`. Rerouting fixes that defect and costs the view semantics; both halves of the trade are in
-   * J-47. It also removes a Blob plus a synthetic `<a download>` click, which is at best untested under
-   * `default-src 'none'` over `file://`, and it leaves one CSV encoder in the app instead of two.
+   * It used to ship `resultSet` whole, which meant the untouched executor output — J-47's report of
+   * the disagreement. The column METADATA still comes from `resultSet.columns` (projected into the
+   * grid's order), because the SQL INSERT encoder branches on the declared type and a synthesised
+   * one would corrupt the quoting.
+   *
+   * The Angular grid's own CSV button instead called `gridApi.exportDataAsCsv`, which exported the
+   * view but through the `valueFormatter` — locale-grouped numbers (`1,234.5`) and the display string
+   * `NULL` in a CSV. Routing through main keeps the view semantics AND the raw values, which is the
+   * combination neither of the two old paths had.
    */
   const exportResults = useCallback(
     (format: ExportFormat): void => {
       if (!isIpcAvailable()) return;
-      if (resultSet.rows.length === 0) {
+      const grid = api.current;
+      if (grid === null) return;
+
+      const view = gridView(grid);
+      if (view.rows.length === 0 || view.columns.length === 0) {
         notify.warning('No results to export');
         return;
       }
+      if (view.capped) notify.warning(cappedMessage(view, 'Exported'));
+
+      // `viewResultSet` throws if a displayed column is not one the executor described — an invariant
+      // rather than an expected outcome, so it is reported, never swallowed.
+      let payload: ResultSet;
+      try {
+        payload = viewResultSet(view, resultSet.columns);
+      } catch (error) {
+        notify.error('Export failed');
+        diagnostics.error('could not project the grid view for export', error);
+        return;
+      }
+
       void ipc()
-        .query.exportResults(resultSet, {
+        .query.exportResults(payload, {
           format,
           includeHeaders: true,
           prettyPrint: true,
@@ -373,7 +373,7 @@ export const ResultsGrid = memo(function ResultsGrid({
           diagnostics.error('failed to export results', error);
         });
     },
-    [resultSet]
+    [gridView, resultSet.columns]
   );
 
   /**

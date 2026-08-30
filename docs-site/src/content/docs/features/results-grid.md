@@ -76,10 +76,17 @@ spreadsheet keeps its row structure; CSV quotes per RFC 4180.
 The export menu writes a file through a native save dialog, as **CSV**, **JSON**, or a set of
 **SQL INSERT** statements. ⇧⌘X exports the active tab's grid as CSV.
 
-> **Careful** — export and copy do not mean the same thing by "the results". **Export writes the
-> whole fetched result set**: every row the app received, in the order it received them, with
-> every column — sorting, filters and hidden columns are all ignored. Copy is the selection, or the
-> displayed rows in displayed order. If you want the grid's view in a file, filter and then copy.
+**Copy and export mean the same thing by "the results": what you are looking at** — the rows
+your sort and your filters left on screen, in the order they are on screen, with only the columns
+you can see, in the order you can see them. Export a filtered grid and you get the filtered rows;
+hide a column and it is not in the file.
+
+An export with nothing on screen — a filter that matched nothing — writes no file and says so.
+Copy, unlike export, honours a selection first: with rows ticked it copies those rows.
+
+> **Note** — one copy or one export reads at most 1,000,000 displayed rows. The fetch cap above
+> is far lower by default, so you are unlikely to meet this one; if you do, the app says how many
+> of how many it took rather than quietly writing a subset.
 
 ## The row inspector
 
@@ -161,13 +168,15 @@ Deleting and purging snapshots are not available from this panel.
 | An FK column is marked and its header tooltip names the target                              | `packages/renderer/src/features/query/grid-columns.ts:108-138`                                                                                        |
 | Copy format `tsv` default, plus `csv` and `json`; headers ignored for json                  | `packages/shared/src/types/settings.types.ts:27-42, 77-78`, `features/query/results-clipboard.ts:97-107`                                              |
 | Selection first, otherwise every displayed row; the confirmation says which                 | `packages/renderer/src/features/query/results-grid.tsx:277-326`, `results-clipboard.ts:109-119`                                                       |
-| Copy covers displayed columns in displayed order                                            | `packages/renderer/src/features/query/results-grid.tsx:248-275`                                                                                       |
+| Copy covers displayed columns in displayed order                                            | `packages/renderer/src/features/query/grid-view.ts` (`displayedColumns`)                                                                              |
 | Copy as JSON / Copy as TSV with headers override the setting                                | `packages/renderer/src/features/query/results-grid.tsx:627-641`                                                                                       |
 | ⌘C declines outside the grid, in an editable field, or with a text selection                | `packages/renderer/src/features/query/results-grid.tsx:378-391`                                                                                       |
 | Clipboard values are raw; TSV collapses tabs/newlines; CSV is RFC 4180                      | `packages/renderer/src/features/query/results-clipboard.ts:1-21, 40-53`                                                                               |
-| Export offers CSV, JSON and SQL INSERT through a native save dialog                         | `packages/renderer/src/features/query/results-grid.tsx:328-376, 605-626`                                                                              |
-| ⇧⌘X exports the active tab's grid as CSV                                                    | `packages/renderer/src/commands/catalogue.ts:325-333`, `features/query/results-grid.tsx:393-397`                                                      |
-| Export ignores sort, filters and hidden columns; copy does not                              | `packages/renderer/src/features/query/results-grid.tsx:328-346`                                                                                       |
+| Export offers CSV, JSON and SQL INSERT through a native save dialog                         | `packages/renderer/src/features/query/results-grid.tsx`, the `exportResults` callback and the export menu                                             |
+| ⇧⌘X exports the active tab's grid as CSV                                                    | `packages/renderer/src/commands/catalogue.ts:325-333`, `features/query/results-grid.tsx`, the `export-results` command handler                        |
+| Copy and export both read the grid's displayed model                                        | `packages/renderer/src/features/query/grid-view.ts` (`readGridView`, `viewResultSet`), called by both handlers in `results-grid.tsx`                  |
+| An export with an empty view writes nothing and says so                                     | `packages/renderer/src/features/query/results-grid.tsx`, the `No results to export` guard                                                             |
+| One copy or export reads at most 1,000,000 displayed rows, and reports hitting it           | `packages/renderer/src/features/query/grid-view.ts` (`MAX_VIEW_ROWS`, `cappedMessage`)                                                                |
 | The inspector opens on double-click, the toolbar button, or the command                     | `packages/renderer/src/features/query/results-grid.tsx:425-448, 574-582, 450-477`                                                                     |
 | The command prefers focused, then selected, then first row                                  | `packages/renderer/src/features/query/results-grid.tsx:454-477`                                                                                       |
 | Previous/Next walk the grid's displayed order                                               | `packages/renderer/src/features/query/row-detail-panel.tsx:75-86`, `results-grid.tsx:399-423`                                                         |

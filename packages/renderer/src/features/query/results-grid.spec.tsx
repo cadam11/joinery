@@ -53,8 +53,12 @@ const grid = {
   selected: [] as Record<string, unknown>[],
   /** Rows the api pretends are displayed, in displayed order. */
   displayed: [] as Record<string, unknown>[],
-  /** Displayed columns, as `getAllDisplayedColumns` reports them. */
-  columns: [] as { id: string; header?: string; width: number }[],
+  /**
+   * Displayed columns, as `getAllDisplayedColumns` reports them. `field` is the row key AG Grid built
+   * the column from (`grid-columns.ts` sets `field: column.name`); the two structural columns have a
+   * colId and no field, exactly as they do in the real grid.
+   */
+  columns: [] as { id: string; field?: string; header?: string; width: number }[],
   autoSized: 0,
   widthsSet: [] as { key: unknown; newWidth: number }[][],
   refreshed: [] as { columns?: unknown[]; force?: boolean }[],
@@ -73,7 +77,7 @@ const gridApi = {
   getAllDisplayedColumns: () =>
     grid.columns.map(column => ({
       getColId: () => column.id,
-      getColDef: () => ({ headerName: column.header }),
+      getColDef: () => ({ field: column.field, headerName: column.header }),
       getActualWidth: () => column.width,
     })),
   getColumns: () =>
@@ -91,6 +95,15 @@ const gridApi = {
     grid.refreshed.push(params);
   },
 };
+
+/**
+ * Only the row bound is replaced. `MAX_VIEW_ROWS` is a million — reachable in production, not in a unit
+ * test — so the constant is lowered and `readGridView` / `viewResultSet` under test stay the real ones.
+ */
+vi.mock('./grid-view', async importOriginal => {
+  const actual = await importOriginal<typeof import('./grid-view')>();
+  return { ...actual, MAX_VIEW_ROWS: 3 };
+});
 
 vi.mock('ag-grid-react', () => ({
   AgGridReact: (props: GridDoubleProps) => {
@@ -171,8 +184,8 @@ beforeEach(() => {
   grid.columns = [
     { id: ROW_NUMBER_COL_ID, header: '#', width: 60 },
     { id: SELECTION_COL_ID, width: 40 },
-    { id: 'id', header: 'id', width: 120 },
-    { id: 'email', header: 'email', width: 200 },
+    { id: 'id', field: 'id', header: 'id', width: 120 },
+    { id: 'email', field: 'email', header: 'email', width: 200 },
   ];
   grid.autoSized = 0;
   grid.widthsSet = [];
@@ -472,6 +485,26 @@ describe('copy', () => {
     expect(JSON.parse(clipboard.text)).toEqual([{ id: 1, email: 'a@example.com' }]);
   });
 
+  it('bounds the rows it reads and says so rather than copying a silent subset', async () => {
+    const { unmount } = mount();
+    teardowns.push(unmount);
+    // Four displayed rows against the bound this file lowered to three.
+    grid.displayed = [
+      { id: 1, email: 'a' },
+      { id: 2, email: 'b' },
+      { id: 3, email: 'c' },
+      { id: 4, email: 'd' },
+    ];
+
+    await userEvent.click(screen.getByTestId('results-copy'));
+    await settle();
+
+    expect(clipboard.text.split('\n')).toHaveLength(4); // header + three rows
+    expect(notifications).toContain(
+      'warning:Copied the first 3 of 4 displayed rows — that is Joinery’s per-operation limit'
+    );
+  });
+
   it('reports a refused clipboard write instead of claiming success', async () => {
     clipboard.fail = true;
     const { unmount } = mount();
@@ -583,7 +616,7 @@ describe('the menu-copy claim', () => {
 // ── Export ─────────────────────────────────────────────────────────────────────────────────
 
 describe('export', () => {
-  const exported: { options: ExportOptions; rows: number }[] = [];
+  const exported: { options: ExportOptions; set: ResultSet }[] = [];
 
   function installExport(result: ExportResult): void {
     exported.length = 0;
@@ -591,7 +624,7 @@ describe('export', () => {
       installJoineryMock({
         query: {
           exportResults: async (set: ResultSet, options: ExportOptions) => {
-            exported.push({ options, rows: set.rows.length });
+            exported.push({ options, set });
             return result;
           },
         },
@@ -599,33 +632,103 @@ describe('export', () => {
     );
   }
 
+  /** The one thing a J-47 assertion is about: the shape of what crossed IPC. */
+  function lastExport(): { columns: string[]; rows: Record<string, unknown>[] } {
+    const set = exported.at(-1)?.set;
+    return { columns: set?.columns.map(column => column.name) ?? [], rows: set?.rows ?? [] };
+  }
+
   it('sends the result set to the main process, which owns the dialog and the encoder', async () => {
     installExport({ success: true, rowsExported: 2, filePath: '/tmp/out.csv' });
     const { unmount } = mount();
     teardowns.push(unmount);
+    grid.displayed = [
+      { id: 1, email: 'a@example.com' },
+      { id: 2, email: null },
+    ];
 
     await userEvent.click(screen.getByTestId('results-export'));
     await userEvent.click(screen.getByTestId('results-export-csv'));
     await settle();
 
-    expect(exported).toEqual([
-      {
-        options: {
-          format: 'csv',
-          includeHeaders: true,
-          prettyPrint: true,
-          tableName: 'QueryResults',
-        },
-        rows: 2,
-      },
-    ]);
+    expect(exported.at(-1)?.options).toEqual({
+      format: 'csv',
+      includeHeaders: true,
+      prettyPrint: true,
+      tableName: 'QueryResults',
+    });
     expect(notifications).toContain('success:Exported 2 rows to /tmp/out.csv');
+  });
+
+  it('exports WHAT YOU SEE: displayed rows in displayed order, visible columns in visible order', async () => {
+    // J-47. Export used to ship the stored result set whole, so this same grid state produced
+    // `id,email` in the executor's row order with the hidden `secret` column still in the file.
+    installExport({ success: true, rowsExported: 2, filePath: '/tmp/out.csv' });
+    const { unmount } = mount(
+      resultSet({
+        columns: [
+          { name: 'id', type: 'int' },
+          { name: 'email', type: 'text' },
+          { name: 'secret', type: 'text' },
+        ],
+        rows: [
+          { id: 1, email: 'a@example.com', secret: 'hunter2' },
+          { id: 2, email: null, secret: 'hunter3' },
+          { id: 3, email: 'c@example.com', secret: 'hunter4' },
+        ],
+      })
+    );
+    teardowns.push(unmount);
+
+    // The user hid `secret`, moved `email` in front of `id`, sorted descending and filtered one row
+    // out. Every one of those four is a fact only the grid knows.
+    grid.columns = [
+      { id: ROW_NUMBER_COL_ID, header: '#', width: 60 },
+      { id: SELECTION_COL_ID, width: 40 },
+      { id: 'email', field: 'email', header: 'email', width: 200 },
+      { id: 'id', field: 'id', header: 'id', width: 120 },
+    ];
+    grid.displayed = [
+      { id: 3, email: 'c@example.com', secret: 'hunter4' },
+      { id: 1, email: 'a@example.com', secret: 'hunter2' },
+    ];
+
+    await userEvent.click(screen.getByTestId('results-export'));
+    await userEvent.click(screen.getByTestId('results-export-json'));
+    await settle();
+
+    expect(lastExport()).toEqual({
+      columns: ['email', 'id'],
+      rows: [
+        { email: 'c@example.com', id: 3 },
+        { email: 'a@example.com', id: 1 },
+      ],
+    });
+  });
+
+  it('carries the executor’s column metadata, which the SQL INSERT encoder branches on', async () => {
+    installExport({ success: true, rowsExported: 1 });
+    const { unmount } = mount();
+    teardowns.push(unmount);
+    grid.displayed = [{ id: 1, email: 'a@example.com' }];
+
+    await userEvent.click(screen.getByTestId('results-export'));
+    await userEvent.click(screen.getByTestId('results-export-sql'));
+    await settle();
+
+    // Not a synthesised `{ name, type: 'text' }`: `formatSqlValue` quotes an int and a text column
+    // differently (`main/src/ipc/query.ipc.ts`), so a lost type is a corrupted INSERT.
+    expect(exported.at(-1)?.set.columns).toEqual([
+      { name: 'id', type: 'int' },
+      { name: 'email', type: 'text' },
+    ]);
   });
 
   it('offers all three formats', async () => {
     installExport({ success: true, rowsExported: 2 });
     const { unmount } = mount();
     teardowns.push(unmount);
+    grid.displayed = [{ id: 1, email: 'a@example.com' }];
 
     for (const [testId, format] of [
       ['results-export-json', 'json'],
@@ -641,6 +744,7 @@ describe('export', () => {
   it('is silent when the save dialog was dismissed, and loud when it failed', async () => {
     installExport({ success: false, error: 'Export cancelled' });
     const cancelled = mount();
+    grid.displayed = [{ id: 1, email: 'a@example.com' }];
     await userEvent.click(screen.getByTestId('results-export'));
     await userEvent.click(screen.getByTestId('results-export-csv'));
     await settle();
@@ -651,6 +755,7 @@ describe('export', () => {
     installExport({ success: false, error: 'EACCES' });
     const failed = mount();
     teardowns.push(failed.unmount);
+    grid.displayed = [{ id: 1, email: 'a@example.com' }];
     await userEvent.click(screen.getByTestId('results-export'));
     await userEvent.click(screen.getByTestId('results-export-csv'));
     await settle();
@@ -670,10 +775,49 @@ describe('export', () => {
     expect(notifications).toContain('warning:No results to export');
   });
 
+  it('refuses when the filter emptied the view, even though the result set still has rows', async () => {
+    // The other half of "export means what you see": a filter that matches nothing has nothing to
+    // write, and writing the unfiltered result instead would be the J-47 bug in reverse.
+    installExport({ success: true, rowsExported: 0 });
+    const { unmount } = mount();
+    teardowns.push(unmount);
+    grid.displayed = [];
+
+    await userEvent.click(screen.getByTestId('results-export'));
+    await userEvent.click(screen.getByTestId('results-export-csv'));
+    await settle();
+
+    expect(exported).toEqual([]);
+    expect(notifications).toContain('warning:No results to export');
+  });
+
+  it('bounds the rows it reads and says so rather than exporting a silent subset', async () => {
+    installExport({ success: true, rowsExported: 3, filePath: '/tmp/out.csv' });
+    const { unmount } = mount();
+    teardowns.push(unmount);
+    // Four displayed rows against the bound this file lowered to three.
+    grid.displayed = [
+      { id: 1, email: 'a' },
+      { id: 2, email: 'b' },
+      { id: 3, email: 'c' },
+      { id: 4, email: 'd' },
+    ];
+
+    await userEvent.click(screen.getByTestId('results-export'));
+    await userEvent.click(screen.getByTestId('results-export-csv'));
+    await settle();
+
+    expect(lastExport().rows).toHaveLength(3);
+    expect(notifications).toContain(
+      'warning:Exported the first 3 of 4 displayed rows — that is Joinery’s per-operation limit'
+    );
+  });
+
   it('answers File ▸ Export Results, but only for the ACTIVE tab’s grid', async () => {
     installExport({ success: true, rowsExported: 2, filePath: '/tmp/out.csv' });
     const { unmount } = mount();
     teardowns.push(unmount);
+    grid.displayed = [{ id: 1, email: 'a@example.com' }];
 
     // Dockview keeps inactive panels mounted, so an unguarded handler would fire once per open tab.
     tabStore.setState({ activeTabId: 'some-other-tab' });
