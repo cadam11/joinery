@@ -50,13 +50,28 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
+  /**
+   * The six editor preferences, each a DELIBERATE choice rather than an inherited one (J-44).
+   *
+   * They need saying out loud because for the whole of the Angular renderer's life they meant
+   * nothing: `query.component.ts:1270-1279` hardcoded Monaco's options and never read this object,
+   * so the Settings panel wrote values no editor consulted and four of the six defaults disagreed
+   * with what users were looking at. React's `<SqlEditor>` derives every option from the setting
+   * (`editor/sql-editor.tsx:194-237`), which turns each value below into something a user sees.
+   *
+   * Craig's ruling: keep what ships and what the React build has been showing — font 13, tab 4,
+   * word wrap off. The other three follow the same rule: `minimap` off because the Angular editor
+   * hardcoded it off (this object said `true`, and honouring that would have handed every existing
+   * user a minimap they never asked for), `lineNumbers` on and `autoComplete` on because the
+   * hardcoded editor and this object already agreed.
+   *
+   * Every value here is pinned by `settings.types.spec.ts` and stated in two docs-site pages
+   * (`reference/settings.md`, `features/query-editor.md`); changing one means changing all three.
+   */
   editor: {
     fontSize: 13,
     tabSize: 4,
     wordWrap: false,
-    // Default off: Angular renderer hardcoded minimap off despite a decorative toggle;
-    // defaulting true here would silently flip behavior for every existing user now that
-    // React honors the setting. false preserves shipped visual parity (J-44).
     minimap: false,
     lineNumbers: true,
     autoComplete: true,
