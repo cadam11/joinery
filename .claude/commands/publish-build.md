@@ -33,11 +33,11 @@ gh secret list --repo cadam11/joinery
 
 You want exactly one line, `HOMEBREW_TAP_TOKEN`. If it is missing, stop and send Craig to Part A of `plans/release/CRAIG-RELEASE-STEPS.md` — creating the token is his action, not yours, and you cannot do it for him.
 
-The `guard` job re-proves the token can actually read `cadam11/homebrew-joinery` before anything is built, so a stale or wrongly-scoped token fails in the first minute rather than after the release is public.
+The `guard` job re-checks the token before anything is built, so a bad one fails in the first minute rather than after the release is public. Be precise about what that proves: the tap is a **public** repository and every fine-grained token carries read-only access to all public repositories, so reaching the tap proves only that the credential is live. `guard` therefore also reads `.permissions.push` and fails on `false`. A token GitHub reports no permissions object for gets a warning and the release proceeds — if `homebrew` then fails at the end, that warning was the reason.
 
 ### Say the unsigned part out loud
 
-Every macOS release is unsigned and unnotarized. Tell Craig, in these words, before he agrees to the tag: _"every user's first launch needs System Settings → Privacy & Security → Open Anyway."_ It is in the release notes, the cask caveats and the install page — but it should be a thing he chose, not a thing he found out.
+Every macOS release is unsigned and unnotarized. Tell Craig, in these words, before he agrees to the tag: _"every user's first launch needs System Settings → Privacy & Security → Open Anyway, and so does every `brew upgrade` after it."_ It is in the release notes, the cask caveats and the install page — but it should be a thing he chose, not a thing he found out.
 
 ## 2. The release gate — the full harness
 
@@ -121,5 +121,5 @@ There is no wiki. Help ▸ Joinery Documentation opens <https://usejoinery.com/>
 - **Missing dependencies in the packaged app** — the `beforeBuild` hook MUST return `true`. Returning `false` tells electron-builder that `node_modules` are handled externally, which excludes every dependency from the asar. `pnpm run verify:package` is what catches this.
 - **Workspace symlink issues** — `scripts/package.js` replaces the `@joinery/shared` symlink with a real copy and restores it in a `finally`, so a failed build cannot leave `node_modules` swapped. Never call `electron-builder` directly; go through that script.
 - **The `guard` job fails on the tap** — `HOMEBREW_TAP_TOKEN` is missing, expired, or scoped to the wrong repository. Nothing was published; Craig makes a new token (Part A of `plans/release/CRAIG-RELEASE-STEPS.md`) and the tag is re-pushed.
-- **The `homebrew` job fails on checkout** — the token was revoked between `guard` and this job. The release is already public. Replace the token and re-run this job alone; the cask rewrite is idempotent and pushes nothing if the tap is already current.
+- **The `homebrew` job fails on checkout or push** — the token was revoked between `guard` and this job, or `guard` could not confirm its write access and warned instead of failing. The release is already public. Replace the token and re-run this job alone; the cask rewrite is idempotent and pushes nothing if the tap is already current.
 - **The `guard` job fails on the cask template** — someone edited `Casks/joinery.rb` into a shape `scripts/release/update-cask.ts` no longer matches. Its spec reads the real template, so `pnpm exec vitest run --project scripts` reproduces it locally.

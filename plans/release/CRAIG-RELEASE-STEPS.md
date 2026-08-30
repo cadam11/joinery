@@ -97,12 +97,12 @@ That push _is_ the release. There is no other trigger, no button, no manual uplo
 
 About 40 minutes. Four jobs in order:
 
-| Job        | Takes   | Does                                                            |
-| ---------- | ------- | --------------------------------------------------------------- |
-| `guard`    | ~1 min  | tag matches `package.json`; the tap token still reaches the tap |
-| `build`    | ~35 min | macOS DMGs + Windows installers, both architectures             |
-| `release`  | ~2 min  | `SHA256SUMS.txt`, then the GitHub Release                       |
-| `homebrew` | ~1 min  | stamps the cask and pushes it to the tap                        |
+| Job        | Takes   | Does                                                                    |
+| ---------- | ------- | ----------------------------------------------------------------------- |
+| `guard`    | ~1 min  | tag matches `package.json`; the tap token reaches the tap and can write |
+| `build`    | ~35 min | macOS DMGs + Windows installers, both architectures                     |
+| `release`  | ~2 min  | `SHA256SUMS.txt`, then the GitHub Release                               |
+| `homebrew` | ~1 min  | stamps the cask and pushes it to the tap                                |
 
 **Expect one yellow warning on the `build` job**, every time: `Unsigned build`. That is not a
 problem — it is the workflow saying out loud what it shipped. The run is still green.
@@ -132,9 +132,15 @@ install page and the README all say the same wrong thing and all four need fixin
 ## What Joinery does not do, on purpose
 
 - **No Apple Developer Program membership**, so no Developer ID signature and no notarization. The
-  cost is one extra click for a user, once, on the first launch.
+  cost is one extra click for a user on the first launch — and again after each upgrade, see
+  below.
 - **No auto-update.** Users get new versions with `brew upgrade --cask joinery`, or by downloading
-  the next DMG.
+  the next DMG. **An upgrade costs them the Open Anyway click again.** Homebrew can carry a user's
+  Gatekeeper approval forward across an upgrade only when it can verify that the new bundle has
+  the same signing identity as the old one; an unsigned app has none, so
+  `Cask::Upgrade.quarantine_release_decision` returns `:signer_unverified` and prints "macOS may
+  prompt at next launch" (`Library/Homebrew/cask/upgrade.rb:310-334`). This is the recurring cost
+  of shipping unsigned, and it is the strongest argument for buying a certificate later.
 - **The cask does not strip the quarantine flag for you.** Homebrew quarantines what it installs
   and no longer offers a way to opt out. Undoing that from inside the cask would be Joinery
   deciding, on someone else's machine, that Joinery is trustworthy.
@@ -143,11 +149,12 @@ install page and the README all say the same wrong thing and all four need fixin
 
 ## If something goes wrong
 
-| What you see                                         | What it means                                     | Fix                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------ |
-| `guard`: "Tag does not match package.json"           | you tagged a version the manifest does not claim  | delete the tag, bump `package.json` through a PR, tag again              |
-| `guard`: "HOMEBREW_TAP_TOKEN is not set"             | Part A was skipped                                | do Part A                                                                |
-| `guard`: "The tap is not reachable"                  | the token expired, or is scoped to the wrong repo | make a new token (A2–A5)                                                 |
-| `build` fails on `cpu-features`                      | the `beforeBuild` hook did not run                | see the Troubleshooting section of `/publish-build`                      |
-| `release`: "Missing installer"                       | electron-builder renamed an artifact              | the cask URLs would 404; fix the naming before re-tagging                |
-| A user says "Joinery is damaged and can't be opened" | quarantine, plus an incomplete removal attempt    | `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` — with `-r` |
+| What you see                                         | What it means                                    | Fix                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `guard`: "Tag does not match package.json"           | you tagged a version the manifest does not claim | delete the tag, bump `package.json` through a PR, tag again                    |
+| `guard`: "HOMEBREW_TAP_TOKEN is not set"             | Part A was skipped                               | do Part A                                                                      |
+| `guard`: "The tap is not reachable"                  | the token expired or was revoked                 | make a new token (A2–A5)                                                       |
+| `guard`: "The tap token cannot write"                | the token is read-only, or scoped elsewhere      | make a new token (A2–A5); **Contents: Read and write** is the bit to get right |
+| `build` fails on `cpu-features`                      | the `beforeBuild` hook did not run               | see the Troubleshooting section of `/publish-build`                            |
+| `release`: "Missing installer"                       | electron-builder renamed an artifact             | the cask URLs would 404; fix the naming before re-tagging                      |
+| A user says "Joinery is damaged and can't be opened" | quarantine, plus an incomplete removal attempt   | `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` — with `-r`       |

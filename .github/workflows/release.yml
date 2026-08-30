@@ -67,11 +67,21 @@ jobs:
           echo "Releasing ${version}." >> "$GITHUB_STEP_SUMMARY"
 
       # The tap token is not *used* until the last job, which runs after the GitHub Release is
-      # already public and permanent. Proving it here costs one API call and turns "the release
-      # shipped but nobody can brew upgrade into it" into "the release never started".
+      # already public and permanent. Proving what can be proved here costs two API calls and
+      # turns "the release shipped but nobody can brew upgrade into it" into "the release never
+      # started".
       #
-      # This asks the tap for its own name, so it fails on all three ways the token can be wrong:
-      # absent, expired, or scoped to the wrong repository.
+      # Be precise about what each check proves, because the tap is a PUBLIC repository and a
+      # fine-grained token "always include[s] read-only access to all public repositories on
+      # GitHub" (GitHub Docs, "Managing your personal access tokens"). So reading the tap proves
+      # the secret is set and the credential is live and unexpired — it does NOT prove the token
+      # is scoped to the tap, and it does NOT prove it can write.
+      #
+      # `.permissions.push` is the only write signal in that response. It is reliable enough to
+      # fail on when it comes back false, but GitHub does not document it as a guarantee for
+      # fine-grained tokens, so an absent or null field warns rather than blocking a release that
+      # is probably fine. A wrongly-scoped token that slips past both checks fails in `homebrew`,
+      # which is re-runnable on its own once the token is replaced.
       - name: The Homebrew tap must exist and the token must reach it
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -82,9 +92,22 @@ jobs:
             exit 1
           fi
           if ! gh api "repos/${TAP_REPOSITORY}" --jq .full_name; then
-            echo "::error title=The tap is not reachable::HOMEBREW_TAP_TOKEN is set, but it could not read ${TAP_REPOSITORY}. The token is expired, or scoped to a different repository, or the tap has been renamed or deleted."
+            echo "::error title=The tap is not reachable::HOMEBREW_TAP_TOKEN is set, but it could not read ${TAP_REPOSITORY}. The token is expired or revoked, or the tap has been renamed or deleted."
             exit 1
           fi
+          writable="$(gh api "repos/${TAP_REPOSITORY}" --jq 'if .permissions == null then "unknown" else (.permissions.push | tostring) end')"
+          case "$writable" in
+            true)
+              echo "HOMEBREW_TAP_TOKEN can write to ${TAP_REPOSITORY}."
+              ;;
+            false)
+              echo "::error title=The tap token cannot write::HOMEBREW_TAP_TOKEN can read ${TAP_REPOSITORY} — every token can, it is public — but it has no write access, so the tap update at the end of this release would fail. Re-create it scoped to ${TAP_REPOSITORY} with Contents: Read and write. See plans/release/CRAIG-RELEASE-STEPS.md."
+              exit 1
+              ;;
+            *)
+              echo "::warning title=Tap write access unverified::GitHub did not report a permissions object for ${TAP_REPOSITORY}, so this run could not confirm HOMEBREW_TAP_TOKEN can write to it. If the homebrew job fails at the end, that is the reason."
+              ;;
+          esac
 
       # Runs the real rewriter against a throwaway copy of the real template, so a cask that
       # update-cask.ts can no longer rewrite fails here rather than after the release is public
@@ -255,11 +278,13 @@ jobs:
             echo
             echo 'Joinery is **not code-signed and not notarized** — there is no Apple Developer Program membership behind it. macOS quarantines it either way you install it, Homebrew included, and refuses the first launch.'
             echo
-            echo 'Open it once, and macOS remembers:'
+            echo 'Open it, and macOS remembers until the app is replaced:'
             echo
             echo '1. Double-click Joinery. macOS refuses, and says so.'
             echo '2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** beside the message about Joinery.'
             echo '3. Confirm, and authenticate. Every launch after this one is normal.'
+            echo
+            echo 'A `brew upgrade` replaces the bundle, and Homebrew can only carry your approval forward when it can verify the new app has the same signer as the old one. An unsigned app has none, so expect the same three steps after each upgrade.'
             echo
             echo 'On macOS Sonoma and earlier, Control-click the app in Finder and choose **Open** instead. That shortcut was removed in macOS Sequoia.'
             echo

@@ -61,7 +61,7 @@ Filed as a follow-up rather than done here.
 
 ### What a user actually has to do
 
-An unsigned app that arrives with `com.apple.quarantine` set is refused on first launch. Three
+An unsigned app that arrives with `com.apple.quarantine` set is refused on first launch. Four
 facts govern the advice we give, and each of them was checked rather than assumed:
 
 1. **Homebrew quarantines what it installs, and the flag lands on every file in the bundle.**
@@ -81,10 +81,19 @@ facts govern the advice we give, and each of them was checked rather than assume
    (<https://developer.apple.com/news/?id=saqachfa>). Every place Joinery documented
    right-click → Open was wrong for macOS 15 and later, which includes the macOS 26 this is
    written on.
+4. **It is not a one-time cost — every `brew upgrade` charges it again.** Homebrew carries a
+   user's Gatekeeper approval forward across an upgrade only when it can verify the new bundle is
+   signed by the same identity as the old one: `Cask::Upgrade.quarantine_release_decision` reads
+   `Quarantine.signing_identity(old_app)`, and returns `:signer_unverified` the moment that is
+   `nil` (Homebrew 6.0.20, `Library/Homebrew/cask/upgrade.rb:310-334` and `:450`). An unsigned app
+   has no signing identity, so the approval is never inherited and Homebrew prints "macOS may
+   prompt at next launch". This is the recurring cost of shipping unsigned and the strongest
+   argument on the day a certificate is reconsidered.
 
 So the instruction everywhere — cask `caveats`, tap README, release notes, install page, README —
 is: **System Settings → Privacy & Security → Open Anyway**, with Control-click → Open named as the
-Sonoma-and-earlier alternative and `xattr -dr` as the terminal route.
+Sonoma-and-earlier alternative and `xattr -dr` as the terminal route, and the upgrade repeat said
+out loud rather than left to be discovered.
 
 ### Why the cask has no `postflight`
 
@@ -116,9 +125,20 @@ holds no secret at all — not even `GITHUB_TOKEN` on the electron-builder step,
 credential-passing under `publish: null`. The tap push is a different repository and is
 authenticated by `HOMEBREW_TAP_TOKEN`, never by `GITHUB_TOKEN`.
 
-`HOMEBREW_TAP_TOKEN` is the workflow's only secret, and `guard` spends one API call proving it can
-read the tap **before** anything is published — the failure it prevents is a permanent public
-GitHub Release that Homebrew users cannot `brew upgrade` into.
+`HOMEBREW_TAP_TOKEN` is the workflow's only secret, and `guard` spends two API calls on it
+**before** anything is published — the failure it prevents is a permanent public GitHub Release
+that Homebrew users cannot `brew upgrade` into.
+
+Be exact about what those calls prove, because the obvious reading is wrong. The tap is a **public**
+repository, and a fine-grained token "always include[s] read-only access to all public repositories
+on GitHub"
+([GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)).
+So `gh api repos/…` succeeding proves the secret is set and the credential is live and unexpired —
+it proves nothing about scope and nothing about write access. The second call reads
+`.permissions.push`, the only write signal in that response: `false` fails the release, and an
+absent or null field warns instead of blocking, because GitHub does not document that field's
+behaviour for fine-grained tokens and a false alarm here costs a delete-and-re-tag. A wrongly
+scoped token that gets past both still fails in `homebrew`, which is re-runnable on its own.
 
 ## Checksums
 
