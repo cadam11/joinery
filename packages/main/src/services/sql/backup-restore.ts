@@ -75,7 +75,11 @@ export class BackupRestoreService extends BaseSingleton {
     const tsql = TsqlBuilder.backup({
       databaseName: request.database,
       destinationPath: request.backupPath,
-      backupType: request.backupType,
+      // `backupType` is optional on the wire because PostgreSQL and MySQL have no such choice to
+      // express (J-48d). This is the SQL Server path, where the dialog always sends one; `'full'`
+      // is what `BACKUP DATABASE` does with no type clause, so an omission runs the same statement
+      // it names rather than a different one.
+      backupType: request.backupType ?? 'full',
       compression: request.compression ?? false,
       // Both of these reached the builder and were dropped on the floor before J-48: `checksum`
       // arrived as a `verify` the builder never read, and `copyOnly` was read by nothing anywhere.

@@ -9,7 +9,7 @@ import { spawn } from 'child_process';
 import { BrowserWindow } from 'electron';
 import { Client as PgClient } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import type { BackupRequest, RestoreRequest } from '@joinery/shared';
+import type { CliBackupRequest, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
@@ -18,7 +18,7 @@ import { MetadataService } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
-import { buildPgRestoreArgs } from './backup-args';
+import { buildPgDumpArgs, buildPgRestoreArgs } from './backup-args';
 
 const log = createLogger('PgBackup');
 
@@ -43,8 +43,11 @@ export class PgBackupService extends BaseSingleton {
   /**
    * Start a PostgreSQL backup using pg_dump.
    * Returns the operationId immediately — the dump runs in the background.
+   *
+   * Takes a {@link CliBackupRequest} rather than a `BackupRequest`: pg_dump is always asked for one
+   * format, so there is no `backupType` here to read or to branch on (J-48d).
    */
-  async startBackup(request: BackupRequest): Promise<string> {
+  async startBackup(request: CliBackupRequest): Promise<string> {
     const operationId = uuidv4();
     const profile = this.profileStore.getById(request.connectionId);
     if (!profile) throw new Error('Connection profile not found');
@@ -67,23 +70,14 @@ export class PgBackupService extends BaseSingleton {
     };
     this.activeOperations.set(operationId, operation);
 
-    const args = [
-      '-h',
-      profile.server,
-      '-p',
-      String(profile.port),
-      '-U',
-      profile.username || 'postgres',
-      '-d',
+    const backupPath = request.backupPath || `/tmp/${request.database}_${Date.now()}.dump`;
+    const args = buildPgDumpArgs(
+      { server: profile.server, port: profile.port, username: profile.username },
       request.database,
-      '-F',
-      'c', // custom format (compressed, supports pg_restore)
-      '-v', // verbose for progress
-      '-f',
-      request.backupPath || `/tmp/${request.database}_${Date.now()}.dump`,
-    ];
+      backupPath
+    );
 
-    log.info(`Starting pg_dump for ${request.database} → ${request.backupPath}`);
+    log.info(`Starting pg_dump for ${request.database} → ${backupPath}`);
 
     const env = { ...process.env };
     if (password) env.PGPASSWORD = password;

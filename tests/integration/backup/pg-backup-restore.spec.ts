@@ -110,7 +110,6 @@ describe('postgres backup/restore round-trip', () => {
         connectionId,
         database: c.database,
         backupPath,
-        backupType: 'full',
       });
       expect(backupOpId).toMatch(/^[0-9a-f-]{36}$/i);
 
@@ -219,7 +218,6 @@ describe('postgres backup/restore round-trip', () => {
         connectionId,
         database: c.database,
         backupPath,
-        backupType: 'full',
       });
       const backupResult = await waitForOperation(ipcCapture, backupOpId);
       expect(backupResult.success, `backup failed: ${backupResult.error}`).toBe(true);

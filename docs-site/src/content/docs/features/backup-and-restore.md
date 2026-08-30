@@ -73,6 +73,10 @@ Neither engine gets a backup type, a compression box, a description, a statement
 history, because none of those reach the tool: the format is fixed in the arguments Joinery passes,
 and neither engine keeps backup metadata for a history to read.
 
+The format is not a setting with one option — there is no setting. `pg_dump` is always given
+`-F c`, `mysqldump` is given no format flag at all, and the request those two engines receive
+carries no format field that could say otherwise.
+
 The suggested file name is `<database>_<timestamp>.<ext>` — `sales_2026-08-16T14-32-05.bak` — with
 the timestamp written in a form that is legal in a Windows path.
 
@@ -180,34 +184,36 @@ the form rather than letting the restore reject it after you have worked through
 
 | Claim                                                                                  | Source                                                                                                                   |
 | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| The three mechanisms, per engine                                                       | `packages/renderer/src/features/restore/restore-model.ts:11-21`, `backup-model.ts:53-77`                                 |
-| MSSQL writes on the server; PG/MySQL write on this machine                             | `packages/renderer/src/features/backup/backup-model.ts:64-77`                                                            |
+| The three mechanisms, per engine                                                       | `packages/renderer/src/features/restore/restore-model.ts:11-21`, `backup-model.ts:56-80`                                 |
+| MSSQL writes on the server; PG/MySQL write on this machine                             | `packages/renderer/src/features/backup/backup-model.ts:67-80`                                                            |
 | The four host binaries, probed with `--version`                                        | `packages/main/src/services/sql/cli-deps.ts:32-35, 71-107`                                                               |
 | They are not bundled, and the probe exists to avoid a spawn ENOENT                     | `packages/main/src/services/sql/cli-deps.ts:1-16`                                                                        |
 | The setup view replaces the form and lists each tool found or missing                  | `packages/renderer/src/features/backup/missing-cli-tools.tsx:64-108`                                                     |
 | Per-step install commands with a copy button, and a Re-check that re-probes            | `packages/renderer/src/features/backup/missing-cli-tools.tsx:113-198`, `cli-deps.ts:52-64`                               |
-| MSSQL skips the probe entirely                                                         | `packages/renderer/src/features/backup/backup-model.ts:53-62, 301-306`                                                   |
-| A failed probe opens the form and states the reason                                    | `packages/renderer/src/features/backup/backup-model.ts:296-305`, `backup-dialog.tsx:172-181`                             |
+| MSSQL skips the probe entirely                                                         | `packages/renderer/src/features/backup/backup-model.ts:56-65, 305-310`                                                   |
+| A failed probe opens the form and states the reason                                    | `packages/renderer/src/features/backup/backup-model.ts:300-309`, `backup-dialog.tsx:172-181`                             |
 | The sidebar's database and server menus carry Backup / Restore Database…               | `packages/renderer/src/shell/sidebar/node-menu.tsx:192-202, 241-258`                                                     |
 | The explorer footer's back-up and restore actions                                      | `packages/renderer/src/shell/sidebar/sidebar.tsx:146-228`                                                                |
 | The palette entries "Back up database" and "Restore database"                          | `packages/renderer/src/commands/catalogue.ts:489-505`                                                                    |
 | The menu bar's Database ▸ Backup… / Restore…                                           | `packages/main/src/menu.ts:300-313`                                                                                      |
 | Targetless entries resolve the most recent connection and its default database         | `packages/renderer/src/features/backup/backup-dialogs.tsx:1-20`                                                          |
-| MSSQL's backup-type picker holds Full, Differential and Transaction log                | `packages/renderer/src/features/backup/backup-model.ts:79-90`                                                            |
-| Which controls each engine gets, and the two format notes verbatim                     | `packages/renderer/src/features/backup/backup-model.ts:110-146`                                                          |
-| Compression, description, preview and history are MSSQL-only                           | `packages/renderer/src/features/backup/backup-model.ts:87-108`                                                           |
-| PG/MySQL keep no backup metadata, so there is no history to read                       | `packages/renderer/src/features/backup/backup-model.ts:97-101`                                                           |
-| The server file browser reads the server's own drives and directories                  | `packages/renderer/src/features/backup/server-file-browser.tsx:1-8`, `backup-dialog.tsx:340-363`                         |
-| PG/MySQL use the native save dialog                                                    | `packages/renderer/src/features/backup/backup-dialog.tsx:295-317`                                                        |
-| The suggested file name and its path-safe timestamp                                    | `packages/renderer/src/features/backup/backup-model.ts:162-176`                                                          |
-| The preview carries `INIT` and `STATS = 5`, and why                                    | `packages/renderer/src/features/backup/backup-model.ts:178-206`                                                          |
+| MSSQL's backup-type picker holds Full, Differential and Transaction log                | `packages/renderer/src/features/backup/backup-model.ts:82-94`                                                            |
+| Which controls each engine gets, and the two format notes verbatim                     | `packages/renderer/src/features/backup/backup-model.ts:114-150`                                                          |
+| `pg_dump` always gets `-F c` and `mysqldump` no format flag                            | `packages/main/src/services/sql/backup-args.ts` (`buildPgDumpArgs`, `buildMysqlDumpArgs`)                                |
+| The PG/MySQL request has no format field to override them                              | `packages/shared/src/types/backup.types.ts` (`CliBackupRequest`)                                                         |
+| Compression, description, preview and history are MSSQL-only                           | `packages/renderer/src/features/backup/backup-model.ts:91-112`                                                           |
+| PG/MySQL keep no backup metadata, so there is no history to read                       | `packages/renderer/src/features/backup/backup-model.ts:101-105`                                                          |
+| The server file browser reads the server's own drives and directories                  | `packages/renderer/src/features/backup/server-file-browser.tsx:1-8`, `backup-dialog.tsx:342-365`                         |
+| PG/MySQL use the native save dialog                                                    | `packages/renderer/src/features/backup/backup-dialog.tsx:297-319`                                                        |
+| The suggested file name and its path-safe timestamp                                    | `packages/renderer/src/features/backup/backup-model.ts:166-180`                                                          |
+| The preview carries `INIT` and `STATS = 5`, and why                                    | `packages/renderer/src/features/backup/backup-model.ts:182-210`                                                          |
 | The form stays visible with controls disabled while a dump runs                        | `packages/renderer/src/features/backup/backup-dialog.tsx:21-27`                                                          |
-| An indeterminate bar when the tool reports no percentage                               | `packages/renderer/src/features/backup/backup-model.ts:383-396`, `backup-dialog.tsx:718-760`                             |
-| There is no cancel button, and closing does not stop the dump                          | `packages/renderer/src/features/backup/backup-dialog.tsx:29-36, 759-762`                                                 |
+| An indeterminate bar when the tool reports no percentage                               | `packages/renderer/src/features/backup/backup-model.ts:387-400`, `backup-dialog.tsx:720-762`                             |
+| There is no cancel button, and closing does not stop the dump                          | `packages/renderer/src/features/backup/backup-dialog.tsx:29-36, 761-764`                                                 |
 | Cancel reaches the PG/MySQL child process; SQL Server cannot be stopped                | `packages/main/src/ipc/backup.ipc.ts` (`cancelOperation`), `packages/main/src/services/sql/backup-restore.ts` (`cancel`) |
-| The success band names the elapsed time and the path                                   | `packages/renderer/src/features/backup/backup-dialog.tsx:766-793`                                                        |
-| A failure states the message with Try again beside Close                               | `packages/renderer/src/features/backup/backup-dialog.tsx:795-816, 585-600`                                               |
-| A second operation on the same database is refused, and why                            | `packages/renderer/src/features/backup/backup-dialog.tsx:636-676`                                                        |
+| The success band names the elapsed time and the path                                   | `packages/renderer/src/features/backup/backup-dialog.tsx:768-795`                                                        |
+| A failure states the message with Try again beside Close                               | `packages/renderer/src/features/backup/backup-dialog.tsx:797-818, 587-602`                                               |
+| A second operation on the same database is refused, and why                            | `packages/renderer/src/features/backup/backup-dialog.tsx:638-678`                                                        |
 | Restore asks for file, target and overwrite                                            | `packages/renderer/src/features/restore/restore-dialog.tsx:696-813`                                                      |
 | The target picker plus "A database that does not exist yet…"                           | `packages/renderer/src/features/restore/restore-dialog.tsx:746-780`                                                      |
 | The four target notes, verbatim                                                        | `packages/renderer/src/features/restore/restore-dialog.tsx:1081-1121`                                                    |

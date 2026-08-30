@@ -78,8 +78,8 @@ describe('the engine option matrix', () => {
   });
 
   it('offers PG and MySQL no options at all, and states the format instead', () => {
-    // Gap 1 in the model's header: `pg-backup.ts` hard-codes `-F c` and `mysql-backup.ts` never reads
-    // `backupType`, so a format picker on these engines is a control that cannot change the output.
+    // Gap 1 in the model's header, closed in J-48d: each of these engines has exactly one dump
+    // format, so a format picker here is a control that cannot change the output.
     for (const engine of ['postgresql', 'mysql'] as const) {
       const options = engineBackupOptions(engine);
       expect(options.showBackupType).toBe(false);
@@ -90,8 +90,13 @@ describe('the engine option matrix', () => {
       // What is offered instead: a statement of what the format IS.
       expect(options.formatNote).not.toBeNull();
     }
+    // The note has to name the format `packages/main` actually produces: `buildPgDumpArgs` passes
+    // `-F c` (custom) and `buildMysqlDumpArgs` passes no format flag at all, so mysqldump's default
+    // plain SQL script is what lands on disk.
     expect(engineBackupOptions('postgresql').formatNote).toMatch(/pg_dump/);
+    expect(engineBackupOptions('postgresql').formatNote).toMatch(/custom-format/);
     expect(engineBackupOptions('mysql').formatNote).toMatch(/mysqldump/);
+    expect(engineBackupOptions('mysql').formatNote).toMatch(/plain SQL/);
     // MSSQL has a picker, so it needs no note.
     expect(engineBackupOptions('mssql').formatNote).toBeNull();
   });
