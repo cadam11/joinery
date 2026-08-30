@@ -231,9 +231,9 @@ test.describe('Joinery (React) — the results grid', () => {
       //
       // The ONE thing stubbed is `dialog.showSaveDialog`, because a native modal is the one surface
       // Playwright genuinely cannot reach — there is no CDP for the OS file panel. Everything after it
-      // is real: the renderer ships the result set over `query:export-results`, the main process formats
-      // it and `writeFileSync`s it (`main/src/ipc/query.ipc.ts:111-166`), and the assertions below read
-      // that file off the disk. Stubbing the formatter or the write would have made this a mock test.
+      // is real: the renderer ships a result set over `query:export-results`, the main process formats
+      // it and `writeFileSync`s it (`main/src/ipc/query.ipc.ts`), and the assertions below read that
+      // file off the disk. Stubbing the formatter or the write would have made this a mock test.
       const destination = join(tmpdir(), `joinery-export-${Date.now().toString(36)}.json`);
       await app.evaluate(({ dialog }, filePath: string) => {
         dialog.showSaveDialog = async () => ({ canceled: false, filePath });
@@ -249,11 +249,52 @@ test.describe('Joinery (React) — the results grid', () => {
 
         const written: unknown = JSON.parse(readFileSync(destination, 'utf-8'));
         expect(Array.isArray(written)).toBe(true);
-        // The five seeded customers, with the columns the executor described — not the grid's view of
-        // them. That distinction is J-47, and it is what makes this an assertion about export rather
-        // than a second copy test.
         expect(written).toHaveLength(5);
         expect((written as Array<Record<string, unknown>>)[0]).toMatchObject({ id: 1 });
+      } finally {
+        rmSync(destination, { force: true });
+      }
+    });
+  });
+
+  test('exports what the grid is showing — the sort and the filter reach the file (J-47)', async () => {
+    await withJoineryReact(async ({ app, window }) => {
+      await readyEditor(window);
+      await typeSql(window, CUSTOMERS_SQL);
+      await executeQuery(window);
+      await expect(gridRows(window)).toHaveCount(5);
+
+      // Descending by id, then a quick filter down to two of the five. Export used to ignore both and
+      // write the executor's five rows in the executor's order; Craig's ruling is that it must not.
+      await sortGridColumn(window, 'id');
+      await sortGridColumn(window, 'id');
+      await expect(gridSortState(window, 'id')).toHaveAttribute('aria-sort', 'descending');
+      await window.getByTestId('results-filter').fill('example.com');
+      await expect(window.getByTestId('results-filtered')).toBeVisible();
+
+      // Whatever the filter left on screen, in the order it left it, is the assertion's expectation —
+      // read off the grid rather than hardcoded, so this stays a statement about agreement between the
+      // view and the file rather than about the seed data.
+      const onScreen = await gridColumnValues(window, 'id');
+      expect(onScreen.length).toBeGreaterThan(0);
+      expect(onScreen.length).toBeLessThan(5);
+
+      const destination = join(tmpdir(), `joinery-export-view-${Date.now().toString(36)}.json`);
+      await app.evaluate(({ dialog }, filePath: string) => {
+        dialog.showSaveDialog = async () => ({ canceled: false, filePath });
+      }, destination);
+
+      try {
+        await openExportMenu(window);
+        await window.getByTestId('results-export-json').click();
+        await expect(
+          window
+            .locator('[data-sonner-toast]')
+            .filter({ hasText: `Exported ${onScreen.length} rows` })
+        ).toBeVisible({ timeout: 10_000 });
+
+        const written = JSON.parse(readFileSync(destination, 'utf-8')) as Record<string, unknown>[];
+        expect(written.map(row => String(row.id))).toEqual(onScreen);
       } finally {
         rmSync(destination, { force: true });
       }
