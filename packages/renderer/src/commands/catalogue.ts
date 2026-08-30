@@ -151,8 +151,8 @@ export type AcceleratorKeys = string | { readonly mac: string; readonly other: s
  *   ⌘J, the palette's ⌘K, the object search's ⌘P, the snippet library's ⌥⌘S). These must avoid every
  *   registered accelerator, or the menu wins and the listener never runs — which is exactly what
  *   happened to the Angular snippet library's ⇧⌘S, sitting on top of File ▸ Save Query As.
- * - `editor` — `menu.ts` declares the accelerator with `registerAccelerator: false`, so it is shown
- *   in the menu but NOT bound by it; Monaco binds the key itself (⌘E, and ⌘A inside the editor).
+ * - `editor` — Monaco binds the key itself and nothing registers it: either `menu.ts` shows it with
+ *   `registerAccelerator: false` (⌘E, ⌘A), or no menu item carries it at all (the editor's ⌃M).
  */
 export type AcceleratorSource = 'menu' | 'renderer' | 'editor';
 
