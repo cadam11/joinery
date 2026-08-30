@@ -75,6 +75,13 @@ The tap is `github.com/cadam11/homebrew-joinery`, public, holding `Casks/joinery
 `cadam11/joinery/joinery` is how Homebrew spells "the `joinery` cask in the `joinery` tap owned by
 `cadam11`".
 
+**It does not exist yet.** Creating it is one command —
+`./scripts/release/bootstrap-tap.sh`, which copies `Casks/joinery.rb`, `Casks/TAP_README.md` and
+`LICENSE` into a fresh repository and pushes it. The script is idempotent: run against an existing
+tap it says so and touches nothing, so it is safe to leave in the tree. `--dry-run` stages the
+commit in a temp directory and stops. The bootstrap has to run before the first tag is pushed, or
+the `homebrew` job fails on a checkout of a repository that is not there.
+
 **`Casks/joinery.rb` in _this_ repo is the template and the single source of truth.** It is committed
 with `version "0.0.0"` and all-zero checksums, which is not installable and is not meant to be. On a
 tag, the `homebrew` job checks out the tap, copies this repo's template over the tap's copy, runs
