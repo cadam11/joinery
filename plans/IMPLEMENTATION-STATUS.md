@@ -18,7 +18,7 @@ All core features implemented. AI chat with agentic tool calling fully operation
 | Windows x64         | NSIS Installer + ZIP | ✅ GitHub Actions |
 | Windows ARM64       | NSIS Installer + ZIP | ✅ GitHub Actions |
 
-Builds trigger automatically on tagged releases via `.github/workflows/build-release.yml`.
+Builds trigger automatically on tagged releases via `.github/workflows/release.yml`.
 
 ---
 

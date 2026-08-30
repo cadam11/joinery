@@ -270,12 +270,16 @@ Once Joinery launches:
 ### Build Installers
 
 ```bash
-pnpm run package:mac  # Build macOS DMG (arm64 + x64)
+pnpm run package:dmg  # macOS DMG (arm64 + x64) — what the release publishes
+pnpm run package:mac  # the same, plus the zips
 pnpm run package      # Build for current platform
 ```
 
-[GitHub Actions](.github/workflows/build-release.yml) will build Windows and macOS installers
-automatically once a tagged release is pushed — no tag has been pushed yet.
+Pushing a `v*` tag runs [the release workflow](.github/workflows/release.yml): macOS and Windows
+installers for both architectures, a `SHA256SUMS.txt` covering all of them, a GitHub Release, and a
+Homebrew tap update. No tag has been pushed yet. Code signing and notarization are a gated step
+that runs when the Apple secrets exist and is skipped loudly when they do not — see
+[`plans/release/DISTRIBUTION.md`](plans/release/DISTRIBUTION.md).
 
 ### Set Up AI
 
