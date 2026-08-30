@@ -50,6 +50,21 @@ export default defineConfig({
         },
       },
       {
+        // Build scripts under `scripts/`, which no package owns and so no package's test
+        // project collected. Its own project rather than a widened `include` on `node`
+        // above: that one loads `packages/main/src/__tests__/setup.ts`, which imports the
+        // connection-pool singleton. A cask rewriter has no business booting that.
+        extends: true,
+        test: {
+          name: 'scripts',
+          include: ['scripts/**/*.{test,spec}.ts'],
+          exclude: ['**/node_modules/**', '**/dist/**'],
+          environment: 'node',
+          testTimeout: 30000,
+          hookTimeout: 30000,
+        },
+      },
+      {
         extends: true,
         test: {
           name: 'renderer',

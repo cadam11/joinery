@@ -43,6 +43,9 @@
       "@joinery/shared/*": ["packages/shared/src/*"]
     }
   },
-  "include": ["tests/**/*.ts"],
+  // `scripts/**/*.ts` rides along rather than getting a config of its own: it is the same
+  // shape of code (node, ESM, `types: ["node"]`) and, like tests/, no package tsconfig
+  // includes it, so nothing type-checked it. The `.js` scripts beside it are untouched.
+  "include": ["tests/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "tests/reports/.cache"]
 }

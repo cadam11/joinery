@@ -1,0 +1,6 @@
+{
+  "//": "Node resolves a file's module type from the nearest package.json. The repo root has no \"type\", so scripts/*.js are CommonJS and stay that way — but update-cask.ts is ESM, and without this marker Node parses it as CommonJS, fails, reparses it as ESM and prints MODULE_TYPELESS_PACKAGE_JSON on every run. This directory, and only this directory, is ESM.",
+  "name": "@joinery/release-scripts",
+  "private": true,
+  "type": "module"
+}
