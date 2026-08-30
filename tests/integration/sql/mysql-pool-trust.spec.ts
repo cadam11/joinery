@@ -74,8 +74,15 @@ describe('MySQL pool trust levels', () => {
         db.databaseName
       );
 
-      await expect(pool.query(STACKED)).rejects.toThrow(/syntax/i);
-      expect(await victimExists(db.databaseName)).toBe(true);
+      const outcome = await pool.query(STACKED).then(
+        () => 'ran',
+        (err: Error) => `refused: ${err.message}`
+      );
+
+      // Asserted first, because it is the security claim: if the connection
+      // carried the second statement, the DROP has already happened.
+      expect(await victimExists(db.databaseName), 'probe_victim was dropped').toBe(true);
+      expect(outcome).toMatch(/^refused: .*syntax/i);
     });
   });
 
@@ -138,16 +145,15 @@ describe('MySQL callers on the live server', () => {
       // execute_query has no confirmation gate — it is the AI surface's widest
       // path, and the model's string is the whole statement. Single-statement
       // is now enforced by the connection rather than assumed.
-      await expect(
-        ToolRegistry.getInstance().executeTool(
-          'execute_query',
-          { sql: STACKED },
-          connectionId,
-          db.databaseName
-        )
-      ).rejects.toThrow(/syntax/i);
+      const outcome = await ToolRegistry.getInstance()
+        .executeTool('execute_query', { sql: STACKED }, connectionId, db.databaseName)
+        .then(
+          () => 'ran',
+          (err: Error) => `refused: ${err.message}`
+        );
 
-      expect(await victimExists(db.databaseName)).toBe(true);
+      expect(await victimExists(db.databaseName), 'probe_victim was dropped').toBe(true);
+      expect(outcome).toMatch(/^refused: .*syntax/i);
     });
   });
 
@@ -162,8 +168,8 @@ describe('MySQL callers on the live server', () => {
         sql: STACKED,
       });
 
+      expect(await victimExists(db.databaseName), 'probe_victim was dropped').toBe(true);
       expect(result.success).toBe(false);
-      expect(await victimExists(db.databaseName)).toBe(true);
     });
   });
 

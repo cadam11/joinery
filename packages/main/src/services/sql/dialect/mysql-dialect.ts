@@ -32,8 +32,10 @@ export class MySQLDialect extends SQLDialect {
    * `IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,
    * ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`. So a value ending in a backslash escapes
    * the quote that should close the literal, the next quote opens a new one, and a `;` lands
-   * outside it. Both MySQL pools are opened `multipleStatements: true` (`connection-pool.ts`,
-   * `provider/mysql-provider.ts`), so that second statement runs.
+   * outside it. Whether that second statement then runs depends on the connection: J-137 split
+   * Joinery's MySQL pools by trust level, and only the query editor's pool negotiates
+   * `CLIENT_MULTI_STATEMENTS` (`mysql-pool-options.ts`). This escape is what has to hold on the
+   * editor's pool, and is the reason the split is defence in depth rather than the fix.
    *
    * Doubling BOTH is deliberate. mysql2's own escaper (`sql-escaper`, its `escapeString`) writes
    * `\'` and `\\`; that is correct in the default mode and unsafe under `NO_BACKSLASH_ESCAPES`,

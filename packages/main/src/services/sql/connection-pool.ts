@@ -19,6 +19,12 @@ import { SshTunnelManager, type SshCredentials } from '../ssh/ssh-tunnel-manager
 import { splitTopLevelStatements } from './sql-statement-splitter';
 import { getDialect, type SQLDialect } from './dialect';
 import { auroraDsqlPoolOptions } from './aurora-dsql-pool-options';
+import {
+  mysqlPoolKey,
+  mysqlPoolKeysForDatabase,
+  mysqlPoolOptions,
+  type MySQLPoolTrust,
+} from './mysql-pool-options';
 
 const log = createLogger('PoolManager');
 
@@ -711,19 +717,31 @@ export class ConnectionPoolManager extends BaseSingleton {
   }
 
   /**
-   * Get a MySQL pool for a profile.
+   * Get a MySQL pool for a profile, at a given trust level (J-137).
+   *
    * MySQL supports USE for database switching, but we still create pools per
    * database for consistency with the PG pattern and connection isolation.
    * All MySQL pools for a profile share the same SSH tunnel.
+   *
+   * There are two pools per (profile, database) because `multipleStatements`
+   * is a handshake capability, not a per-query option — see
+   * mysql-pool-options.ts for the full reasoning. `'restricted'` is the
+   * default: only the query editor, which sends a whole user-authored script
+   * in one call, asks for `'script'`. Both pools are opened lazily, so a
+   * profile only ever pays for the trust levels it actually uses.
    */
-  async getMySQLPool(profileId: string, database?: string): Promise<MySQLPool> {
+  async getMySQLPool(
+    profileId: string,
+    database?: string,
+    trust: MySQLPoolTrust = 'restricted'
+  ): Promise<MySQLPool> {
     const profile = this.profileStore.getById(profileId);
     if (!profile) throw new Error('Connection profile not found');
 
     await this.invalidateStalePoolsIfTunnelGone(profile);
 
     const dbName = database || profile.database || undefined;
-    const poolKey = `${profileId}:${dbName ?? '__default__'}`;
+    const poolKey = mysqlPoolKey(profileId, dbName, trust);
 
     const existing = this.mysqlPools.get(poolKey);
     if (existing) {
@@ -737,22 +755,7 @@ export class ConnectionPoolManager extends BaseSingleton {
     // Open SSH tunnel if configured (reuses existing tunnel for this profileId)
     const { effectiveProfile } = await this.withTunnel(profile);
 
-    const pool = mysql.createPool({
-      host: effectiveProfile.server,
-      port: effectiveProfile.port,
-      user: effectiveProfile.username,
-      password,
-      database: dbName,
-      charset: profile.mysqlCollation || undefined,
-      ssl: effectiveProfile.encrypt
-        ? { rejectUnauthorized: !effectiveProfile.trustServerCertificate }
-        : undefined,
-      connectTimeout: effectiveProfile.connectionTimeout * 1000,
-      connectionLimit: 10,
-      waitForConnections: true,
-      idleTimeout: 30000,
-      multipleStatements: true,
-    });
+    const pool = mysql.createPool(mysqlPoolOptions(effectiveProfile, dbName, trust, password));
 
     // Verify connection
     const conn = await pool.getConnection();
@@ -765,7 +768,7 @@ export class ConnectionPoolManager extends BaseSingleton {
       activeQueries: 0,
     });
 
-    log.info(`Connected to MySQL: ${profile.name} (${dbName})`);
+    log.info(`Connected to MySQL: ${profile.name} (${dbName}, ${trust})`);
     return pool;
   }
 
@@ -1002,7 +1005,14 @@ export class ConnectionPoolManager extends BaseSingleton {
     }
 
     if (engine === 'mysql') {
-      const pool = await this.getMySQLPool(profileId, database);
+      // Script trust (J-137), deliberately. DDL arrives here either dialect-built
+      // from database.ipc.ts or as raw SQL through the AI `execute_ddl` tool,
+      // which is confirmation-gated — the user has seen and approved the exact
+      // text. Multi-statement DDL scripts are a legitimate thing to approve, and
+      // the PostgreSQL arm above already runs them (it splits and loops). The
+      // unconfirmed AI path, `execute_query`, goes through ToolRegistry.queryAny
+      // and gets the restricted pool.
+      const pool = await this.getMySQLPool(profileId, database, 'script');
       const conn = await pool.getConnection();
       try {
         await conn.query(sql);
@@ -1111,9 +1121,11 @@ export class ConnectionPoolManager extends BaseSingleton {
     }
 
     if (engine === 'mysql') {
-      const key = `${profileId}:${database}`;
-      const entry = this.mysqlPools.get(key);
-      if (entry) {
+      // Both trust levels, or DROP DATABASE still fails: the editor's script
+      // pool holds connections to the same database as the restricted one.
+      for (const key of mysqlPoolKeysForDatabase(profileId, database)) {
+        const entry = this.mysqlPools.get(key);
+        if (!entry) continue;
         try {
           await entry.pool.end();
         } catch (err) {

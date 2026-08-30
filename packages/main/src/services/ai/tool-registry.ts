@@ -86,6 +86,14 @@ export class ToolRegistry extends BaseSingleton {
   /**
    * Execute a query on any engine and return rows.
    * Routes to the correct pool based on the connection's engine.
+   *
+   * The SQL here is either dialect-built or, for `execute_query`, authored by
+   * the model — and `execute_query` has no confirmation gate. The MySQL arm
+   * therefore asks for the restricted pool (J-137): "one statement" stops
+   * being a convention the tool descriptions state and becomes something the
+   * server enforces, because the connection never negotiated
+   * `CLIENT_MULTI_STATEMENTS`. (`execute_ddl` is different — it IS
+   * confirmation-gated, and goes through ConnectionPoolManager.executeDDL.)
    */
   private async queryAny(
     connectionId: string,
@@ -102,7 +110,7 @@ export class ToolRegistry extends BaseSingleton {
     }
 
     if (engine === 'mysql') {
-      const mysqlPool = await pool.getMySQLPool(connectionId, database);
+      const mysqlPool = await pool.getMySQLPool(connectionId, database, 'restricted');
       const [rows] = await mysqlPool.query(sql);
       return rows as Record<string, unknown>[];
     }
@@ -122,9 +130,9 @@ export class ToolRegistry extends BaseSingleton {
    *
    * Two of the three channels reinforce that by refusing to carry a second
    * statement at all: node-pg's extended query protocol, and a mysql2
-   * server-side prepared statement (`execute`, which is why
-   * `multipleStatements: true` on that pool is unreachable from here). The
-   * SQL Server channel does NOT. `request.query()` reaches the server as
+   * server-side prepared statement (`execute`). On MySQL that is now belt and
+   * braces — since J-137 this pool does not negotiate
+   * `CLIENT_MULTI_STATEMENTS` either. The SQL Server channel does NOT. `request.query()` reaches the server as
    * `sp_executesql`, which runs an ordinary multi-statement batch — Joinery
    * depends on that, since `adaptSqlForPool` prepends `USE [db];` to the
    * statement. On SQL Server the binding is therefore the whole of the
@@ -148,9 +156,11 @@ export class ToolRegistry extends BaseSingleton {
     }
 
     if (engine === 'mysql') {
-      const mysqlPool = await pool.getMySQLPool(connectionId, database);
+      const mysqlPool = await pool.getMySQLPool(connectionId, database, 'restricted');
       // `execute`, not `query`: a prepared statement binds values server-side,
-      // so `multipleStatements: true` on this pool is unreachable from them.
+      // so the values can never be lexed as SQL. Since J-137 this pool also
+      // does not negotiate `CLIENT_MULTI_STATEMENTS`, so a second statement is
+      // not expressible on it either.
       const [rows] = await mysqlPool.execute(query.sql, query.params);
       return rows as Record<string, unknown>[];
     }

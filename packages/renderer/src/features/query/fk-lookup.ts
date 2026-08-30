@@ -257,8 +257,20 @@ export function mergeEnrichedColumns(
  *
  * MySQL's mirror-image setting, `NO_BACKSLASH_ESCAPES`, is NOT a security hole here: with it on, the
  * doubled backslash is two literal backslashes, so a lookup finds no row (or the wrong one) — data
- * wrong, never a second statement, because quote-doubling holds in both modes and mysql2 does not
- * multiplex statements. Asserted in the spec so the trade-off is recorded rather than assumed.
+ * wrong, never a second statement, because quote-doubling is an escape in both modes and so the
+ * value cannot get out of the literal. Asserted in the spec so the trade-off is recorded rather
+ * than assumed.
+ *
+ * The old wording here added "and mysql2 does not multiplex statements". That was false when it was
+ * written (both of Joinery's MySQL pools were opened `multipleStatements: true`) and it is the wrong
+ * thing to lean on now: mysql2 multiplexes whenever the connection negotiated
+ * `CLIENT_MULTI_STATEMENTS`, which is a per-pool decision. J-137 made that decision explicit —
+ * `main/services/sql/mysql-pool-options.ts` opens a `'restricted'` pool without the flag for
+ * metadata, the AI tools and this FK lookup, and a `'script'` pool with it for the query editor.
+ * This preview text is executed through the FETCH_FK_RECORD handler, which runs on the restricted
+ * pool, so a second statement here is not merely un-writable but unparseable. The escaping above is
+ * still what has to hold: the same `sqlLiteral` output is also shown to the user and can be pasted
+ * into the editor, which does run on the multi-statement pool.
  */
 export function sqlLiteral(value: unknown, engine: DatabaseEngine): string {
   if (value === null || value === undefined) return 'NULL';

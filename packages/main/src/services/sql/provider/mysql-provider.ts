@@ -10,6 +10,7 @@ import type { ConnectionProfile, TestConnectionResult } from '@joinery/shared';
 import { createLogger } from '../../../utils/logger';
 import { DatabaseProvider, type ProviderQueryResult } from './database-provider';
 import { MySQLDialect } from '../dialect/mysql-dialect';
+import { mysqlPoolOptions } from '../mysql-pool-options';
 
 const log = createLogger('MySQLProvider');
 
@@ -24,20 +25,22 @@ export class MySQLProvider extends DatabaseProvider {
   }
 
   async connect(profile: ConnectionProfile, password: string): Promise<void> {
-    const config: PoolOptions = {
-      host: profile.server,
-      port: profile.port,
-      user: profile.username,
-      password,
-      database: profile.database || undefined,
-      charset: profile.mysqlCollation || undefined,
-      ssl: profile.encrypt ? { rejectUnauthorized: !profile.trustServerCertificate } : undefined,
-      connectTimeout: profile.connectionTimeout * 1000,
-      connectionLimit: 10,
-      waitForConnections: true,
-      idleTimeout: 30000,
-      multipleStatements: true,
-    };
+    // Script trust (J-137): `execute` below sends a whole script in one
+    // `conn.query()` and unpacks the multi-result array, so this provider is
+    // the editor's equivalent and needs `CLIENT_MULTI_STATEMENTS`. Options come
+    // from the shared builder so the flag is set in exactly one place — see
+    // mysql-pool-options.ts for why the restricted level exists.
+    //
+    // NOTE: nothing constructs MySQLProvider today. ConnectionPoolManager owns
+    // the live MySQL pools; this class is the not-yet-wired half of the
+    // provider abstraction. Whoever wires it must decide the trust level per
+    // caller rather than inheriting this one.
+    const config: PoolOptions = mysqlPoolOptions(
+      profile,
+      profile.database || undefined,
+      'script',
+      password
+    );
 
     this.pool = mysql.createPool(config);
     // Verify the connection works

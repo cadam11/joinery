@@ -35,7 +35,7 @@ vi.mock('./connection-pool', async () => {
     query: async () => [recorder.rows, []],
     getConnection: async () => ({
       query: async () => [recorder.rows, []],
-      release: () => {},
+      release: () => undefined,
     }),
   };
   return {
@@ -49,13 +49,14 @@ vi.mock('./connection-pool', async () => {
           return pool;
         },
       }),
-      resetInstance: () => {},
     },
   };
 });
 
-const { MetadataService } = await import('./metadata');
-const { QueryExecutor } = await import('./query-executor');
+// Static, not dynamic: `vi.mock` above is hoisted over these, and packages/main
+// forbids top-level await.
+import { MetadataService } from './metadata';
+import { QueryExecutor } from './query-executor';
 
 const CONNECTION_ID = 'profile-1';
 const DATABASE = 'appdb';

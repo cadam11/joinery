@@ -46,6 +46,11 @@ export class MetadataService extends BaseSingleton {
   /**
    * Execute a query on any engine (MSSQL or PG).
    * Routes to the correct pool based on the connection's engine.
+   *
+   * Every statement that reaches here is one dialect-built metadata query, so
+   * the MySQL arm asks for the restricted pool (J-137): a second statement is
+   * not expressible on that connection, whatever a schema or table name in the
+   * predicate contains.
    */
   private async queryAny<T>(connectionId: string, sql: string, database?: string): Promise<T[]> {
     const engine = this.poolManager.getEngineForProfile(connectionId);
@@ -57,7 +62,7 @@ export class MetadataService extends BaseSingleton {
     }
 
     if (engine === 'mysql') {
-      const pool = await this.poolManager.getMySQLPool(connectionId, database);
+      const pool = await this.poolManager.getMySQLPool(connectionId, database, 'restricted');
       const [rows] = await pool.query(sql);
       return rows as T[];
     }

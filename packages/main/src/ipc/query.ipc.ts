@@ -41,7 +41,12 @@ export function registerQueryHandlers(): void {
     IPC_CHANNELS.QUERY.EXECUTE,
     async (_event, request: QueryRequest): Promise<QueryResult> => {
       const startTime = Date.now();
-      const result = await queryExecutor.execute(request);
+      // The editor channel: `request.sql` is whatever the user typed (or a
+      // script Joinery generated for them to review), and MySQL users expect a
+      // multi-statement script to run in one go. This is the ONE call site that
+      // asks for the MySQL script pool (J-137) — every other main-process
+      // caller leaves the trust level at its restricted default.
+      const result = await queryExecutor.execute(request, { mysqlTrust: 'script' });
 
       // Record to history
       const connection = connectionStore.getById(request.connectionId);
@@ -193,6 +198,10 @@ export function registerQueryHandlers(): void {
           value: request.value,
         });
 
+        // No trust option: this SQL is dialect-built and single-statement, but
+        // its WHERE value is a cell out of a result set — i.e. arbitrary data
+        // from whatever table the user opened. It runs on the restricted pool,
+        // where a second statement is not expressible (J-137).
         const result = await queryExecutor.execute({
           connectionId: request.connectionId,
           database: request.database,
