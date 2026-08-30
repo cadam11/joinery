@@ -175,6 +175,33 @@ describe('migrateLegacyUserDataDir', () => {
     expect(read(target, 'app-state.json')).toBe('{}');
   });
 
+  test('surfaces a permission error instead of reporting "nothing to migrate"', ctx => {
+    // `fs.existsSync` cannot tell EACCES from ENOENT, so a legacy directory the process may stat
+    // but not read used to look empty and the user got a fresh profile silently. Asserted against
+    // real permissions on real `node:fs` — the probe below is the check that the OS is enforcing
+    // them at all, since root ignores the mode bits and Windows does not have them.
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      ctx.skip('needs an OS that enforces directory permissions for this user');
+      return;
+    }
+    const legacy = writeDir('legacy', { 'app-state.json': '{"appState":{"kept":true}}' });
+    const target = path.join(sandbox, 'Current');
+    fs.chmodSync(legacy, 0o600); // readable, but not traversable: statting a child now fails
+    try {
+      expect(fs.existsSync(path.join(legacy, 'app-state.json'))).toBe(false); // the trap, live
+
+      expect(() =>
+        migrateLegacyUserDataDir({
+          userDataPath: target,
+          expectedDirName: 'Current',
+          legacyDirName: 'legacy',
+        })
+      ).toThrow(/EACCES|EPERM/);
+    } finally {
+      fs.chmodSync(legacy, 0o700); // so afterEach can remove the sandbox
+    }
+  });
+
   test('rejects a relative userData path rather than guessing a parent', () => {
     expect(() =>
       migrateLegacyUserDataDir({
@@ -224,7 +251,13 @@ describe('the shipped directory names', () => {
  * Electron derives `app.name` — and from it `userData`, `logs` and the macOS application menu's
  * first item — from `productName ?? name` in the package.json beside the entry point. Two entry
  * points exist: the repo root's for the packaged app, and `packages/main`'s for `electron .` in
- * development. Both have to say `Joinery`, or `USER_DATA_DIR_NAME` above is a lie.
+ * development.
+ *
+ * The packaged one has to say `Joinery`, or `USER_DATA_DIR_NAME` above is a lie. The development
+ * one deliberately says something ELSE, so `pnpm run dev` keeps its own user-data directory and a
+ * dev-time bug cannot reach the real connection profiles — the separation that `@joinery/main` gave
+ * by accident before this rename. The assertion that matters is the inequality; the exact dev name
+ * is only asserted so a rename has to come here and think about it.
  */
 describe('the package.json Electron reads app.name from', () => {
   /**
@@ -240,13 +273,33 @@ describe('the package.json Electron reads app.name from', () => {
     return manifest;
   }
 
+  const DEV_PRODUCT_NAME = 'Joinery (dev)';
+
   test('names the packaged app Joinery', () => {
     expect(readManifest('package.json', 'joinery').productName).toBe(USER_DATA_DIR_NAME);
   });
 
-  test('names the development app Joinery too', () => {
-    expect(readManifest('packages/main/package.json', '@joinery/main').productName).toBe(
-      USER_DATA_DIR_NAME
-    );
+  test('gives the development app a name of its own, so it keeps a separate user-data directory', () => {
+    const devProductName = readManifest('packages/main/package.json', '@joinery/main').productName;
+
+    expect(devProductName).toBe(DEV_PRODUCT_NAME);
+    expect(devProductName).not.toBe(USER_DATA_DIR_NAME);
+    expect(String(devProductName).toLowerCase()).not.toBe(LEGACY_USER_DATA_DIR_NAME.toLowerCase());
+  });
+
+  test('the guard leaves a development user-data directory alone', () => {
+    // Development resolves `.../Joinery (dev)`, so the basename check declines the migration and
+    // dev state is never merged into — or out of — the packaged app's directory.
+    writeDir(LEGACY_USER_DATA_DIR_NAME, { 'connections.json': '{"profiles":[]}' });
+    const devUserData = writeDir(DEV_PRODUCT_NAME, { 'Local State': '{}' });
+
+    const outcome = migrateLegacyUserDataDir({
+      userDataPath: devUserData,
+      expectedDirName: USER_DATA_DIR_NAME,
+      legacyDirName: LEGACY_USER_DATA_DIR_NAME,
+    });
+
+    expect(outcome).toBe('skipped-unexpected-path');
+    expect(fs.existsSync(path.join(devUserData, 'connections.json'))).toBe(false);
   });
 });

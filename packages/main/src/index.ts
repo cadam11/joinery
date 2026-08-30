@@ -36,6 +36,10 @@ const log = createLogger('App');
  * new empty one on a case-sensitive volume. This moves the old one into place before any store opens
  * a file under it (which is why `window.ts` builds its store lazily). Never fatal: launching with a
  * fresh profile beats refusing to start.
+ *
+ * Development is untouched by design: `packages/main/package.json` says `Joinery (dev)`, so the
+ * basename check below returns `skipped-unexpected-path` and `pnpm run dev` keeps its own
+ * user-data directory, well away from the packaged app's real connection profiles.
  */
 try {
   const outcome = migrateLegacyUserDataDir({

@@ -99,8 +99,19 @@ function isSameDirectory(a: fs.Stats, b: fs.Stats): boolean {
   return a.ino === b.ino && a.dev === b.dev;
 }
 
+/**
+ * Deliberately not `fs.existsSync`, which answers `false` for a permission error exactly as it does
+ * for a missing file — that would turn an unreadable legacy directory into a silent "nothing to
+ * migrate" and hand the user an empty profile with no trace of why. `statSync` with
+ * `throwIfNoEntry: false` tells the two apart: `undefined` for ENOENT, a throw for EACCES, which
+ * the entry point logs. Verified against real `node:fs`, not assumed (see the spec).
+ */
+function entryExists(target: string): boolean {
+  return fs.statSync(target, { throwIfNoEntry: false }) !== undefined;
+}
+
 function holdsAppState(dir: string): boolean {
-  return APP_STATE_FILES.some(file => fs.existsSync(path.join(dir, file)));
+  return APP_STATE_FILES.some(file => entryExists(path.join(dir, file)));
 }
 
 /**
@@ -118,7 +129,7 @@ function moveEntriesThatAreMissing(from: string, to: string): void {
 
   for (const entry of entries) {
     const destination = path.join(to, entry);
-    if (fs.existsSync(destination)) continue;
+    if (entryExists(destination)) continue;
     fs.renameSync(path.join(from, entry), destination);
   }
 }
