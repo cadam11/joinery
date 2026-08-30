@@ -22,8 +22,35 @@ import { QueryHistoryStore } from './services/config/query-history';
 import { AppStateStore } from './services/config/app-state';
 import { QueryResultsStore } from './services/config/query-results-store';
 import { cleanupWorkspaceWatchers } from './ipc/workspace.ipc';
+import {
+  LEGACY_USER_DATA_DIR_NAME,
+  USER_DATA_DIR_NAME,
+  migrateLegacyUserDataDir,
+} from './services/config/user-data-dir';
 
 const log = createLogger('App');
+
+/**
+ * First side effect in the process, deliberately (J-117). `productName: Joinery` moved the user-data
+ * directory from `joinery` to `Joinery` — the same directory on a case-insensitive volume, a brand
+ * new empty one on a case-sensitive volume. This moves the old one into place before any store opens
+ * a file under it (which is why `window.ts` builds its store lazily). Never fatal: launching with a
+ * fresh profile beats refusing to start.
+ */
+try {
+  const outcome = migrateLegacyUserDataDir({
+    userDataPath: app.getPath('userData'),
+    expectedDirName: USER_DATA_DIR_NAME,
+    legacyDirName: LEGACY_USER_DATA_DIR_NAME,
+  });
+  if (outcome === 'migrated') {
+    log.info(`Migrated user data from the pre-rename "${LEGACY_USER_DATA_DIR_NAME}" directory`);
+  } else {
+    log.debug(`User-data case guard: ${outcome}`);
+  }
+} catch (err) {
+  log.error('User-data case guard failed; continuing with the current user-data directory:', err);
+}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling
 // This is only needed for Windows Squirrel installers
