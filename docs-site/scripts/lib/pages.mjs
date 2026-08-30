@@ -158,7 +158,8 @@ function shortcutsPage(sources) {
     '',
     paragraph(
       `Joinery binds **${bound.length}** of its **${commandRows(sources).length}** commands to a`,
-      "keystroke. With the command palette's own opener — which belongs to no command — that is",
+      `keystroke. With the **${surface.length}** keystrokes that belong to a surface rather than to a`,
+      `command — ${surface.map(row => `_${cell(row.label)}_`).join(' and ')} — that is`,
       `**${rows.length} rows**, the same set the in-app cheat sheet shows under **⇧⌘/**.`
     ),
     '',
@@ -187,7 +188,11 @@ function shortcutsPage(sources) {
           '**App**',
           'A key listener in the window. It must avoid every registered menu accelerator.',
         ],
-        ['**Editor**', 'Monaco. The menu shows the key but deliberately does not bind it.'],
+        [
+          '**Editor**',
+          'Monaco, and only while the caret is in a SQL editor. Either the menu shows the key ' +
+            'without binding it, or no menu item carries it at all.',
+        ],
       ]
     ),
     '',
@@ -221,7 +226,11 @@ function shortcutsPage(sources) {
     claimsTable([
       [
         'Every row is derived from the command table and the surface-shortcut list',
-        '`packages/renderer/src/commands/catalogue.ts:272-803`, `features/command-palette/palette-actions.ts:112-121`',
+        '`packages/renderer/src/commands/catalogue.ts:272-803`, `features/command-palette/palette-actions.ts:121-146`',
+      ],
+      [
+        'A surface shortcut names what binds it, so ⌃M reads Editor and the palette opener reads App',
+        '`packages/renderer/src/features/command-palette/palette-actions.ts:105-146`, `features/shortcuts-dialog/shortcuts-dialog.tsx:95-108`',
       ],
       [
         'The in-app cheat sheet is ⇧⌘/ and renders the same two lists',

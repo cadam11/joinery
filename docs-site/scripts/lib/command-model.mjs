@@ -154,16 +154,25 @@ export function commandRows({ mac, windows }) {
 }
 
 /**
- * The keystrokes that belong to a surface rather than to a command — today, the palette's own
- * opener. The cheatsheet lists them alongside the command rows and so does the reference page,
- * through the same formatter, so neither can render its keys by a different rule.
+ * The keystrokes that belong to a surface rather than to a command: the palette's own opener, and
+ * the SQL editor's ⌃M tab-focus escape. The cheatsheet lists them alongside the command rows and so
+ * does the reference page, through the same formatter, so neither can render its keys by a
+ * different rule.
+ *
+ * `source` comes from the entry rather than being assumed `renderer` — the two entries do not agree
+ * on it, and the Bound by column is the one a reader uses to find out why a key that works in the
+ * editor does nothing in the grid (J-133).
+ *
+ * No `palette` field: the palette lists neither of these, the shortcuts page renders no palette
+ * column, and the commands page builds its rows from `commandRows` alone. A literal here would be a
+ * claim nothing reads and nothing checks.
  */
 export function surfaceShortcutRows({ mac, windows }) {
   return mac.paletteActions.SURFACE_SHORTCUTS.map((shortcut, index) => {
     const windowsShortcut = windows.paletteActions.SURFACE_SHORTCUTS[index];
     const format = (module, keys) =>
       keys.flatMap(key =>
-        module.catalogue.formatAcceleratorList({ source: 'renderer', keys: key })
+        module.catalogue.formatAcceleratorList({ source: shortcut.source, keys: key })
       );
 
     return {
@@ -171,11 +180,10 @@ export function surfaceShortcutRows({ mac, windows }) {
       label: shortcut.label,
       hint: shortcut.hint,
       group: shortcut.group,
-      source: 'renderer',
+      source: shortcut.source,
       keysMac: format(mac, shortcut.keys),
       keysWindows: format(windows, windowsShortcut.keys).map(windowsKeystroke),
       differentKeyOffMac: shortcut.keys.some(isDifferentKeyOffMac),
-      palette: { inPalette: false, note: 'opens the palette itself' },
     };
   });
 }
