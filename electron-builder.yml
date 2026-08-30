@@ -71,6 +71,19 @@ mac:
         - x64
         - arm64
   icon: resources/icon.icns
+  # Joinery has no Apple Developer Program membership, so there is no Developer ID certificate to
+  # sign with. `null` is app-builder-lib's documented "skip signing entirely" (its scheme.json
+  # entry for mac.identity); leaving the key unset instead means "search the keychain", which
+  # makes the build's behaviour depend on whatever certificates happen to be installed on the
+  # machine running it.
+  #
+  # This also settles notarization: MacPackager.sign() returns at handleNullIdentity() before it
+  # would reach notarizeIfProvided(), so nothing can attempt or fake a notarized build.
+  #
+  # hardenedRuntime and the entitlements below are inert while identity is null — they are only
+  # applied by the signing step. They are kept rather than deleted because they are the correct
+  # configuration on the day a certificate exists. See plans/release/DISTRIBUTION.md.
+  identity: null
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
