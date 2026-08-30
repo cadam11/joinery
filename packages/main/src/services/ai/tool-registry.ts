@@ -116,10 +116,22 @@ export class ToolRegistry extends BaseSingleton {
    * Execute a query whose values are bound by the driver rather than written
    * into the SQL text. Use this for anything carrying a model-supplied string.
    *
-   * Each engine's binding call is the one that cannot multiplex statements:
-   * node-pg's extended query protocol, a mysql2 server-side prepared
-   * statement, and `sp_executesql` on SQL Server. `queryAny` above stays on
-   * the unbound path because it is handed complete, dialect-built SQL.
+   * The safety property is the binding itself: a bound value reaches the
+   * server out of band and is never lexed as SQL, so it cannot close a literal
+   * or start a statement — on any engine, under any server setting.
+   *
+   * Two of the three channels reinforce that by refusing to carry a second
+   * statement at all: node-pg's extended query protocol, and a mysql2
+   * server-side prepared statement (`execute`, which is why
+   * `multipleStatements: true` on that pool is unreachable from here). The
+   * SQL Server channel does NOT. `request.query()` reaches the server as
+   * `sp_executesql`, which runs an ordinary multi-statement batch — Joinery
+   * depends on that, since `adaptSqlForPool` prepends `USE [db];` to the
+   * statement. On SQL Server the binding is therefore the whole of the
+   * defence, not a belt-and-braces second line of it.
+   *
+   * `queryAny` above stays on the unbound path because it is handed complete,
+   * dialect-built SQL.
    */
   private async queryAnyWithParams(
     connectionId: string,
