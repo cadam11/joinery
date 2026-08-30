@@ -25,6 +25,7 @@ import { ObjectCache } from '../../utils/object-cache';
 import { TsqlBuilder } from '../../utils/tsql-builder';
 import { ConnectionPoolManager } from './connection-pool';
 import type { SQLDialect } from './dialect';
+import { tablePropertiesPgDsqlSql, tablePropertiesPgStandardSql } from './pg-table-properties';
 
 export class MetadataService extends BaseSingleton {
   private poolManager: ConnectionPoolManager;
@@ -64,11 +65,6 @@ export class MetadataService extends BaseSingleton {
     // Default: SQL Server
     const result = await this.poolManager.query<T>(connectionId, sql, database);
     return result.recordset;
-  }
-
-  /** Escape a SQL identifier for use inside square brackets (doubles any `]` characters) */
-  private escId(name: string): string {
-    return name.replace(/\]/g, ']]');
   }
 
   constructor() {
@@ -501,69 +497,6 @@ export class MetadataService extends BaseSingleton {
   }
 
   /**
-   * Standard PostgreSQL top-level table properties query (pg_class/pg_namespace
-   * joined with pg_stat_user_tables for live row counts and the pg_*_size
-   * functions for storage sizes).
-   */
-  private getTablePropertiesPgStandardSql(schema: string, table: string): string {
-    return `
-SELECT
-  n.nspname AS schema,
-  c.relname AS name,
-  c.oid AS "objectId",
-  NULL AS "createdAt",
-  NULL AS "modifiedAt",
-  COALESCE(s.n_live_tup, 0) AS "rowCount",
-  pg_relation_size(c.oid) / 1024 AS "dataSpaceKb",
-  pg_indexes_size(c.oid) / 1024 AS "indexSpaceKb",
-  0 AS "unusedSpaceKb",
-  pg_total_relation_size(c.oid) / 1024 AS "totalSpaceKb",
-  EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attidentity != '') AS "hasIdentity",
-  (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attidentity != '' LIMIT 1) AS "identityColumn",
-  false AS "isReplicated",
-  false AS "hasTextImage",
-  ts.spcname AS filegroup
-FROM pg_class c
-JOIN pg_namespace n ON c.relnamespace = n.oid
-LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
-WHERE n.nspname = '${this.escId(schema)}'
-  AND c.relname = '${this.escId(table)}';`;
-  }
-
-  /**
-   * Aurora DSQL variant of the top-level table properties query. DSQL doesn't
-   * support the pg_*_size functions or pg_stat_user_tables, so size fields
-   * come back NULL and the row count is the pg_class.reltuples estimate
-   * instead of the live-tuple stat. Column aliases match the standard query
-   * so the caller's mapping below works unchanged for both engines.
-   */
-  private getTablePropertiesPgDsqlSql(schema: string, table: string): string {
-    return `
-SELECT
-  n.nspname AS schema,
-  c.relname AS name,
-  c.oid AS "objectId",
-  NULL AS "createdAt",
-  NULL AS "modifiedAt",
-  COALESCE(c.reltuples, 0) AS "rowCount",
-  NULL AS "dataSpaceKb",
-  NULL AS "indexSpaceKb",
-  NULL AS "unusedSpaceKb",
-  NULL AS "totalSpaceKb",
-  EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attidentity != '') AS "hasIdentity",
-  (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attidentity != '' LIMIT 1) AS "identityColumn",
-  false AS "isReplicated",
-  false AS "hasTextImage",
-  ts.spcname AS filegroup
-FROM pg_class c
-JOIN pg_namespace n ON c.relnamespace = n.oid
-LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
-WHERE n.nspname = '${this.escId(schema)}'
-  AND c.relname = '${this.escId(table)}';`;
-  }
-
-  /**
    * Get table properties for PostgreSQL using pg_catalog
    */
   private async getTablePropertiesPg(
@@ -573,8 +506,8 @@ WHERE n.nspname = '${this.escId(schema)}'
     table: string
   ): Promise<TableProperties> {
     const sql = this.poolManager.isDsqlCached(connectionId)
-      ? this.getTablePropertiesPgDsqlSql(schema, table)
-      : this.getTablePropertiesPgStandardSql(schema, table);
+      ? tablePropertiesPgDsqlSql(schema, table)
+      : tablePropertiesPgStandardSql(schema, table);
 
     const rows = await this.queryAny<TableProperties>(connectionId, sql, database);
     const props = rows[0] || ({} as TableProperties);

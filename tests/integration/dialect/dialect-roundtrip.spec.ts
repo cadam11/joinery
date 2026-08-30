@@ -318,3 +318,56 @@ async function insertProbeLabel(engine: Engine, dbName: string, value: string): 
     await conn.end();
   }
 }
+
+/**
+ * The `describe.each` injection test above cannot fail for PostgreSQL.
+ *
+ * Its payload is neutralised by quote-doubling alone whenever `standard_conforming_strings` is on,
+ * and on is the default — so that arm stays green even with `PgDialect.quoteLiteral`'s `E'…'` and
+ * backslash doubling reverted (verified by mutation during the J-134 review). The whole reason
+ * J-52 chose `E'…'` is that the setting is not Joinery's to assume: it is settable per database and
+ * per role, and `MetadataService.queryAny` sends PostgreSQL SQL through the simple query protocol,
+ * which runs a second statement happily.
+ *
+ * So this block pins the case the default configuration hides.
+ */
+describe('dialect roundtrip — postgres with standard_conforming_strings off (J-134)', () => {
+  const dialect = getDialect('postgresql');
+  const payload = String.raw`\'; DROP TABLE probe_victim; -- `;
+
+  it('quoteLiteral keeps the payload as data when the server reads backslashes as escapes', async () => {
+    await withFreshDatabase('postgres', async db => {
+      const c = TEST_CONNECTIONS.postgres;
+      const client = new PgClient({
+        host: c.host,
+        port: c.port,
+        user: c.user,
+        password: c.password,
+        database: db.databaseName,
+      });
+      await client.connect();
+      try {
+        await client.query('SET standard_conforming_strings = off');
+        const scs = await client.query('SHOW standard_conforming_strings');
+        expect(scs.rows[0].standard_conforming_strings).toBe('off');
+
+        await client.query('CREATE TABLE probe_victim (label VARCHAR(200) NULL)');
+        // Bound, not interpolated: the row must be written by something other than the code
+        // under test, or the test would only prove the escaper agrees with itself.
+        await client.query('INSERT INTO probe_victim (label) VALUES ($1)', [payload]);
+
+        const predicate = `label = ${dialect.quoteLiteral(payload)}`;
+        const matched = await client.query(
+          `SELECT COUNT(*) AS n FROM probe_victim WHERE ${predicate}`
+        );
+        expect(Number(matched.rows[0].n)).toBe(1);
+
+        // Throws if the payload's DROP ran as a second statement.
+        const survived = await client.query('SELECT COUNT(*) AS n FROM probe_victim');
+        expect(Number(survived.rows[0].n)).toBe(1);
+      } finally {
+        await client.end();
+      }
+    });
+  });
+});
