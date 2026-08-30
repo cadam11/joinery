@@ -46,8 +46,8 @@ interface DoubleColumn {
 /**
  * A `GridApi` stand-in over an explicit displayed model.
  *
- * `displayedCount` defaults to `rows.length` and is separate only so a test can prove the loop
- * follows the grid's own count rather than the array it happens to be reading.
+ * A `rows` entry of `undefined` stands for a displayed index the grid counts but cannot produce a
+ * node's data for, which is what `IRowNode.data`'s `| undefined` makes possible.
  */
 function gridDouble(model: {
   readonly columns: readonly DoubleColumn[];
