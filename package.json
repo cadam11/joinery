@@ -1,5 +1,6 @@
 {
   "name": "joinery",
+  "productName": "Joinery",
   "version": "0.5.0",
   "description": "AI-native SQL Server IDE for macOS and Windows",
   "license": "MIT",

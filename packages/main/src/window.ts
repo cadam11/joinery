@@ -33,16 +33,27 @@ interface WindowState {
   isMaximized: boolean;
 }
 
-const windowStateStore = new Store<{ windowState: WindowState }>({
-  name: 'window-state',
-  defaults: {
-    windowState: {
-      width: 1400,
-      height: 900,
-      isMaximized: false,
+/**
+ * Built on first use, not at import time. `new Store()` resolves `app.getPath('userData')` and
+ * writes the file in its constructor; at module scope that ran during `import './window'`, i.e.
+ * before the entry point's first statement — which is where the user-data case guard (J-117) has to
+ * run. Lazy construction puts that ordering back in the entry point's hands.
+ */
+let windowStateStore: Store<{ windowState: WindowState }> | null = null;
+
+function getWindowStateStore(): Store<{ windowState: WindowState }> {
+  windowStateStore ??= new Store<{ windowState: WindowState }>({
+    name: 'window-state',
+    defaults: {
+      windowState: {
+        width: 1400,
+        height: 900,
+        isMaximized: false,
+      },
     },
-  },
-});
+  });
+  return windowStateStore;
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -61,7 +72,7 @@ export function installRendererSecurityPolicy(): void {
 }
 
 export function createMainWindow(): BrowserWindow {
-  const state = windowStateStore.get('windowState');
+  const state = getWindowStateStore().get('windowState');
 
   // Validate window position is on a visible display
   const displays = screen.getAllDisplays();
@@ -106,7 +117,7 @@ export function createMainWindow(): BrowserWindow {
     if (!mainWindow) return;
 
     const bounds = mainWindow.getBounds();
-    windowStateStore.set('windowState', {
+    getWindowStateStore().set('windowState', {
       x: bounds.x,
       y: bounds.y,
       width: bounds.width,

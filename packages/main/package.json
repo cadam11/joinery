@@ -1,5 +1,6 @@
 {
   "name": "@joinery/main",
+  "productName": "Joinery (dev)",
   "version": "1.0.0",
   "description": "Electron main process for Joinery",
   "main": "dist/index.js",
