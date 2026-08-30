@@ -6,8 +6,10 @@
  * layer entirely. On MySQL that is an injection: `\` is an escape character
  * unless `NO_BACKSLASH_ESCAPES` is set (it is off by default), so a leading
  * backslash escapes the quote the replace doubled and the NEXT quote closes the
- * literal — and both MySQL pools are opened `multipleStatements: true`
- * (`connection-pool.ts`, `provider/mysql-provider.ts`), so what follows runs.
+ * literal — and at the time every MySQL pool was opened `multipleStatements: true`,
+ * so what followed ran. (J-137 has since taken that capability away from this
+ * path; see `mysql-pool-options.ts`. Binding is still the fix — it is what makes
+ * the value un-lexable on every engine.)
  * On PostgreSQL the same payload lands whenever `standard_conforming_strings`
  * is off, which is settable per database and per role.
  *

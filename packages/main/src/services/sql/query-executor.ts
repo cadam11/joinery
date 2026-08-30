@@ -10,6 +10,7 @@ import type { QueryRequest, QueryResult, ResultSet, ColumnMetadata } from '@join
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
 import { ConnectionPoolManager } from './connection-pool';
+import type { MySQLPoolTrust } from './mysql-pool-options';
 import { MetadataService } from './metadata';
 import { applyRowCap } from './row-cap';
 
@@ -18,6 +19,20 @@ const log = createLogger('QueryExecutor');
 interface ParsedTableRef {
   schema: string;
   table: string;
+}
+
+/**
+ * Caller-supplied execution context. Not part of `QueryRequest`, which is a
+ * shared type the renderer fills in: the renderer must not be able to pick its
+ * own MySQL trust level.
+ */
+export interface ExecuteOptions {
+  /**
+   * MySQL only. `'script'` runs on the multi-statement pool and is for
+   * user-authored editor scripts; anything Joinery built itself leaves this
+   * unset and gets the restricted pool. See mysql-pool-options.ts.
+   */
+  mysqlTrust?: MySQLPoolTrust;
 }
 
 interface ActiveQuery {
@@ -40,9 +55,13 @@ export class QueryExecutor extends BaseSingleton {
   }
 
   /**
-   * Execute a SQL query
+   * Execute a SQL query.
+   *
+   * `options` is main-process-only and never crosses IPC — the renderer must
+   * not be able to ask for a more capable connection than its call site is
+   * entitled to. See ExecuteOptions.
    */
-  async execute(request: QueryRequest): Promise<QueryResult> {
+  async execute(request: QueryRequest, options: ExecuteOptions = {}): Promise<QueryResult> {
     const queryId = request.queryId || uuidv4();
     const startTime = Date.now();
 
@@ -62,7 +81,7 @@ export class QueryExecutor extends BaseSingleton {
         return await this.executePg(request, activeQuery, queryId, startTime);
       }
       if (engine === 'mysql') {
-        return await this.executeMySQL(request, activeQuery, queryId, startTime);
+        return await this.executeMySQL(request, activeQuery, queryId, startTime, options);
       }
 
       const pool = await this.poolManager.getPool(request.connectionId, request.database);
@@ -358,10 +377,18 @@ export class QueryExecutor extends BaseSingleton {
     request: QueryRequest,
     activeQuery: ActiveQuery,
     queryId: string,
-    startTime: number
+    startTime: number,
+    options: ExecuteOptions
   ): Promise<QueryResult> {
-    // MySQL supports USE for database context switching
-    const pool = await this.poolManager.getMySQLPool(request.connectionId, request.database);
+    // MySQL supports USE for database context switching.
+    // Trust level defaults to 'restricted' (J-137): only a caller that says it
+    // is running a user-authored script gets a connection that can carry more
+    // than one statement.
+    const pool = await this.poolManager.getMySQLPool(
+      request.connectionId,
+      request.database,
+      options.mysqlTrust ?? 'restricted'
+    );
 
     if (activeQuery.cancelled) {
       return this.createCancelledResult(queryId, startTime);

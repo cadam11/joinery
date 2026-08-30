@@ -257,7 +257,9 @@ describe('sqlLiteral', () => {
     // With the mode ON, `\\` is two literal backslashes, so this predicate matches a value that has
     // two where the data has one: the preview finds no row. That is the accepted cost of one escaping
     // rule for both modes — the quote doubling holds either way, so the literal cannot be escaped out
-    // of, and mysql2 does not multiplex statements even if it could be.
+    // of. (The old comment here also claimed mysql2 does not multiplex statements. It does, whenever
+    // the connection negotiated CLIENT_MULTI_STATEMENTS; J-137 is what keeps this path off such a
+    // connection. See the module doc.)
     expect(sqlLiteral(String.raw`a\b`, 'mysql')).toBe(String.raw`'a\\b'`);
     expect(sqlLiteral(String.raw`1\'; DROP TABLE t; -- `, 'mysql')).toBe(
       String.raw`'1\\''; DROP TABLE t; -- '`

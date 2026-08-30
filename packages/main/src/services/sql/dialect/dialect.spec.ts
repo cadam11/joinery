@@ -825,7 +825,8 @@ describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
   it('keeps a backslash-led injection attempt inside the literal (J-134)', () => {
     // The payload the cycle-4 audit demonstrated against a real MySQL 8.4 server: the leading
     // backslash escapes the quote the escaper doubles, so the NEXT quote closes the literal and
-    // `DROP TABLE users` runs as a second statement on a `multipleStatements: true` pool. The
+    // `DROP TABLE users` runs as a second statement on any pool that negotiated
+    // CLIENT_MULTI_STATEMENTS — which, since J-137, is the query editor's pool only. The
     // earlier version of this test used a payload with no backslash plus a quote-parity heuristic
     // that the exploit string also satisfied, so it asserted the defect was fine.
     const payload = String.raw`\'; DROP TABLE users; --`;

@@ -73,10 +73,19 @@ without running. An estimate-only SQL Server plan is tracked as J-68.
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | SQL Server | One pool per profile, with `USE [database]` prepended per query. On Azure SQL, one pool per database — Azure rejects `USE` outright |
 | PostgreSQL | One pool per database, because PostgreSQL fixes the database at connection time                                                     |
-| MySQL      | One pool per database                                                                                                               |
+| MySQL      | Two pools per database, each opened on first use — see below                                                                        |
 
 All pools for a profile share that profile's SSH tunnel, and are invalidated together if the tunnel
 goes away.
+
+**MySQL has two pools per database because a MySQL connection decides once, when it opens, whether
+it will accept more than one statement at a time.** The query editor needs a connection that does —
+running `SELECT …; UPDATE …;` as one script is the point of the editor. Schema browsing and
+everything the AI assistant runs never send two statements, so they go on a second connection that
+never asked for the capability: if a table name ever smuggled a `;` into one of those queries, the
+MySQL server rejects it as a syntax error instead of running whatever followed. You do not configure
+this and it is not visible in the app; the only trace is that a MySQL database you both browse and
+query holds two sets of connections.
 
 ## Aurora DSQL
 
@@ -121,7 +130,7 @@ it covers all three engines — see [Docker containers](../../features/docker-co
 | Conversion targets SQL Server, PostgreSQL and MySQL                                 | `packages/renderer/src/commands/catalogue.ts:361-388`, `packages/main/src/services/sql/sql-converter.ts`                                         |
 | MSSQL pools by profile with `USE [db]` prepended, and by database on Azure          | `packages/main/src/services/sql/connection-pool.ts:906-930`                                                                                      |
 | PostgreSQL pools per database, sharing one tunnel                                   | `packages/main/src/services/sql/connection-pool.ts:586-600`                                                                                      |
-| MySQL pools per database                                                            | `packages/main/src/services/sql/connection-pool.ts:726-728`                                                                                      |
+| MySQL pools per database, two per database split by trust level                     | `packages/main/src/services/sql/connection-pool.ts:719-745`, `services/sql/mysql-pool-options.ts:1-67`                                           |
 | Aurora DSQL is a PostgreSQL 16-compatible variant, overriding only what it must     | `packages/main/src/services/sql/dialect/pg-dsql-dialect.ts:1-24`                                                                                 |
 | DSQL: one database, no database management, no procedures, no triggers, no backup   | `packages/main/src/services/sql/dialect/pg-dsql-dialect.ts:26-50`                                                                                |
 | DSQL authenticates with AWS IAM from a named profile                                | `packages/renderer/src/features/connections/form-model.ts:93`, `packages/shared/src/types/connection.types.ts:88`                                |

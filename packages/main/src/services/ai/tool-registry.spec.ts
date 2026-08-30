@@ -34,6 +34,8 @@ const recorder = vi.hoisted(() => ({
   engine: 'mssql' as DatabaseEngine,
   /** Every statement the registry sent, with whatever it bound alongside it. */
   sent: [] as { sql: string; params: readonly unknown[] }[],
+  /** J-137: the trust level asked for on every getMySQLPool call, in order. */
+  mysqlTrust: [] as (string | undefined)[],
 }));
 
 vi.mock('../sql/connection-pool', () => ({
@@ -46,18 +48,21 @@ vi.mock('../sql/connection-pool', () => ({
           return { rows: [{ row_count: 7 }] };
         },
       }),
-      getMySQLPool: async () => ({
-        execute: async (sql: string, values?: readonly unknown[]) => {
-          recorder.sent.push({ sql, params: values ?? [] });
-          return [[{ row_count: 7 }]];
-        },
-        query: async (sql: string) => {
-          // Recorded with no params so a test can catch the unparameterised path
-          // being used for the row count.
-          recorder.sent.push({ sql, params: [] });
-          return [[{ row_count: 7 }]];
-        },
-      }),
+      getMySQLPool: async (_profileId: string, _database?: string, trust?: string) => {
+        recorder.mysqlTrust.push(trust);
+        return {
+          execute: async (sql: string, values?: readonly unknown[]) => {
+            recorder.sent.push({ sql, params: values ?? [] });
+            return [[{ row_count: 7 }]];
+          },
+          query: async (sql: string) => {
+            // Recorded with no params so a test can catch the unparameterised path
+            // being used for the row count.
+            recorder.sent.push({ sql, params: [] });
+            return [[{ row_count: 7 }]];
+          },
+        };
+      },
       queryWithParams: async (_profileId: string, sql: string, params: readonly unknown[]) => {
         recorder.sent.push({ sql, params });
         return { recordset: [{ row_count: 7 }] };
@@ -80,6 +85,7 @@ const ENGINES: DatabaseEngine[] = ['mssql', 'postgresql', 'mysql'];
 describe('ToolRegistry get_table_row_count', () => {
   beforeEach(() => {
     recorder.sent = [];
+    recorder.mysqlTrust = [];
     ToolRegistry.resetInstance();
   });
 
@@ -142,6 +148,7 @@ describe('ToolRegistry get_table_row_count', () => {
     for (const [engine, expected] of defaults) {
       recorder.engine = engine;
       recorder.sent = [];
+      recorder.mysqlTrust = [];
       ToolRegistry.resetInstance();
       await ToolRegistry.getInstance().executeTool(
         'get_table_row_count',
@@ -151,6 +158,50 @@ describe('ToolRegistry get_table_row_count', () => {
       );
       expect(recorder.sent[0].params, `default schema for ${engine}`).toEqual([expected, 'orders']);
     }
+  });
+});
+
+/**
+ * J-137 — the AI tool surface never needs to send two statements, so it must
+ * run on the MySQL pool that cannot carry one. `execute_query` is the sharp
+ * case: it takes raw model-authored SQL with no confirmation gate, so before
+ * this ticket a model could send `SELECT 1; DROP TABLE t` and MySQL would run
+ * both. On the restricted pool the server refuses the second statement.
+ */
+describe('ToolRegistry MySQL pool trust (J-137)', () => {
+  beforeEach(() => {
+    recorder.engine = 'mysql';
+    recorder.sent = [];
+    recorder.mysqlTrust = [];
+    ToolRegistry.resetInstance();
+  });
+
+  it('runs raw model SQL (execute_query) on the restricted pool', async () => {
+    await ToolRegistry.getInstance().executeTool(
+      'execute_query',
+      { sql: 'SELECT 1; DROP TABLE probe_victim' },
+      'profile-1',
+      'appdb'
+    );
+
+    expect(recorder.mysqlTrust).toEqual(['restricted']);
+  });
+
+  it('runs dialect-built metadata SQL (list_tables) on the restricted pool', async () => {
+    await ToolRegistry.getInstance().executeTool('list_tables', {}, 'profile-1', 'appdb');
+
+    expect(recorder.mysqlTrust).toEqual(['restricted']);
+  });
+
+  it('runs the bound row-count query on the restricted pool', async () => {
+    await ToolRegistry.getInstance().executeTool(
+      'get_table_row_count',
+      { table: 'orders' },
+      'profile-1',
+      'appdb'
+    );
+
+    expect(recorder.mysqlTrust).toEqual(['restricted']);
   });
 });
 
