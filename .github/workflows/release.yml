@@ -1,0 +1,387 @@
+# The whole of Joinery's distribution. Design and rationale: plans/release/DISTRIBUTION.md
+#
+# A release is a tag and a tag is a release: there is no workflow_dispatch, no branch trigger,
+# and no manual asset upload, so there is exactly one thing to audit after the fact.
+#
+# Replaces build-release.yml, which had every matrix leg upload to the release itself. Two legs
+# racing to create the same release is a real failure mode, and neither could see the other's
+# files, so no checksum manifest covering the whole release was expressible. One publisher now.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+# Never cancel a release in flight. A half-published release is worse than a slow one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TAP_REPOSITORY: cadam11/homebrew-joinery
+
+jobs:
+  # Cheap checks that must fail in a minute rather than after two forty-minute builds.
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: The tag and the manifest must agree
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          manifest="$(node -p "require('./package.json').version")"
+          if [ "$version" != "$manifest" ]; then
+            echo "::error title=Tag does not match package.json::Tag ${GITHUB_REF_NAME} means version ${version}, but package.json says ${manifest}. electron-builder names every artifact after the manifest, so every Homebrew cask URL would 404. Bump package.json, merge it, and re-tag."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${version}." >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs the real rewriter against a throwaway copy of the real template, so a cask that
+      # update-cask.ts can no longer rewrite fails here rather than after the release is public
+      # and the tap is the only thing left to update.
+      - name: The cask template must still be rewritable
+        run: |
+          set -euo pipefail
+          fake="$(printf 'f%.0s' $(seq 1 64))"
+          cp Casks/joinery.rb "$RUNNER_TEMP/joinery.rb"
+          node scripts/release/update-cask.ts \
+            --cask "$RUNNER_TEMP/joinery.rb" \
+            --version "${{ steps.version.outputs.version }}" \
+            --sha256-arm64 "$fake" \
+            --sha256-x64 "$fake"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    strategy:
+      # A release with only half its installers is not a release worth publishing.
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            args: --mac
+          - os: windows-latest
+            platform: win
+            args: --win
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Reads the version from the root package.json "packageManager" field.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      # 24, not the 20 the old workflow pinned: scripts/release/*.ts runs under Node's type
+      # stripping, which needs >= 22.18, and CI's test job is already on 24.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm run build
+
+      # The signing gate. All five secrets or none — see plans/release/DISTRIBUTION.md. The
+      # decision is made here, once, and written both to a step output (for the later steps in
+      # this job) and to a file (for the release job, which cannot read a matrix leg's outputs
+      # without racing the other leg).
+      - name: Resolve the macOS signing mode
+        if: matrix.platform == 'mac'
+        id: signing
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          mkdir -p signing
+          if [ -z "$missing" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            printf 'SIGNED\n' > signing/mode.txt
+            echo "::notice title=Signed build::All five Apple secrets are present. electron-builder will import the certificate, sign with the Developer ID identity, then notarize and staple."
+            echo '**macOS: signed and notarized.**' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            printf 'UNSIGNED\n' > signing/mode.txt
+            echo "::warning title=UNSIGNED BUILD::Missing Apple secrets:${missing}. CSC_IDENTITY_AUTO_DISCOVERY=false, so electron-builder skips code signing, and skips notarization with it because it never reaches that step without an identity. Every machine that downloads these DMGs will quarantine the app. Add all five secrets to sign."
+            echo "**macOS: UNSIGNED.** Missing secrets:${missing}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # scripts/package.js does the workspace symlink swap, runs electron-builder, and ALWAYS
+      # restores the symlinks — doing those as separate steps leaves node_modules in the swapped
+      # state when the build fails.
+      #
+      # The Apple secrets are passed unconditionally because electron-builder reads them off
+      # process.env and treats empty as absent. CSC_IDENTITY_AUTO_DISCOVERY is what actually
+      # decides: 'false' makes findIdentity return null without looking, which makes
+      # MacPackager.sign return before it would have notarized. Nothing here can produce a build
+      # that claims a signature it does not have.
+      - name: Build the Electron app
+        shell: bash
+        run: node scripts/package.js ${{ matrix.args }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed == 'true' }}
+
+      # Extracts the asar and require()s each module the main process depends on. Catches the
+      # class of bug where packaging exits 0 and the shipped app crashes on first connect.
+      - name: Acceptance-check the packaged app
+        if: matrix.platform == 'mac'
+        run: pnpm run verify:package
+
+      # Only on the signed path, and only there. `spctl --assess` passes only for an app that is
+      # both signed and notarized, so this is the step that would catch a release that announced
+      # a signature it did not actually get.
+      - name: A build that claims to be signed must survive Gatekeeper
+        if: matrix.platform == 'mac' && steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 release/mac-arm64/Joinery.app
+          spctl --assess --type execute --verbose release/mac-arm64/Joinery.app
+
+      - name: Record the unsigned build's signature state
+        if: matrix.platform == 'mac' && steps.signing.outputs.signed != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          if codesign -dv release/mac-arm64/Joinery.app 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"; then
+            echo 'The above is whatever signature the Electron binary arrived with. No Developer ID identity was applied.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'codesign reports no signature at all, which is the expected state for an unsigned build.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the signing mode
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-mode
+          path: signing/mode.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish the GitHub Release
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+
+    steps:
+      - name: Collect every installer into one directory
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: installers-*
+          merge-multiple: true
+
+      - name: Fetch what the mac leg decided about signing
+        uses: actions/download-artifact@v4
+        with:
+          name: signing-mode
+          path: signing
+
+      - name: Checksum everything that is about to be published
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # The two names the Homebrew cask builds its URLs from. If electron-builder ever
+          # renames them, the tap breaks silently a job later; break loudly here instead.
+          for required in "Joinery-${VERSION}-arm64.dmg" "Joinery-${VERSION}-x64.dmg"; do
+            if [ ! -f "$required" ]; then
+              echo "::error title=Missing installer::${required} is not among the build artifacts, and the Homebrew cask's download URL is built from that exact name."
+              exit 1
+            fi
+          done
+          shopt -s nullglob
+          files=(*)
+          # Written outside the directory first so the manifest cannot list itself.
+          sha256sum "${files[@]}" > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+          cat SHA256SUMS.txt
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          mode="$(tr -d '[:space:]' < signing/mode.txt)"
+          {
+            echo '## Install'
+            echo
+            echo '### macOS — Homebrew'
+            echo
+            echo '```bash'
+            echo 'brew install --cask cadam11/joinery/joinery'
+            echo '```'
+            echo
+            echo '### macOS — direct download'
+            echo
+            echo "Apple Silicon: \`Joinery-${VERSION}-arm64.dmg\` · Intel: \`Joinery-${VERSION}-x64.dmg\`"
+            echo
+            echo '### Windows'
+            echo
+            echo "\`Joinery-${VERSION}-x64-setup.exe\` or \`Joinery-${VERSION}-arm64-setup.exe\`. Windows builds are not code-signed, so SmartScreen will warn: More info, then Run anyway."
+            echo
+            echo '## Signing'
+            echo
+            if [ "$mode" = "SIGNED" ]; then
+              echo 'The macOS build is **signed with a Developer ID certificate and notarized by Apple**. It opens normally.'
+            else
+              echo 'The macOS build is **not signed and not notarized**. macOS quarantines it, so the first launch has to be right-click, then Open — or, after installing:'
+              echo
+              echo '```bash'
+              echo 'xattr -d com.apple.quarantine "/Applications/Joinery.app"'
+              echo '```'
+            fi
+            echo
+            echo '## Verifying a download'
+            echo
+            echo '`SHA256SUMS.txt` covers every file in this release.'
+            echo
+            echo '```bash'
+            echo "shasum -a 256 -c SHA256SUMS.txt --ignore-missing"
+            echo '```'
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Joinery ${VERSION}" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag \
+            artifacts/*
+
+  homebrew:
+    name: Update the Homebrew tap
+    needs: [guard, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+
+    steps:
+      # Fails rather than skips: a release whose tap was not updated is a release nobody can
+      # brew upgrade into, and that should be visible in red, not absent.
+      - name: The tap token must exist
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::error title=HOMEBREW_TAP_TOKEN is not set::The GitHub Release is published, but ${TAP_REPOSITORY} still points at the previous version, so brew upgrade will not see this one. Add a token with contents:write on ${TAP_REPOSITORY} and re-run this job."
+            exit 1
+          fi
+
+      - name: Checkout Joinery
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Checkout the tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Take the checksums from the release we just published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir .
+          for arch in arm64 x64; do
+            sum="$(awk -v want="Joinery-${VERSION}-${arch}.dmg" '$2 == want { print $1 }' SHA256SUMS.txt)"
+            if [ -z "$sum" ]; then
+              echo "::error title=Checksum not found::SHA256SUMS.txt has no line for Joinery-${VERSION}-${arch}.dmg."
+              exit 1
+            fi
+            echo "SHA_${arch}=${sum}" >> "$GITHUB_ENV"
+          done
+
+      # This repo's Casks/joinery.rb is the template and the single source of truth; the tap's
+      # copy is an output. Editing the cask means editing it here.
+      - name: Stamp the cask and push it
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Casks
+          cp Casks/joinery.rb tap/Casks/joinery.rb
+          node scripts/release/update-cask.ts \
+            --cask tap/Casks/joinery.rb \
+            --version "$VERSION" \
+            --sha256-arm64 "$SHA_arm64" \
+            --sha256-x64 "$SHA_x64"
+          cd tap
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Casks/joinery.rb
+          if git diff --cached --quiet; then
+            echo "The tap is already at ${VERSION}; nothing to push." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "joinery ${VERSION}"
+          git push
+          echo "Pushed joinery ${VERSION} to ${TAP_REPOSITORY}." >> "$GITHUB_STEP_SUMMARY"

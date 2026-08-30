@@ -50,6 +50,7 @@
     "deps:fix": "syncpack fix-mismatches",
     "package": "pnpm run build && node scripts/package.js",
     "package:mac": "pnpm run build && node scripts/package.js --mac",
+    "package:dmg": "pnpm run build && node scripts/package.js --mac dmg:arm64 dmg:x64",
     "package:dir": "pnpm run build && node scripts/package.js --dir",
     "verify:package": "node scripts/verify-package.js",
     "prepare": "husky",
