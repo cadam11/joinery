@@ -1,4 +1,5 @@
 # The whole of Joinery's distribution. Design and rationale: plans/release/DISTRIBUTION.md
+# What a human does around it: plans/release/CRAIG-RELEASE-STEPS.md
 #
 # A release is a tag and a tag is a release: there is no workflow_dispatch, no branch trigger,
 # and no manual asset upload, so there is exactly one thing to audit after the fact.
@@ -6,6 +7,10 @@
 # Replaces build-release.yml, which had every matrix leg upload to the release itself. Two legs
 # racing to create the same release is a real failure mode, and neither could see the other's
 # files, so no checksum manifest covering the whole release was expressible. One publisher now.
+#
+# There is exactly one secret in this workflow: HOMEBREW_TAP_TOKEN. Joinery has no Apple
+# Developer Program membership, so there is no signing path, no notarization, and no conditional
+# on either — the macOS builds are unsigned and every place that mentions them says so.
 
 name: Release
 
@@ -60,6 +65,26 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${version}." >> "$GITHUB_STEP_SUMMARY"
+
+      # The tap token is not *used* until the last job, which runs after the GitHub Release is
+      # already public and permanent. Proving it here costs one API call and turns "the release
+      # shipped but nobody can brew upgrade into it" into "the release never started".
+      #
+      # This asks the tap for its own name, so it fails on all three ways the token can be wrong:
+      # absent, expired, or scoped to the wrong repository.
+      - name: The Homebrew tap must exist and the token must reach it
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=HOMEBREW_TAP_TOKEN is not set::Add a fine-grained personal access token with Contents: Read and write on ${TAP_REPOSITORY}, and nothing else, as the repository secret HOMEBREW_TAP_TOKEN. See plans/release/CRAIG-RELEASE-STEPS.md."
+            exit 1
+          fi
+          if ! gh api "repos/${TAP_REPOSITORY}" --jq .full_name; then
+            echo "::error title=The tap is not reachable::HOMEBREW_TAP_TOKEN is set, but it could not read ${TAP_REPOSITORY}. The token is expired, or scoped to a different repository, or the tap has been renamed or deleted."
+            exit 1
+          fi
 
       # Runs the real rewriter against a throwaway copy of the real template, so a cask that
       # update-cask.ts can no longer rewrite fails here rather than after the release is public
@@ -120,61 +145,16 @@ jobs:
       - name: Build all packages
         run: pnpm run build
 
-      # The signing gate. All five secrets or none — see plans/release/DISTRIBUTION.md. The
-      # decision is made here, once, and written both to a step output (for the later steps in
-      # this job) and to a file (for the release job, which cannot read a matrix leg's outputs
-      # without racing the other leg).
-      - name: Resolve the macOS signing mode
-        if: matrix.platform == 'mac'
-        id: signing
-        shell: bash
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          missing=""
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            if [ -z "${!name:-}" ]; then
-              missing="${missing} ${name}"
-            fi
-          done
-          mkdir -p signing
-          if [ -z "$missing" ]; then
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-            printf 'SIGNED\n' > signing/mode.txt
-            echo "::notice title=Signed build::All five Apple secrets are present. electron-builder will import the certificate, sign with the Developer ID identity, then notarize and staple."
-            echo '**macOS: signed and notarized.**' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            printf 'UNSIGNED\n' > signing/mode.txt
-            echo "::warning title=UNSIGNED BUILD::Missing Apple secrets:${missing}. CSC_IDENTITY_AUTO_DISCOVERY=false, so electron-builder skips code signing, and skips notarization with it because it never reaches that step without an identity. Every machine that downloads these DMGs will quarantine the app. Add all five secrets to sign."
-            echo "**macOS: UNSIGNED.** Missing secrets:${missing}" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       # scripts/package.js does the workspace symlink swap, runs electron-builder, and ALWAYS
       # restores the symlinks — doing those as separate steps leaves node_modules in the swapped
       # state when the build fails.
       #
-      # The Apple secrets are passed unconditionally because electron-builder reads them off
-      # process.env and treats empty as absent. CSC_IDENTITY_AUTO_DISCOVERY is what actually
-      # decides: 'false' makes findIdentity return null without looking, which makes
-      # MacPackager.sign return before it would have notarized. Nothing here can produce a build
-      # that claims a signature it does not have.
+      # No signing secrets and no CSC_* / APPLE_* environment: `mac.identity: null` in
+      # electron-builder.yml is the single place that decides Joinery is not code-signed, and it
+      # decides it for a developer's local build exactly as it does here.
       - name: Build the Electron app
         shell: bash
         run: node scripts/package.js ${{ matrix.args }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed == 'true' }}
 
       # Extracts the asar and require()s each module the main process depends on. Catches the
       # class of bug where packaging exits 0 and the shipped app crashes on first connect.
@@ -182,25 +162,20 @@ jobs:
         if: matrix.platform == 'mac'
         run: pnpm run verify:package
 
-      # Only on the signed path, and only there. `spctl --assess` passes only for an app that is
-      # both signed and notarized, so this is the step that would catch a release that announced
-      # a signature it did not actually get.
-      - name: A build that claims to be signed must survive Gatekeeper
-        if: matrix.platform == 'mac' && steps.signing.outputs.signed == 'true'
-        run: |
-          set -euo pipefail
-          codesign --verify --deep --strict --verbose=2 release/mac-arm64/Joinery.app
-          spctl --assess --type execute --verbose release/mac-arm64/Joinery.app
-
-      - name: Record the unsigned build's signature state
-        if: matrix.platform == 'mac' && steps.signing.outputs.signed != 'true'
+      # Not a gate — a record. Every release is unsigned, so there is nothing here that could
+      # pass or fail; what this does is put the actual signature state of the shipped bundle in
+      # the run summary, where a future change that accidentally starts signing would show up.
+      - name: Record the build's signature state
+        if: matrix.platform == 'mac'
         shell: bash
         run: |
           set -uo pipefail
+          echo '::warning title=Unsigned build::Joinery is not code-signed and not notarized. macOS quarantines every download, including through Homebrew, and the first launch needs System Settings > Privacy & Security > Open Anyway. The release notes say so.'
+          echo '**macOS: not signed, not notarized.**' >> "$GITHUB_STEP_SUMMARY"
           if codesign -dv release/mac-arm64/Joinery.app 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"; then
-            echo 'The above is whatever signature the Electron binary arrived with. No Developer ID identity was applied.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'The above is whatever signature the Electron binary arrived with from its own linker. No identity was applied by this build.' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo 'codesign reports no signature at all, which is the expected state for an unsigned build.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'codesign reports no signature at all, which is an expected state for an unsigned build.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload the installers
@@ -212,15 +187,6 @@ jobs:
             release/*.zip
             release/*.exe
             release/*.blockmap
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload the signing mode
-        if: matrix.platform == 'mac'
-        uses: actions/upload-artifact@v4
-        with:
-          name: signing-mode
-          path: signing/mode.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -243,12 +209,6 @@ jobs:
           pattern: installers-*
           merge-multiple: true
 
-      - name: Fetch what the mac leg decided about signing
-        uses: actions/download-artifact@v4
-        with:
-          name: signing-mode
-          path: signing
-
       - name: Checksum everything that is about to be published
         run: |
           set -euo pipefail
@@ -268,10 +228,12 @@ jobs:
           mv ../SHA256SUMS.txt .
           cat SHA256SUMS.txt
 
+      # Every release is unsigned, so there is one set of notes rather than a branch. The
+      # first-launch instructions are the ones that work on macOS Sequoia and later, where
+      # Apple removed the Control-click override: developer.apple.com/news/?id=saqachfa.
       - name: Write the release notes
         run: |
           set -euo pipefail
-          mode="$(tr -d '[:space:]' < signing/mode.txt)"
           {
             echo '## Install'
             echo
@@ -289,17 +251,25 @@ jobs:
             echo
             echo "\`Joinery-${VERSION}-x64-setup.exe\` or \`Joinery-${VERSION}-arm64-setup.exe\`. Windows builds are not code-signed, so SmartScreen will warn: More info, then Run anyway."
             echo
-            echo '## Signing'
+            echo '## First launch on macOS'
             echo
-            if [ "$mode" = "SIGNED" ]; then
-              echo 'The macOS build is **signed with a Developer ID certificate and notarized by Apple**. It opens normally.'
-            else
-              echo 'The macOS build is **not signed and not notarized**. macOS quarantines it, so the first launch has to be right-click, then Open — or, after installing:'
-              echo
-              echo '```bash'
-              echo 'xattr -d com.apple.quarantine "/Applications/Joinery.app"'
-              echo '```'
-            fi
+            echo 'Joinery is **not code-signed and not notarized** — there is no Apple Developer Program membership behind it. macOS quarantines it either way you install it, Homebrew included, and refuses the first launch.'
+            echo
+            echo 'Open it once, and macOS remembers:'
+            echo
+            echo '1. Double-click Joinery. macOS refuses, and says so.'
+            echo '2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** beside the message about Joinery.'
+            echo '3. Confirm, and authenticate. Every launch after this one is normal.'
+            echo
+            echo 'On macOS Sonoma and earlier, Control-click the app in Finder and choose **Open** instead. That shortcut was removed in macOS Sequoia.'
+            echo
+            echo 'Or, in a terminal, drop the quarantine flag yourself before the first launch:'
+            echo
+            echo '```bash'
+            echo 'xattr -dr com.apple.quarantine "/Applications/Joinery.app"'
+            echo '```'
+            echo
+            echo '`-r` is not optional: Homebrew sets the flag on every file inside the bundle, not just the bundle itself.'
             echo
             echo '## Verifying a download'
             echo
@@ -337,18 +307,9 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
 
     steps:
-      # Fails rather than skips: a release whose tap was not updated is a release nobody can
-      # brew upgrade into, and that should be visible in red, not absent.
-      - name: The tap token must exist
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -uo pipefail
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "::error title=HOMEBREW_TAP_TOKEN is not set::The GitHub Release is published, but ${TAP_REPOSITORY} still points at the previous version, so brew upgrade will not see this one. Add a token with contents:write on ${TAP_REPOSITORY} and re-run this job."
-            exit 1
-          fi
-
+      # No token check here: `guard` already proved HOMEBREW_TAP_TOKEN can read the tap, and it
+      # did so before anything was published. If the checkout below fails anyway, the token was
+      # revoked mid-release, and this job is safely re-runnable once it is replaced.
       - name: Checkout Joinery
         uses: actions/checkout@v4
 
