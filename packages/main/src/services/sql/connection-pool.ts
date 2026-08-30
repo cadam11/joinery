@@ -877,6 +877,49 @@ export class ConnectionPoolManager extends BaseSingleton {
   }
 
   /**
+   * Execute a query on a SQL Server connection with bound parameters.
+   *
+   * `params[0]` binds to `@p0`, `params[1]` to `@p1`, and so on — the caller
+   * writes those names into the SQL.
+   *
+   * Uses `request.query()` rather than the `request.batch()` that `query`
+   * above uses, because node-mssql implements the two differently: `batch()`
+   * with parameters *inlines* them, prepending a
+   * `declare @p0 …;select @p0 = N'…';` prologue built by `cast()` (see
+   * `node_modules/mssql/lib/tedious/request.js`, the `_isBatch` branch, and
+   * `lib/datatypes.js`), whereas `query()` hands them to tedious as real
+   * `sp_executesql` bind values. Only the latter is parameterisation.
+   *
+   * The `USE [db];` prefix `adaptSqlForPool` adds still applies: it runs
+   * inside the `sp_executesql` batch, ahead of the statement, and was
+   * verified against the harness SQL Server.
+   */
+  async queryWithParams<T>(
+    profileId: string,
+    sql: string,
+    params: readonly unknown[],
+    database?: string
+  ): Promise<IResult<T>> {
+    const poolKey = await this.resolveMssqlPoolKey(profileId, database);
+    const pool = await this.getPool(profileId, database);
+    const finalSql = this.adaptSqlForPool(sql, poolKey, profileId, database);
+
+    const entry = this.pools.get(poolKey);
+    if (entry) entry.activeQueries++;
+
+    try {
+      const request = pool.request();
+      params.forEach((value, i) => request.input(`p${i}`, value));
+      return (await request.query(finalSql)) as IResult<T>;
+    } finally {
+      if (entry) {
+        entry.activeQueries--;
+        entry.lastUsed = new Date();
+      }
+    }
+  }
+
+  /**
    * Execute a batch of statements (for DDL operations).
    * If `database` is provided, routes via the same per-DB pool path the
    * `query` method uses, so DDL on Azure SQL targets the right database
