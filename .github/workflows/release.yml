@@ -14,8 +14,11 @@ on:
     tags:
       - 'v*'
 
+# Least privilege, workflow-wide default. Only the job that creates the GitHub Release is
+# raised to `contents: write`; every other job re-declares `contents: read` so that adding a
+# job cannot silently inherit write access to the repository.
 permissions:
-  contents: write
+  contents: read
 
 # Never cancel a release in flight. A half-published release is worse than a slow one.
 concurrency:
@@ -31,6 +34,8 @@ jobs:
     name: Guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -75,6 +80,11 @@ jobs:
     needs: guard
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    # Reads the repository and nothing else. This job runs third-party install and build
+    # scripts (pnpm postinstall, node-gyp, electron-builder), so it must never hold a token
+    # that can write to the repository.
+    permissions:
+      contents: read
 
     strategy:
       # A release with only half its installers is not a release worth publishing.
@@ -219,6 +229,9 @@ jobs:
     needs: [guard, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The only job that writes. `gh release create` needs it; nothing else here does.
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.guard.outputs.version }}
 
@@ -316,6 +329,10 @@ jobs:
     needs: [guard, release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Reads this repo and the release it just published. The cross-repository push to the
+    # tap is authenticated by HOMEBREW_TAP_TOKEN, not by GITHUB_TOKEN.
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.guard.outputs.version }}
 

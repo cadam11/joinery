@@ -58,6 +58,23 @@ Windows is deliberately outside the gate. It has never been signed, `electron-bu
 `win.certificateFile`, and the v1 checklist proposes Windows signing as optional. The Windows leg
 builds and uploads exactly as it does today, and the release notes say SmartScreen will warn.
 
+## Token permissions
+
+The workflow defaults to `permissions: contents: read` and each job re-declares what it needs, so
+that adding a job cannot silently inherit write access:
+
+| Job        | `GITHUB_TOKEN`    | Why                                                     |
+| ---------- | ----------------- | ------------------------------------------------------- |
+| `guard`    | `contents: read`  | checkout only                                           |
+| `build`    | `contents: read`  | checkout; artifact upload uses the runner's own token   |
+| `release`  | `contents: write` | `gh release create` — the only writer in the workflow   |
+| `homebrew` | `contents: read`  | checkout and `gh release download`                      |
+
+The `build` job matters most: it runs third-party install and build scripts (pnpm lifecycle hooks,
+`node-gyp`, electron-builder) on a runner that also holds the Apple signing secrets, so it must not
+also hold a token that can write to the repository. The tap push is a different repository and is
+authenticated by `HOMEBREW_TAP_TOKEN`, never by `GITHUB_TOKEN`.
+
 ## Checksums
 
 The `release` job is the only job that touches the GitHub Release. It downloads every artifact from
