@@ -264,20 +264,28 @@ test.describe('Joinery (React) — the results grid', () => {
       await executeQuery(window);
       await expect(gridRows(window)).toHaveCount(5);
 
-      // Descending by id, then a quick filter down to two of the five. Export used to ignore both and
-      // write the executor's five rows in the executor's order; Craig's ruling is that it must not.
+      // Descending by id, then a quick filter that genuinely narrows. `e@` is the substring shared by
+      // the three seeded emails whose local part ends in `e` — alice@, dave@, eve@ — so five rows
+      // become three. (`example.com` would NOT do: every seeded customer is @example.com, so the
+      // filter would match all five and the test would assert nothing about filtering.) Export used to
+      // ignore both the sort and the filter and write the executor's five rows in the executor's
+      // order; Craig's ruling is that it must not.
       await sortGridColumn(window, 'id');
       await sortGridColumn(window, 'id');
       await expect(gridSortState(window, 'id')).toHaveAttribute('aria-sort', 'descending');
-      await window.getByTestId('results-filter').fill('example.com');
+      await window.getByTestId('results-filter').fill('e@');
       await expect(window.getByTestId('results-filtered')).toBeVisible();
 
+      // `results-filtered` appears as soon as the filter box is non-empty, which is BEFORE AG Grid has
+      // re-run the filter — so the settled view has to be polled for, exactly as this file's other
+      // sort/filter assertions do, or `onScreen` can be read mid-flight.
+      await expectColumnValues(window, 'id', ['5', '4', '1']);
+
       // Whatever the filter left on screen, in the order it left it, is the assertion's expectation —
-      // read off the grid rather than hardcoded, so this stays a statement about agreement between the
-      // view and the file rather than about the seed data.
+      // read off the grid rather than restated, so the comparison below stays a statement about
+      // agreement between the view and the file.
       const onScreen = await gridColumnValues(window, 'id');
-      expect(onScreen.length).toBeGreaterThan(0);
-      expect(onScreen.length).toBeLessThan(5);
+      expect(onScreen).toHaveLength(3);
 
       const destination = join(tmpdir(), `joinery-export-view-${Date.now().toString(36)}.json`);
       await app.evaluate(({ dialog }, filePath: string) => {
