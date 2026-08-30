@@ -36,6 +36,27 @@ pnpm run build       # Build all packages
 pnpm run dev         # Development mode with hot reload
 ```
 
+### Where the development build keeps its state
+
+`pnpm run dev` runs `electron .` inside `packages/main`, so Electron takes the app name from that
+package's manifest — `"productName": "Joinery (dev)"`. State therefore lands in a directory of its
+own, separate from the installed app's:
+
+| Build          | macOS                                         | Windows                   |
+| -------------- | --------------------------------------------- | ------------------------- |
+| `pnpm run dev` | `~/Library/Application Support/Joinery (dev)` | `%APPDATA%\Joinery (dev)` |
+| Installed app  | `~/Library/Application Support/Joinery`       | `%APPDATA%\Joinery`       |
+
+That separation is deliberate: a bug in a development build cannot reach the connection profiles,
+query history or chat conversations of the app you actually use. Deleting the `Joinery (dev)`
+directory is a safe way to start from a clean profile.
+
+**Do not remove `productName` from `packages/main/package.json`.** Electron falls back to `name`,
+which is `@joinery/main`, and it joins that onto the application-data path without complaint — the
+`/` nests your state inside a directory called `@joinery` where nothing looks for it. A spec in
+`packages/main/src/services/config/user-data-dir.spec.ts` fails if any Electron entry point in the
+workspace resolves a name that is not a single, plain directory.
+
 ### Running SQL Server Locally
 
 ```bash

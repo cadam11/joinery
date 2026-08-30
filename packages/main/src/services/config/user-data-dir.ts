@@ -26,6 +26,54 @@ export const USER_DATA_DIR_NAME = 'Joinery';
 export const LEGACY_USER_DATA_DIR_NAME = 'joinery';
 
 /**
+ * The name Electron will use for `app.name`, given the package.json beside the entry point.
+ * `null` means Electron would leave the app unnamed.
+ *
+ * Transcribed from the Electron 41 source, not from the documentation, and not from memory — two
+ * different code paths pick this name and they do not agree:
+ *
+ * - `electron <dir>`, which is what `pnpm run dev` runs, goes through `default_app.asar`'s
+ *   `main.js` (`loadApplicationPackage`):
+ *   `if (packageJson.productName) app.name = packageJson.productName; else if (packageJson.name) …`
+ *   — a plain truthiness chain, with no trimming.
+ * - A packaged app goes through the browser init bundled in the framework binary, which branches on
+ *   `!= null` and assigns `` `${value}`.trim() ``.
+ *
+ * This models the first, because it is the path that produced the orphaned `@joinery/main`
+ * directory. `isUsableAsUserDataDirName` below then rejects the inputs the two paths disagree on,
+ * so nothing in this repo can depend on which one ran. Both readings were checked against a real
+ * Electron launch: a `productName` of `"   Joinery (dev)   "` yields `app.name` with its spaces
+ * intact in development.
+ */
+export function electronAppNameFrom(manifest: {
+  readonly name?: unknown;
+  readonly productName?: unknown;
+}): string | null {
+  const { productName, name } = manifest;
+  if (productName) return String(productName);
+  if (name) return String(name);
+  return null;
+}
+
+/**
+ * Whether `app.name` would give Joinery a user-data directory of its own (J-142).
+ *
+ * Electron joins `app.name` onto the platform's application-data directory. It does not validate
+ * it, so a scoped npm name does not fail — the separator in `@joinery/main` just nests the
+ * directory a level deeper, which is how 46 MB of development state ended up in
+ * `~/Library/Application Support/@joinery/main` before `productName` was set. A bare scope is
+ * rejected too: it is the leftover shape of that same mistake, never a product name.
+ */
+export function isUsableAsUserDataDirName(name: string): boolean {
+  if (name === '' || name === '.' || name === '..') return false;
+  if (name.startsWith('@')) return false;
+  // Development keeps surrounding whitespace and the packaged app trims it away, so a name with
+  // any would put the two builds in two different directories for no visible reason.
+  if (name.trim() !== name) return false;
+  return path.posix.basename(name) === name && path.win32.basename(name) === name;
+}
+
+/**
  * Files whose presence means "a real Joinery installation wrote here". Chromium's own artifacts
  * (`Local State`, `Cache/`, …) deliberately do not count: Electron creates those before the main
  * script runs, so treating them as state would make the guard a permanent no-op.
