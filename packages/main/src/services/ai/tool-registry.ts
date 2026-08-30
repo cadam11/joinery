@@ -7,6 +7,7 @@ import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
 import { ConnectionPoolManager } from '../sql/connection-pool';
 import { getDialect } from '../sql/dialect';
+import { buildRowCountQuery, type ParameterisedQuery } from './row-count-query';
 
 const log = createLogger('ToolRegistry');
 
@@ -108,6 +109,59 @@ export class ToolRegistry extends BaseSingleton {
 
     // Default: SQL Server
     const result = await pool.query<Record<string, unknown>>(connectionId, sql, database);
+    return result.recordset || [];
+  }
+
+  /**
+   * Execute a query whose values are bound by the driver rather than written
+   * into the SQL text. Use this for anything carrying a model-supplied string.
+   *
+   * The safety property is the binding itself: a bound value reaches the
+   * server out of band and is never lexed as SQL, so it cannot close a literal
+   * or start a statement — on any engine, under any server setting.
+   *
+   * Two of the three channels reinforce that by refusing to carry a second
+   * statement at all: node-pg's extended query protocol, and a mysql2
+   * server-side prepared statement (`execute`, which is why
+   * `multipleStatements: true` on that pool is unreachable from here). The
+   * SQL Server channel does NOT. `request.query()` reaches the server as
+   * `sp_executesql`, which runs an ordinary multi-statement batch — Joinery
+   * depends on that, since `adaptSqlForPool` prepends `USE [db];` to the
+   * statement. On SQL Server the binding is therefore the whole of the
+   * defence, not a belt-and-braces second line of it.
+   *
+   * `queryAny` above stays on the unbound path because it is handed complete,
+   * dialect-built SQL.
+   */
+  private async queryAnyWithParams(
+    connectionId: string,
+    query: ParameterisedQuery,
+    database?: string
+  ): Promise<Record<string, unknown>[]> {
+    const pool = ConnectionPoolManager.getInstance();
+    const engine = pool.getEngineForProfile(connectionId);
+
+    if (engine === 'postgresql') {
+      const pgPool = await pool.getPgPool(connectionId, database);
+      const result = await pgPool.query(query.sql, query.params);
+      return result.rows as Record<string, unknown>[];
+    }
+
+    if (engine === 'mysql') {
+      const mysqlPool = await pool.getMySQLPool(connectionId, database);
+      // `execute`, not `query`: a prepared statement binds values server-side,
+      // so `multipleStatements: true` on this pool is unreachable from them.
+      const [rows] = await mysqlPool.execute(query.sql, query.params);
+      return rows as Record<string, unknown>[];
+    }
+
+    // Default: SQL Server
+    const result = await pool.queryWithParams<Record<string, unknown>>(
+      connectionId,
+      query.sql,
+      query.params,
+      database
+    );
     return result.recordset || [];
   }
 
@@ -339,28 +393,11 @@ export class ToolRegistry extends BaseSingleton {
           (args.schema as string) ||
           (engine === 'postgresql' ? 'public' : engine === 'mysql' ? database || '' : 'dbo');
         const table = args.table as string;
-        const safeTable = table.replace(/'/g, "''");
-        const safeSchema = schema.replace(/'/g, "''");
 
-        let sql: string;
-        if (engine === 'mysql') {
-          sql = `SELECT TABLE_ROWS AS row_count FROM information_schema.TABLES
-                 WHERE TABLE_SCHEMA = '${safeSchema}' AND TABLE_NAME = '${safeTable}'`;
-        } else if (engine === 'postgresql') {
-          // pg_class.reltuples works on both standard PostgreSQL and Aurora
-          // DSQL (which lacks pg_stat_user_tables), and is the AWS-recommended
-          // way to approximate row counts without a full scan.
-          sql = `SELECT COALESCE(c.reltuples, 0)::bigint AS row_count
-                 FROM pg_class c
-                 JOIN pg_namespace n ON c.relnamespace = n.oid
-                 WHERE n.nspname = '${safeSchema}' AND c.relname = '${safeTable}' AND c.relkind = 'r'`;
-        } else {
-          sql = `SELECT SUM(p.rows) AS row_count FROM sys.partitions p
-                 JOIN sys.tables t ON p.object_id = t.object_id
-                 JOIN sys.schemas s ON t.schema_id = s.schema_id
-                 WHERE s.name = '${safeSchema}' AND t.name = '${safeTable}' AND p.index_id IN (0, 1)`;
-        }
-        const rows = await this.queryAny(connectionId, sql, database);
+        // `schema` and `table` come from the model's tool call, so they are
+        // bound as parameters rather than written into the SQL (J-136).
+        const query = buildRowCountQuery(engine, schema, table);
+        const rows = await this.queryAnyWithParams(connectionId, query, database);
         return { table: `${schema}.${table}`, rowCount: rows[0]?.row_count || 0 };
       }
     );
