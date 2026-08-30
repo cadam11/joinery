@@ -19,7 +19,7 @@
  *   off. The SQL on this path is authored by the person at the keyboard.
  *
  * - `'restricted'` — everything else: metadata, the AI tool surface, the
- *   FK-record lookup. None of them ever sends more than one statement, and
+ *   FETCH_FK_RECORD handler. None of them ever sends more than one statement, and
  *   some of them build SQL from strings supplied by an LLM or read out of a
  *   result-set cell. Denying the capability makes a stacked statement
  *   unparseable by the server rather than merely un-writable by a correct

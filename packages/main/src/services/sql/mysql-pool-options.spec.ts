@@ -8,7 +8,7 @@
  *    user's whole script in one `conn.query()` and reads the multi-result
  *    array back, so `CLIENT_MULTI_STATEMENTS` is load-bearing there. The SQL
  *    is authored by the person sitting at the keyboard.
- *  - **restricted** — metadata, the AI tool surface, the FK-record lookup.
+ *  - **restricted** — metadata, the AI tool surface, the FETCH_FK_RECORD handler.
  *    None of them ever sends more than one statement, and some of them build
  *    SQL out of strings an LLM or a result-set cell supplied. Handing those a
  *    connection that *cannot* carry a second statement turns the cycle-4

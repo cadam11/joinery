@@ -266,11 +266,16 @@ export function mergeEnrichedColumns(
  * thing to lean on now: mysql2 multiplexes whenever the connection negotiated
  * `CLIENT_MULTI_STATEMENTS`, which is a per-pool decision. J-137 made that decision explicit —
  * `main/services/sql/mysql-pool-options.ts` opens a `'restricted'` pool without the flag for
- * metadata, the AI tools and this FK lookup, and a `'script'` pool with it for the query editor.
- * This preview text is executed through the FETCH_FK_RECORD handler, which runs on the restricted
- * pool, so a second statement here is not merely un-writable but unparseable. The escaping above is
- * still what has to hold: the same `sqlLiteral` output is also shown to the user and can be pasted
- * into the editor, which does run on the multi-statement pool.
+ * metadata and the AI tools, and a `'script'` pool with it for the query editor.
+ *
+ * That split does NOT cover this file. `row-detail-panel.tsx` runs `fkLookupSql`'s output through
+ * `query.execute` (see its module doc for why it does not use `query.fetchFkRecord`), and that is
+ * the QUERY.EXECUTE channel, which asks for the `'script'` pool. The main process's own
+ * FETCH_FK_RECORD handler IS on the restricted pool, but nothing in this renderer calls it. So on
+ * MySQL the escaping below is still the ONLY thing standing between a result-set cell and a second
+ * statement — J-137 is not defence in depth here yet. Closing that needs the FETCH_FK_RECORD
+ * handler moved onto the dialect layer (it emits T-SQL today, which is why this file exists) and
+ * the preview switched back onto it.
  */
 export function sqlLiteral(value: unknown, engine: DatabaseEngine): string {
   if (value === null || value === undefined) return 'NULL';

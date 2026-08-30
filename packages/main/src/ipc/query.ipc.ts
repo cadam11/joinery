@@ -202,6 +202,13 @@ export function registerQueryHandlers(): void {
         // its WHERE value is a cell out of a result set — i.e. arbitrary data
         // from whatever table the user opened. It runs on the restricted pool,
         // where a second statement is not expressible (J-137).
+        //
+        // Note what this does NOT cover: the React renderer does not call this
+        // channel. `renderer/features/query/row-detail-panel.tsx` builds its own
+        // per-engine SQL (`fkLookupSql`) and sends it through QUERY.EXECUTE,
+        // because the T-SQL template this handler used to emit was a syntax
+        // error on PostgreSQL and MySQL. So the live FK preview still lands on
+        // the script pool. Moving it back here is what would close that.
         const result = await queryExecutor.execute({
           connectionId: request.connectionId,
           database: request.database,

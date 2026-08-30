@@ -86,7 +86,7 @@ describe('MySQL pool trust routing', () => {
   });
 
   it('defaults an internally-built query to the restricted pool', async () => {
-    // The FK-record lookup (query.ipc.ts FETCH_FK_RECORD) reaches the executor
+    // The FETCH_FK_RECORD handler (query.ipc.ts) reaches the executor
     // with dialect-built, single-statement SQL carrying a result-set cell value.
     // It must not inherit the editor's multi-statement connection.
     await QueryExecutor.getInstance().execute({

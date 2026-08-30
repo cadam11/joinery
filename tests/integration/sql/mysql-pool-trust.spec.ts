@@ -157,7 +157,7 @@ describe('MySQL callers on the live server', () => {
     });
   });
 
-  it('refuses a stacked statement on an internally-built query (FK-record lookup path)', async () => {
+  it('refuses a stacked statement on an internally-built query (FETCH_FK_RECORD path)', async () => {
     await withFreshDatabase('mysql', async db => {
       await createVictim(db.databaseName);
       const connectionId = registerProfile(db.databaseName);

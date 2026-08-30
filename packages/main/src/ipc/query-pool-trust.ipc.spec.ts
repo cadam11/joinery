@@ -9,6 +9,14 @@
  * pool. Without this spec, deleting `{ mysqlTrust: 'script' }` from the editor
  * handler, or adding it to another one, is an invisible change.
  *
+ * Read `QUERY.EXECUTE` as "the channel the renderer runs SQL on", not "the
+ * editor": `row-detail-panel.tsx`'s foreign-key preview also uses it, with a
+ * predicate built from a result-set cell, because the FETCH_FK_RECORD handler
+ * below emits T-SQL and is unusable on PostgreSQL and MySQL. So the value this
+ * spec's second case guards is not on the path the app actually takes — the
+ * renderer preview is still on the script pool. Recorded here so the next
+ * person does not read a green suite as coverage it does not have.
+ *
  * Harness copied from `credentials.ipc.spec.ts`: `electron` is replaced with
  * the members this file touches and the registered handlers are captured so
  * they can be invoked directly. `QueryExecutor` is a **recorder** — it runs no
@@ -98,7 +106,7 @@ describe('MySQL pool trust per query channel (J-137)', () => {
     expect(harness.executed[0].options).toEqual({ mysqlTrust: 'script' });
   });
 
-  it('runs the FK-record lookup on the restricted pool', async () => {
+  it('runs the FETCH_FK_RECORD handler on the restricted pool', async () => {
     await invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, {
       connectionId: 'c1',
       database: 'appdb',
