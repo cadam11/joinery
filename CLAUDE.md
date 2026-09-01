@@ -36,7 +36,7 @@ joinery/
 │   │       ├── ipc/          # IPC handlers
 │   │       ├── services/
 │   │       │   ├── ai/       # AI service, chat, tool registry, LLM providers
-│   │       │   ├── sql/      # Database operations (providers, dialects, metadata)
+│   │       │   ├── sql/      # Database operations (dialects, pools, metadata)
 │   │       │   ├── docker/   # Docker detection
 │   │       │   ├── keychain/ # Credential storage
 │   │       │   └── config/   # App state persistence

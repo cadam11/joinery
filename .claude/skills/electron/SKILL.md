@@ -18,7 +18,7 @@ Joinery structure:
 
 Key services in main process (`packages/main/src/services/`):
 
-- `sql/` — Multi-engine database providers (MSSQL, PostgreSQL, MySQL), dialects, metadata
+- `sql/` — Multi-engine SQL (MSSQL, PostgreSQL, MySQL): dialects, connection pools, metadata
 - `ai/` — AI service, chat, tool registry, LLM provider abstraction
 - `docker/` — Docker container detection
 - `keychain/` — macOS Keychain credential storage

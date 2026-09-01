@@ -11,7 +11,7 @@ Joinery is a native desktop database IDE supporting SQL Server, PostgreSQL, and 
                  │  │  Main Process  │ │ Renderer Process │ │
                  │  │  (Node.js)     │ │ (React)          │ │
                  │  │                │ │                  │ │
-                 │  │  SQL Providers │ │  Query Editor    │ │
+                 │  │  SQL Services  │ │  Query Editor    │ │
                  │  │  AI Services   │ │  Object Explorer │ │
                  │  │  IPC Handlers  │ │  Connection Mgmt │ │
                  │  │  File I/O      │ │  Results Grid    │ │
@@ -42,7 +42,6 @@ packages/
 │       ├── services/
 │       │   ├── sql/                # Database services
 │       │   │   ├── dialect/        # SQL dialect abstraction
-│       │   │   ├── provider/       # Database provider abstraction
 │       │   │   ├── connection-pool.ts   # Multi-engine pool manager
 │       │   │   ├── query-executor.ts    # Query execution, routed per engine
 │       │   │   ├── metadata.ts          # Schema introspection

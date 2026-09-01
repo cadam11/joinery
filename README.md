@@ -364,7 +364,7 @@ joinery/
 │   │       ├── ipc/       # IPC handler registration
 │   │       └── services/
 │   │           ├── ai/    # LLM providers, chat service, tool registry
-│   │           ├── sql/   # Multi-engine SQL: dialect/, provider/, pool routing
+│   │           ├── sql/   # Multi-engine SQL: dialect/, connection pools, engine routing
 │   │           ├── ssh/   # SSH tunnel manager (idle reconnect)
 │   │           ├── docker/# Container detection
 │   │           ├── keychain/ # Credential storage
