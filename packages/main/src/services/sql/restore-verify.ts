@@ -63,12 +63,12 @@ export async function mysqlDatabaseExists(
  *
  * The `ssl` / `connectionTimeoutMillis` pair is written out here rather than
  * taken from a shared builder because PostgreSQL has no equivalent of
- * `mysql-pool-options.ts` yet — `connection-pool.ts` and
- * `provider/pg-provider.ts` still hold their own copies of the pool config.
- * When that builder lands, this literal should be derived from it the way the
- * MySQL side now is. The `ssl` shape reproduces what those copies pass, so this
- * check trusts (or refuses) the same certificates as every other PG connection
- * in the app.
+ * `mysql-pool-options.ts` yet — `connection-pool.ts` holds two copies of the
+ * pg config of its own (the throwaway probe pool in `testPgConnection` and the
+ * persistent pool in `getPgPool`). When that builder lands, this literal should
+ * be derived from it the way the MySQL side now is. The `ssl` shape reproduces
+ * what those copies pass, so this check trusts (or refuses) the same
+ * certificates as every other PG connection in the app.
  */
 export async function pgDatabaseExists(
   name: string,

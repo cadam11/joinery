@@ -190,8 +190,8 @@ describe('pgDatabaseExists', () => {
     const [trusting, plain] = pgCalls.configs as pg.ClientConfig[];
     expect(trusting.ssl).toEqual({ rejectUnauthorized: false });
     // `false`, not absent: this is what every other PG connection in the app
-    // passes (provider/pg-provider.ts, connection-pool.ts) and pg treats a
-    // missing `ssl` and `ssl: false` identically.
+    // passes (`connection-pool.ts:558, 648`) and pg treats a missing `ssl` and
+    // `ssl: false` identically.
     expect(plain.ssl).toBe(false);
   });
 
