@@ -25,6 +25,11 @@
  *   - `getMySQLPool(profileId, database?, trust?): Promise<MySQLPool>` (`:733`) → `.query` / `.execute`
  *   - `queryWithParams<T>(profileId, sql, params, database?)`          (`:900`) → `{ recordset }`
  *
+ * `MetadataService` is doubled too, down to the single method the lookup now calls: since J-150 the
+ * catalogue read is `listColumns`, not `getEnrichedColumnMetadata`. That makes the round-trip cost
+ * of the catalogue invisible here by construction, which is exactly why the count lives in its own
+ * file — `fk-record-round-trips.spec.ts` doubles ONLY the pool and runs the real metadata service.
+ *
  * Behaviour against live servers is the integration tier's job
  * (`tests/integration/sql/mysql-pool-trust.spec.ts`) and the e2e tier's
  * (`tests/e2e-react/row-detail.spec.ts`).
@@ -40,10 +45,10 @@ const recorder = vi.hoisted(() => ({
   sent: [] as { via: string; sql: string; params: readonly unknown[] }[],
   /** Which MySQL pool was asked for, and for which database. */
   mysqlPools: [] as { database: string | undefined; trust: string | undefined }[],
-  /** Every `getEnrichedColumnMetadata` call. */
-  enrichedFor: [] as string[],
-  enriched: [] as unknown[],
-  enrichmentFails: false,
+  /** Every `MetadataService.listColumns` call, as `schema.table`. */
+  catalogueFor: [] as string[],
+  catalogue: [] as unknown[],
+  catalogueFails: false,
   /** When set, every driver call rejects with this message — the engine refusing the statement. */
   queryFails: null as string | null,
 }));
@@ -94,15 +99,15 @@ vi.mock('./connection-pool', async () => {
 vi.mock('./metadata', () => ({
   MetadataService: {
     getInstance: () => ({
-      getEnrichedColumnMetadata: async (
+      listColumns: async (
         _connectionId: string,
         _database: string,
         schema: string,
         table: string
       ) => {
-        recorder.enrichedFor.push(`${schema}.${table}`);
-        if (recorder.enrichmentFails) throw new Error('catalogue unavailable');
-        return recorder.enriched;
+        recorder.catalogueFor.push(`${schema}.${table}`);
+        if (recorder.catalogueFails) throw new Error('catalogue unavailable');
+        return recorder.catalogue;
       },
     }),
   },
@@ -122,31 +127,36 @@ const REQUEST = {
   value: 3,
 };
 
-/** What `getEnrichedColumnMetadata` returns, shaped as `metadata.ts:1063-1086` declares it. */
-const ENRICHED = [
+/**
+ * What `MetadataService.listColumns` returns: `ColumnInfo[]`, declared at
+ * `shared/types/database.types.ts:91-102` and built at `metadata.ts:277-295`, which coerces the
+ * three boolean flags with `Boolean(…)` before returning. Since J-150 this is the preview's ONLY
+ * catalogue read — see `fk-record-round-trips.spec.ts` for the round-trip count that pins it.
+ */
+const CATALOGUE = [
   {
     name: 'id',
-    type: 'integer',
-    nullable: false,
-    maxLength: null,
+    dataType: 'integer',
+    maxLength: undefined,
     precision: 32,
     scale: 0,
+    isNullable: false,
     isPrimaryKey: true,
-    isIdentity: true,
-    defaultValue: null,
-    foreignKey: null,
+    isForeignKey: false,
+    defaultValue: undefined,
+    ordinalPosition: 1,
   },
   {
     name: 'email',
-    type: 'text',
-    nullable: true,
-    maxLength: null,
-    precision: null,
-    scale: null,
+    dataType: 'text',
+    maxLength: undefined,
+    precision: undefined,
+    scale: undefined,
+    isNullable: true,
     isPrimaryKey: false,
-    isIdentity: false,
-    defaultValue: null,
-    foreignKey: null,
+    isForeignKey: false,
+    defaultValue: undefined,
+    ordinalPosition: 2,
   },
 ];
 
@@ -155,9 +165,9 @@ beforeEach(() => {
   recorder.rows = [{ id: 3, email: 'c3@example.test' }];
   recorder.sent = [];
   recorder.mysqlPools = [];
-  recorder.enrichedFor = [];
-  recorder.enriched = ENRICHED;
-  recorder.enrichmentFails = false;
+  recorder.catalogueFor = [];
+  recorder.catalogue = CATALOGUE;
+  recorder.catalogueFails = false;
   recorder.queryFails = null;
 });
 
@@ -237,7 +247,7 @@ describe('the result', () => {
       { name: 'id', type: 'integer', dataType: 'integer', nullable: false, isPrimaryKey: true },
       { name: 'email', type: 'text', dataType: 'text', nullable: true, isPrimaryKey: false },
     ]);
-    expect(recorder.enrichedFor).toEqual(['public.customers']);
+    expect(recorder.catalogueFor).toEqual(['public.customers']);
   });
 
   it('marks the primary key on PostgreSQL, which the driver’s own fields never carried', async () => {
@@ -252,7 +262,7 @@ describe('the result', () => {
   });
 
   it('still returns the row when the catalogue cannot be read', async () => {
-    recorder.enrichmentFails = true;
+    recorder.catalogueFails = true;
     const result = await fetchFkRecord(REQUEST);
 
     expect(result.success).toBe(true);

@@ -19,7 +19,7 @@
  *     from the driver's field list alone, with no PK and no FK. So on PostgreSQL every FK badge in
  *     the Angular inspector was missing — not wrong, absent. `parseSingleTableSelect` +
  *     `mergeEnrichedColumns` reproduce main's enrichment renderer-side, from
- *     `explorer.getEnrichedColumns`, which IS engine-aware (`metadata.ts:1085-1194`).
+ *     `explorer.getEnrichedColumns`, which IS engine-aware (`metadata.ts:1033-1149`).
  *  3. **Values are quoted by type.** `formatFkValueForSql` stringified everything that was not a
  *     number or a boolean, so a `Date` reached SQL as `N'Mon Aug 11 2025 …'`. Dates go out as ISO,
  *     and MySQL's backslash escape — on by default, unlike PostgreSQL and SQL Server — is handled.
@@ -81,7 +81,7 @@ export interface FkTarget {
  * is a bare word and would be read as the table name.
  *
  * `database` decides the unqualified case for MySQL, which has no schema layer between database and
- * table — its `TABLE_SCHEMA` *is* the database, which is what `metadata.ts:1128-1131` queries and
+ * table — its `TABLE_SCHEMA` *is* the database, which is what `metadata.ts:1080-1086` queries and
  * what `query-executor.ts:710`'s comment records. PostgreSQL falls back to `public` and SQL Server
  * to `dbo`, i.e. `defaultSchema(engine)`.
  */
