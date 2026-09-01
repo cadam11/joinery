@@ -103,8 +103,17 @@ vi.mock('../services/sql/connection-pool', async () => {
   };
 });
 
+// Both methods are needed: `query-executor.ts:119` enriches MSSQL result columns with
+// `getEnrichedColumnMetadata`, while since J-150 `fk-record.ts` reads `listColumns` alone. Neither
+// is what this file measures — it counts POOLS — so both return nothing and issue no statement,
+// which is also what keeps them out of `harness.sent`.
 vi.mock('../services/sql/metadata', () => ({
-  MetadataService: { getInstance: () => ({ getEnrichedColumnMetadata: async () => [] }) },
+  MetadataService: {
+    getInstance: () => ({
+      getEnrichedColumnMetadata: async () => [],
+      listColumns: async () => [],
+    }),
+  },
 }));
 
 // Static, not dynamic: vitest hoists the mocks above every import, and this

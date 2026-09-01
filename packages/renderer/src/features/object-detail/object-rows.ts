@@ -8,7 +8,7 @@
  * therefore showed five columns and could not answer the two questions a user actually opens an object
  * for: is this the identity, and where does it point?
  *
- * `explorer.getEnrichedColumns` answers both, on all three engines (`metadata.ts:1085-1194`), and Task
+ * `explorer.getEnrichedColumns` answers both, on all three engines (`metadata.ts:1033-1149`), and Task
  * 14 already built a consumer for it (`features/query/fk-lookup.ts`, whose `EnrichedColumn` type is
  * derived from the preload declaration rather than re-typed — PLAN.md §7.2's anonymous 15-field return).
  * This module reuses that type rather than declaring a second view of the same shape.
