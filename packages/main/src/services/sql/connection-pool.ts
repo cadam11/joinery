@@ -23,6 +23,7 @@ import {
   mysqlPoolKey,
   mysqlPoolKeysForDatabase,
   mysqlPoolOptions,
+  mysqlTestPoolOptions,
   type MySQLPoolTrust,
 } from './mysql-pool-options';
 
@@ -677,17 +678,9 @@ export class ConnectionPoolManager extends BaseSingleton {
   ): Promise<TestConnectionResult> {
     let testPool: MySQLPool | null = null;
     try {
-      testPool = mysql.createPool({
-        host: profile.server,
-        port: profile.port,
-        user: profile.username,
-        password,
-        database: profile.database || undefined,
-        charset: profile.mysqlCollation || undefined,
-        ssl: profile.encrypt ? { rejectUnauthorized: !profile.trustServerCertificate } : undefined,
-        connectTimeout: profile.connectionTimeout * 1000,
-        connectionLimit: 1,
-      });
+      // Options from the shared builder (J-149), not a local literal: the copy
+      // that used to live here had already drifted from mysqlPoolOptions.
+      testPool = mysql.createPool(mysqlTestPoolOptions(profile, password));
 
       const [rows] = await testPool.query('SELECT VERSION() AS version, DATABASE() AS name');
       const row = (rows as Record<string, unknown>[])[0];
