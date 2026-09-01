@@ -28,7 +28,7 @@
  * `'restricted'` is the default everywhere so a new caller is safe unless it
  * says otherwise.
  */
-import type { PoolOptions } from 'mysql2/promise';
+import type { ConnectionOptions, PoolOptions } from 'mysql2/promise';
 import type { ConnectionProfile } from '@joinery/shared';
 
 export type MySQLPoolTrust = 'restricted' | 'script';
@@ -108,6 +108,51 @@ export function mysqlTestPoolOptions(profile: ConnectionProfile, password: strin
     connectionLimit: 1,
     maxIdle: 1,
   };
+}
+
+/**
+ * Options for the single connection behind the post-restore existence check (J-151).
+ *
+ * `MySQLBackupService` closes a restore by asking the server whether the target
+ * database is really there — the mysql CLI exits 0 on an empty dump and on a
+ * privilege gap. That check used to build its own `createConnection` literal of
+ * `{ host, port, user, password }`, so every other connection setting on the
+ * profile was dropped: against a TLS profile it ran in plaintext, and against a
+ * server with `require_secure_transport = ON` it could not connect at all,
+ * turning a successful restore into a reported failure.
+ *
+ * Two deliberate differences from the shared restricted options:
+ *
+ *  - **No default database.** The check reads `information_schema.SCHEMATA`,
+ *    which needs none, and naming the restore target would fail to connect on
+ *    exactly the run this check exists for — the one where the target was never
+ *    created.
+ *  - **`user` falls back to `root`**, matching the `-u` the restore CLI is
+ *    given (`startRestore`). The check must ask as the identity that did the
+ *    restore.
+ *
+ * The four pool-only keys are dropped. mysql2 would take them without
+ * complaint — `connectionLimit`, `maxIdle`, `idleTimeout` and
+ * `waitForConnections` are all listed in `validOptions`
+ * (`mysql2/lib/connection_config.js:64-71`, v3.23.3), so they would not even
+ * trip its "Ignoring invalid configuration option" warning — but a lone
+ * connection has no pool to size. Dropping them is a deny-list on purpose: a
+ * new *connection*-level option added to `mysqlPoolOptions` reaches this site
+ * through the spread, which is the whole point.
+ */
+export function mysqlVerifyConnectionOptions(
+  profile: ConnectionProfile,
+  password: string
+): ConnectionOptions {
+  const {
+    connectionLimit: _connectionLimit,
+    maxIdle: _maxIdle,
+    idleTimeout: _idleTimeout,
+    waitForConnections: _waitForConnections,
+    ...connectionOptions
+  } = mysqlPoolOptions(profile, undefined, 'restricted', password);
+
+  return { ...connectionOptions, user: profile.username || 'root' };
 }
 
 /**

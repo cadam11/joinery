@@ -33,6 +33,7 @@ import {
   mysqlPoolKey,
   mysqlPoolOptions,
   mysqlTestPoolOptions,
+  mysqlVerifyConnectionOptions,
 } from './mysql-pool-options';
 
 const baseProfile = (over: Partial<ConnectionProfile> = {}): ConnectionProfile => ({
@@ -261,6 +262,98 @@ describe('mysqlTestPoolOptions (J-149)', () => {
     // string must not be handed to mysql2 as a database name.
     expect(mysqlTestPoolOptions(baseProfile({ database: '' }), 'secret').database).toBeUndefined();
     expect(mysqlTestPoolOptions(baseProfile(), 'secret').database).toBeUndefined();
+  });
+});
+
+/**
+ * J-151 — the restore-verify connection is derived, not hand-rolled.
+ *
+ * `MySQLBackupService.verifyDatabaseExists` built its own `createConnection`
+ * literal — `{ host, port, user, password }` and nothing else. Against a
+ * profile with TLS on, the existence check therefore ran in plaintext, and
+ * against a server with `require_secure_transport = ON` it could not connect at
+ * all, so a restore that had actually succeeded was reported as failed.
+ *
+ * Same derivation rule as `mysqlTestPoolOptions`: spread the shared builder and
+ * override only what a single connection must differ on.
+ *
+ * The four pool-only keys are dropped. mysql2 would accept them —
+ * `connectionLimit`, `maxIdle`, `idleTimeout` and `waitForConnections` are all
+ * in `validOptions` (`mysql2/lib/connection_config.js:64-71`, v3.23.3), so
+ * passing them would not even warn — but a lone connection has no pool to size,
+ * and `ConnectionOptions` is the honest type for this call. The strip list is a
+ * deny-list on purpose: a new *connection*-level option added to
+ * `mysqlPoolOptions` reaches this site by construction, which is the property
+ * the ticket is about.
+ */
+describe('mysqlVerifyConnectionOptions (J-151)', () => {
+  const POOL_ONLY_KEYS = ['connectionLimit', 'maxIdle', 'idleTimeout', 'waitForConnections'];
+
+  it('carries the profile’s TLS settings — the defect this pins', () => {
+    const secured = mysqlVerifyConnectionOptions(baseProfile({ encrypt: true }), 'secret');
+    expect(secured.ssl).toEqual({ rejectUnauthorized: true });
+
+    const trusting = mysqlVerifyConnectionOptions(
+      baseProfile({ encrypt: true, trustServerCertificate: true }),
+      'secret'
+    );
+    expect(trusting.ssl).toEqual({ rejectUnauthorized: false });
+
+    const plain = mysqlVerifyConnectionOptions(baseProfile({ encrypt: false }), 'secret');
+    expect(plain.ssl).toBeUndefined();
+  });
+
+  it('differs from the shared restricted options ONLY in the pool-only keys', () => {
+    const shared = mysqlPoolOptions(baseProfile({ encrypt: true }), undefined, 'restricted', 'pw');
+    const verify = mysqlVerifyConnectionOptions(baseProfile({ encrypt: true }), 'pw');
+
+    const trimmed = Object.fromEntries(
+      Object.entries(shared).filter(([key]) => !POOL_ONLY_KEYS.includes(key))
+    );
+    expect(verify).toEqual(trimmed);
+  });
+
+  it('drops every pool-only key: there is no pool here to size', () => {
+    const verify = mysqlVerifyConnectionOptions(baseProfile(), 'secret');
+    for (const key of POOL_ONLY_KEYS) {
+      expect(verify).not.toHaveProperty(key);
+    }
+  });
+
+  it('connects on a restricted connection: the check sends one statement', () => {
+    expect(mysqlVerifyConnectionOptions(baseProfile(), 'secret').multipleStatements).toBe(false);
+  });
+
+  it('names no default database — the target may not exist yet', () => {
+    // The check reads information_schema.SCHEMATA, which needs no default
+    // database, and naming the restore target would fail to connect on exactly
+    // the run where the target was never created. Pinned against a profile that
+    // *does* carry a default database.
+    expect(
+      mysqlVerifyConnectionOptions(baseProfile({ database: 'appdb' }), 'secret').database
+    ).toBeUndefined();
+  });
+
+  it('keeps the `root` fallback the restore CLI already uses', () => {
+    // buildMysqlDumpArgs / the restore args send `-u root` when the profile
+    // names no user; the verify connection must be the same user, or it checks
+    // the wrong server-side identity.
+    expect(mysqlVerifyConnectionOptions(baseProfile({ username: undefined }), 'x').user).toBe(
+      'root'
+    );
+    expect(mysqlVerifyConnectionOptions(baseProfile({ username: 'app' }), 'x').user).toBe('app');
+  });
+
+  it('carries host, port, charset and the connect timeout through', () => {
+    const verify = mysqlVerifyConnectionOptions(
+      baseProfile({ server: '127.0.0.1', port: 13306, mysqlCollation: 'utf8mb4_bin' }),
+      'secret'
+    );
+    expect(verify.host).toBe('127.0.0.1');
+    expect(verify.port).toBe(13306);
+    expect(verify.password).toBe('secret');
+    expect(verify.charset).toBe('utf8mb4_bin');
+    expect(verify.connectTimeout).toBe(15000);
   });
 });
 

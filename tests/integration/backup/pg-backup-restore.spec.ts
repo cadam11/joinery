@@ -30,6 +30,20 @@ import { withFreshDatabase } from '../../helpers/db-fixtures';
 const fakeProfiles: Map<string, any> = new Map();
 const fakePasswords: Map<string, string> = new Map();
 
+/**
+ * Connection-shaped fields every real `ConnectionProfile` carries, merged under
+ * whatever a test sets. The restore path reads them — since J-151 the
+ * post-restore existence check builds its connection from the profile, TLS and
+ * connect timeout included — so a double that omits them is not the object the
+ * service is handed in production. A test that cares overrides them.
+ */
+const PROFILE_DEFAULTS = {
+  authenticationType: 'sql',
+  encrypt: false,
+  trustServerCertificate: false,
+  connectionTimeout: 15,
+};
+
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
@@ -43,7 +57,10 @@ vi.mock('electron', () => ({
 vi.mock('@joinery/main/services/config/connection-profiles', () => ({
   ConnectionProfilesStore: {
     getInstance: () => ({
-      getById: (id: string) => fakeProfiles.get(id),
+      getById: (id: string) => {
+        const profile = fakeProfiles.get(id);
+        return profile ? { ...PROFILE_DEFAULTS, ...profile } : undefined;
+      },
       getPassword: async (id: string) => fakePasswords.get(id) ?? null,
     }),
   },
