@@ -83,6 +83,31 @@ it on demand.
 
 ![The completion list open after `SELECT * FROM`, offering the connected database's tables qualified by schema, the first row highlighted and labelled Table.](../../../assets/screenshots/query-completions-dark.png)
 
+### Completions follow the tab's engine
+
+What the list offers, and what it inserts, is written for the engine the tab is connected to —
+the same engine that picks the tokenizer and the formatter.
+
+- **Quoting.** Names are inserted with that engine's delimiters: `"public"."customers"` on
+  PostgreSQL, `` `customers` `` on MySQL, `[dbo].[customers]` on SQL Server. A name that contains
+  its engine's closing delimiter has it doubled, so it still parses. MySQL names get no schema
+  part, because MySQL has no schema layer between a database and its tables.
+- **Keywords.** A shared SQL vocabulary on every engine, plus that engine's own — `LIMIT`,
+  `RETURNING`, `ILIKE` and `ON CONFLICT` on PostgreSQL; `LIMIT`, `AUTO_INCREMENT`, `IFNULL` and
+  `ON DUPLICATE KEY UPDATE` on MySQL; `TOP`, `NOLOCK`, `GETDATE` and `CHARINDEX` on SQL Server.
+  One engine's keywords are never offered on another.
+- **Snippets.** `select_top`, `try_catch` and `merge` are SQL Server's; PostgreSQL and MySQL get
+  `select_limit` and an `upsert` written in their own grammar. `create_procedure` has a different
+  body on each of the three.
+- **Stored procedures.** Typing `CALL ` offers them on PostgreSQL and MySQL; `EXEC ` or
+  `EXECUTE ` does on SQL Server.
+
+Typing a quoted name and then a dot — `"customers".` — offers that table's columns on every
+engine, in any of the three quoting styles.
+
+The AI **ghost text** is the exception: it does not yet tell the model which dialect it is
+completing for.
+
 | Action           | Keys | Also                        |
 | ---------------- | ---- | --------------------------- |
 | Find             | ⌘F   | Toolbar                     |
@@ -165,6 +190,13 @@ put through the Confirm-before-execute gate, because you asked for it by name.
 | The six live editor settings and their defaults                                               | `packages/renderer/src/editor/sql-editor.tsx:144-156, 380-384`, `packages/shared/src/types/settings.types.ts:53-63`     |
 | Indentation is always spaces — there is no tabs-vs-spaces preference                          | `packages/renderer/src/editor/sql-editor.tsx:160-170`                                                                   |
 | Autocomplete off means no suggest widget, but ⌃Space still works                              | `packages/renderer/src/editor/sql-editor.tsx:150-155`                                                                   |
+| Completions read the tab's engine from its connection profile                                 | `packages/renderer/src/editor/intellisense.ts:40-52`, `features/query/query-panel.tsx:472-482`                          |
+| Inserted names are quoted per engine, closing delimiter doubled, no schema part on MySQL      | `packages/renderer/src/editor/sql-intellisense.ts:801, 818, 835, 860`, `shell/sidebar/sql-text.ts:28-48`                |
+| A shared keyword set plus one per engine, and they do not leak between engines                | `packages/renderer/src/editor/sql-intellisense.ts:142-331`                                                              |
+| `select_top` / `try_catch` / `merge` are SQL Server's; `select_limit` and `upsert` are not    | `packages/renderer/src/editor/sql-intellisense.ts:346-451`                                                              |
+| Procedures are offered after `CALL` on PostgreSQL and MySQL, `EXEC`/`EXECUTE` on SQL Server   | `packages/renderer/src/editor/sql-intellisense.ts:711-712`                                                              |
+| A name in any of the three quoting styles resolves to a table after a dot                     | `packages/renderer/src/editor/sql-intellisense.ts:501-504, 714-715, 723-728`                                            |
+| Ghost text carries no dialect                                                                 | `packages/renderer/src/editor/sql-intellisense.ts:1096-1099`                                                            |
 | Find ⌘F, replace ⌥⌘F (Ctrl+H elsewhere), toggle comment ⌘/, format ⇧⌘F                        | `packages/renderer/src/commands/catalogue.ts:336-360, 388-395`                                                          |
 | Go to line is toolbar-only — no command and no menu item has it                               | `packages/renderer/src/features/query/query-toolbar.tsx:163-171`, `features/query/query-panel.tsx:507`                  |
 | Format replaces the document as one undoable edit and reports a parse failure                 | `packages/renderer/src/editor/sql-editor.tsx:250-265`, `features/query/query-panel.tsx:229-245`                         |
