@@ -28,7 +28,12 @@
 import { describe, expect, it } from 'vitest';
 import { createPool, type PoolOptions } from 'mysql2/promise';
 import type { ConnectionProfile } from '@joinery/shared';
-import { MYSQL_POOL_TRUSTS, mysqlPoolKey, mysqlPoolOptions } from './mysql-pool-options';
+import {
+  MYSQL_POOL_TRUSTS,
+  mysqlPoolKey,
+  mysqlPoolOptions,
+  mysqlTestPoolOptions,
+} from './mysql-pool-options';
 
 const baseProfile = (over: Partial<ConnectionProfile> = {}): ConnectionProfile => ({
   id: 'profile-1',
@@ -137,19 +142,19 @@ describe('mysqlPoolOptions', () => {
  * so no server is needed. The pool is always ended: its reaper timer would
  * otherwise hold the event loop open.
  */
+/** mysql2 keeps the reaper handle on the core pool; it is not in the public types. */
+type ReaperProbe = { pool: { _removeIdleTimeoutConnectionsTimer?: NodeJS.Timeout } };
+
+const reaperArmed = async (options: PoolOptions): Promise<boolean> => {
+  const pool = createPool(options);
+  try {
+    return Boolean((pool as unknown as ReaperProbe).pool._removeIdleTimeoutConnectionsTimer);
+  } finally {
+    await pool.end();
+  }
+};
+
 describe('mysqlPoolOptions idle reaper (J-146)', () => {
-  /** mysql2 keeps the reaper handle on the core pool; it is not in the public types. */
-  type ReaperProbe = { pool: { _removeIdleTimeoutConnectionsTimer?: NodeJS.Timeout } };
-
-  const reaperArmed = async (options: PoolOptions): Promise<boolean> => {
-    const pool = createPool(options);
-    try {
-      return Boolean((pool as unknown as ReaperProbe).pool._removeIdleTimeoutConnectionsTimer);
-    } finally {
-      await pool.end();
-    }
-  };
-
   it.each(MYSQL_POOL_TRUSTS)('arms mysql2’s idle reaper on the %s pool', async trust => {
     const opts = mysqlPoolOptions(baseProfile(), 'app', trust, 'secret');
     await expect(reaperArmed(opts)).resolves.toBe(true);
@@ -172,6 +177,89 @@ describe('mysqlPoolOptions idle reaper (J-146)', () => {
       'secret'
     );
     await expect(reaperArmed(withoutMaxIdle)).resolves.toBe(false);
+  });
+});
+
+/**
+ * J-149 — the "Test Connection" probe pool is derived, not hand-rolled.
+ *
+ * Two copies of the pool options used to live in the test-connection paths
+ * (`connection-pool.ts` testMySQLConnection, `provider/mysql-provider.ts`
+ * testConnection). They drifted from `mysqlPoolOptions` — J-146's `maxIdle`
+ * never reached them, and neither would the next fix.
+ *
+ * What the first assertion pins is the **override list**, not the inheritance:
+ * `mysqlTestPoolOptions` may differ from the shared restricted options in
+ * `connectionLimit` and `maxIdle` and nothing else. A key added to
+ * `mysqlPoolOptions` reaches the probe through the spread on its own and would
+ * not fail this test — the spread is what makes drift structurally impossible.
+ * The test's job is to stop someone re-introducing drift the other way, by
+ * quietly overriding a third option here.
+ *
+ * That the two call sites actually *use* this builder is a separate claim, and
+ * `mysql-test-pool.spec.ts` is where it is pinned.
+ */
+describe('mysqlTestPoolOptions (J-149)', () => {
+  const probeProfile = baseProfile({ database: 'appdb' });
+
+  it('differs from the shared restricted options ONLY in the pool-size pair', () => {
+    const shared = mysqlPoolOptions(probeProfile, 'appdb', 'restricted', 'secret');
+    const probe = mysqlTestPoolOptions(probeProfile, 'secret');
+
+    const { connectionLimit: _sl, maxIdle: _sm, ...sharedRest } = shared;
+    const { connectionLimit: _pl, maxIdle: _pm, ...probeRest } = probe;
+    expect(probeRest).toEqual(sharedRest);
+  });
+
+  it('opens a single connection, the effective size the hand-rolled copies had', () => {
+    const probe = mysqlTestPoolOptions(probeProfile, 'secret');
+    expect(probe.connectionLimit).toBe(1);
+    // maxIdle tracked connectionLimit by default in the hand-rolled copies
+    // (mysql2/lib/pool_config.js:18-20). Inheriting the shared builder's
+    // maxIdle: 2 would leave maxIdle > connectionLimit, which reads as a
+    // mistake even though mysql2 ignores it. Pin the coherent pair instead.
+    expect(probe.maxIdle).toBe(1);
+    expect(probe.maxIdle).toBe(probe.connectionLimit);
+  });
+
+  it('leaves mysql2’s idle reaper disarmed — the probe pool is ended, not reaped', async () => {
+    // Driven through the real mysql2 constructor: the reaper arms only when
+    // maxIdle < connectionLimit (lib/base/pool.js:50-52). A one-connection pool
+    // that the caller ends in a `finally` has nothing for a 1s poller to do.
+    await expect(reaperArmed(mysqlTestPoolOptions(probeProfile, 'secret'))).resolves.toBe(false);
+  });
+
+  it('probes on a restricted connection: the probe sends one statement', () => {
+    const probe = mysqlTestPoolOptions(probeProfile, 'secret');
+    expect(probe.multipleStatements).toBe(false);
+  });
+
+  it('carries the profile through, including a tunnel-resolved host and TLS', () => {
+    const probe = mysqlTestPoolOptions(
+      baseProfile({
+        server: '127.0.0.1',
+        port: 13306,
+        database: 'appdb',
+        mysqlCollation: 'utf8mb4_bin',
+        encrypt: true,
+      }),
+      'secret'
+    );
+    expect(probe.host).toBe('127.0.0.1');
+    expect(probe.port).toBe(13306);
+    expect(probe.user).toBe('app');
+    expect(probe.password).toBe('secret');
+    expect(probe.database).toBe('appdb');
+    expect(probe.charset).toBe('utf8mb4_bin');
+    expect(probe.connectTimeout).toBe(15000);
+    expect(probe.ssl).toEqual({ rejectUnauthorized: true });
+  });
+
+  it('leaves database undefined when the profile names none', () => {
+    // The hand-rolled copies read `profile.database || undefined`: an empty
+    // string must not be handed to mysql2 as a database name.
+    expect(mysqlTestPoolOptions(baseProfile({ database: '' }), 'secret').database).toBeUndefined();
+    expect(mysqlTestPoolOptions(baseProfile(), 'secret').database).toBeUndefined();
   });
 });
 

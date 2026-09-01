@@ -76,6 +76,40 @@ export function mysqlPoolOptions(
 }
 
 /**
+ * Options for the throwaway pool behind "Test Connection" (J-149).
+ *
+ * Both probe paths — `ConnectionPoolManager.testMySQLConnection` and
+ * `MySQLProvider.testConnection` — used to hand-roll their own copy of the
+ * option literal, and both had already drifted from the builder above (neither
+ * ever received J-146's `maxIdle`). Deriving them here means a future change to
+ * the shared options reaches the probe by construction.
+ *
+ * `restricted` trust: the probe sends one statement, `SELECT VERSION() AS
+ * version, DATABASE() AS name`, and has no business holding a connection that
+ * could carry a second.
+ *
+ * Only the pool-size pair is overridden, and both values reproduce what the
+ * hand-rolled copies effectively had: `connectionLimit: 1` was explicit there,
+ * and `maxIdle` defaulted to `connectionLimit` when omitted
+ * (`mysql2/lib/pool_config.js:18-20`). Inheriting `maxIdle: 2` over a
+ * one-connection pool would leave `maxIdle > connectionLimit` — harmless to
+ * mysql2, but it reads as a mistake. The reaper stays disarmed either way
+ * (`lib/base/pool.js:50-52` arms it only when `maxIdle < connectionLimit`),
+ * which is right for a pool that answers one query and is closed in a `finally`.
+ *
+ * The one inherited value the copies did not have is `idleTimeout: 30000` in
+ * place of mysql2's 60s default. It is inert here: nothing reaps a pool whose
+ * reaper never arms, and the pool does not outlive the probe.
+ */
+export function mysqlTestPoolOptions(profile: ConnectionProfile, password: string): PoolOptions {
+  return {
+    ...mysqlPoolOptions(profile, profile.database || undefined, 'restricted', password),
+    connectionLimit: 1,
+    maxIdle: 1,
+  };
+}
+
+/**
  * Cache key for a MySQL pool entry.
  *
  * Shape: `profileId:trust:database`. Two constraints fix it:
