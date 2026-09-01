@@ -7,7 +7,9 @@
  *    on its columns (only the MSSQL executor enriches — `query-executor.ts:94-125`), so the rail has
  *    to fetch the catalogue itself and merge. That the badge and the link appear at all on PG is the
  *    single most valuable thing this file pins;
- *  - **the SQL that goes out** for a preview and for an open-in-tab, per engine, from a click;
+ *  - **what goes out for a preview** — since J-145 a `query.fetchFkRecord` call naming the
+ *    reference, never a statement — and **the SQL that goes out for an open-in-tab**, per engine,
+ *    from a click;
  *  - **navigation walks the GRID's displayed order**, which is the regression
  *    `tests/e2e/row-detail.spec.ts` exists for, expressed here as a source whose order differs from
  *    the result's;
@@ -18,7 +20,12 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ColumnMetadata, ConnectionProfile, QueryResult } from '@joinery/shared';
+import type {
+  ColumnMetadata,
+  ConnectionProfile,
+  FkRecordResult,
+  QueryResult,
+} from '@joinery/shared';
 
 import { IpcQueryProvider } from '../../ipc';
 import { connectionStore } from '../../state/connection';
@@ -102,34 +109,37 @@ const SOURCE: DisplayedRows = {
   at: index => DISPLAYED[index] ?? null,
 };
 
-const FK_RESULT: QueryResult = {
-  queryId: 'fk-1',
+/**
+ * What `query.fetchFkRecord` resolves to (`shared/types/query.types.ts:157-165`). Since J-145 the
+ * preview asks the main process for the referenced ROW rather than running a result set of its
+ * own: the statement, its bound value and its columns are all built there.
+ */
+const FK_RESULT: FkRecordResult = {
   success: true,
-  resultSets: [
-    {
-      columns: [
-        { name: 'id', type: 'int4', isPrimaryKey: true },
-        { name: 'email', type: 'text' },
-        { name: 'deleted_at', type: 'timestamptz' },
-      ],
-      rows: [{ id: 3, email: 'c3@example.test', deleted_at: null }],
-    },
+  record: { id: 3, email: 'c3@example.test', deleted_at: null },
+  columns: [
+    { name: 'id', type: 'int4', isPrimaryKey: true },
+    { name: 'email', type: 'text' },
+    { name: 'deleted_at', type: 'timestamptz' },
   ],
-  executionTime: 2,
 };
 
 const teardowns: (() => void)[] = [];
 const notifications: string[] = [];
 let getEnrichedColumns: ReturnType<typeof vi.fn>;
+let fetchFkRecord: ReturnType<typeof vi.fn>;
 let execute: ReturnType<typeof vi.fn>;
 
 function installBridge(): void {
   getEnrichedColumns = vi.fn(() => Promise.resolve(ENRICHED));
-  execute = vi.fn(() => Promise.resolve(FK_RESULT));
+  fetchFkRecord = vi.fn(() => Promise.resolve(FK_RESULT));
+  // Still declared, and deliberately: the assertion that the FK preview does NOT run SQL through
+  // the editor channel is only worth anything if that channel is reachable from this mock.
+  execute = vi.fn(() => Promise.resolve({ queryId: 'q', success: true } satisfies QueryResult));
   teardowns.push(
     installJoineryMock({
       explorer: { getEnrichedColumns },
-      query: { execute },
+      query: { execute, fetchFkRecord },
     })
   );
 }
@@ -323,7 +333,11 @@ describe('catalogue enrichment — the PostgreSQL path', () => {
 });
 
 describe('the FK preview', () => {
-  it('runs a dialect-correct single-row lookup and lists the referenced row', async () => {
+  it('asks the main process for the referenced row, naming the reference rather than SQL', async () => {
+    // J-145. What this pins is the SEAM, which is the security property: the renderer hands over
+    // the schema, table, column and the raw cell value, and never a statement. The statement is
+    // built by the dialect layer and its value is bound — pinned in
+    // `main/services/sql/fk-record.spec.ts` and `main/services/sql/dialect/dialect.spec.ts`.
     const user = userEvent.setup();
     mountRail(openTab());
     await waitFor(() =>
@@ -336,14 +350,20 @@ describe('the FK preview', () => {
     expect(within(preview).getByTestId('rowdetail-fk-target').textContent).toBe('public.customers');
     await waitFor(() => expect(within(preview).getByText('c3@example.test')).toBeTruthy());
 
-    expect(execute).toHaveBeenCalledExactlyOnceWith({
+    expect(fetchFkRecord).toHaveBeenCalledExactlyOnceWith({
       connectionId: 'conn-1',
       database: 'joinery_test',
-      sql: 'SELECT * FROM "public"."customers" WHERE "id" = 3 LIMIT 1',
+      schema: 'public',
+      table: 'customers',
+      column: 'id',
+      value: 3,
     });
   });
 
-  it('does not carry a tabId, so a peek is never snapshotted into result history', async () => {
+  it('never runs the preview through the editor channel, which is the one on MySQL’s script pool', async () => {
+    // The regression J-145 exists for: the preview used to build its own SQL and send it down
+    // `query.execute`, so the app's most data-driven lookup sat on the ONE channel entitled to
+    // MySQL's multi-statement pool (J-137), with a result-set cell escaped into its predicate.
     const user = userEvent.setup();
     mountRail(openTab());
     await waitFor(() =>
@@ -351,16 +371,15 @@ describe('the FK preview', () => {
     );
     await user.click(within(fieldRow('customer_id')).getByTestId('rowdetail-fk-link'));
 
-    await waitFor(() => expect(execute).toHaveBeenCalled());
-    expect(execute.mock.calls[0]?.[0]).not.toHaveProperty('tabId');
+    await waitFor(() => expect(fetchFkRecord).toHaveBeenCalled());
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('states the engine’s error rather than an empty card', async () => {
-    execute.mockResolvedValueOnce({
-      queryId: 'fk-1',
+    fetchFkRecord.mockResolvedValueOnce({
       success: false,
       error: 'relation "public.customers" does not exist',
-    });
+    } satisfies FkRecordResult);
     const user = userEvent.setup();
     mountRail(openTab());
     await waitFor(() =>
@@ -374,11 +393,9 @@ describe('the FK preview', () => {
   });
 
   it('says so when the reference points at a row that is not there', async () => {
-    execute.mockResolvedValueOnce({
-      queryId: 'fk-1',
-      success: true,
-      resultSets: [{ columns: [{ name: 'id', type: 'int4' }], rows: [] }],
-    });
+    // A missing row is a SUCCESS with no record, not an error — see `fk-record.ts`. The rail draws
+    // a plain line for it and keeps the red card for a statement the engine actually refused.
+    fetchFkRecord.mockResolvedValueOnce({ success: true } satisfies FkRecordResult);
     const user = userEvent.setup();
     mountRail(openTab());
     await waitFor(() =>

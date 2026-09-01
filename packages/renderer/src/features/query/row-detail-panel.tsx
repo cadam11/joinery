@@ -22,22 +22,27 @@
  * in place. The Schema tab's remaining content — nullability and defaults — is on the expanded field,
  * where it describes something the user is looking at.
  *
- * ── What the FK preview costs, and why it is not `query.fetchFkRecord` ────────────────────────
+ * ── Where the FK preview runs, and why it is `query.fetchFkRecord` (J-145) ────────────────────
  *
- * The bridge HAS a purpose-built member for this, and this file does not use it: `fetchFkRecord`
- * builds `SELECT TOP 1 * FROM [schema].[table]` in the main process
- * (`main/src/ipc/query.ipc.ts:174-189`), which is T-SQL — a syntax error on PostgreSQL and MySQL, so
- * the feature it exists for has never worked on two of the three engines. `packages/main` is out of
- * scope for this rewrite (PLAN.md §8), so the lookup goes through `query.execute` with SQL this
- * renderer generates per engine (`fkLookupSql`). Two consequences, both deliberate:
+ * On the bridge's purpose-built member, which for one release it was not. `fetchFkRecord` used to
+ * build `SELECT TOP 1 * FROM [schema].[table]` in the main process for EVERY engine — T-SQL, and so
+ * a syntax error on PostgreSQL and MySQL — so the React rewrite (with `packages/main` out of its
+ * scope, PLAN.md §8) generated the SQL here instead and sent it down `query.execute`. That worked,
+ * and it put the app's most data-driven lookup on the one channel entitled to MySQL's
+ * multi-statement pool, with an escaped literal carrying a result-set cell. J-145 moved the SQL onto
+ * the dialect layer and BOUND the value, so this file no longer generates any SQL it executes.
  *
- *  - the lookup DOES land in the query history, where `fetchFkRecord`'s did not. Given CLAUDE.md's
- *    "SQL Transparency" rule — store and display the SQL actually executed — a visible row is the
- *    defensible side of that trade;
- *  - no `tabId` is passed, so the main process does not snapshot it (`query.ipc.ts:61`) and a peek at
- *    a referenced row cannot flood the result-history panel.
+ * Three consequences, all deliberate:
  *
- * Recorded as a follow-up: fix the main handler to use the dialect layer, then delete this SQL.
+ *  - the value is a bound parameter, not an escaped literal, and on MySQL the statement goes out on
+ *    the restricted pool, where a second statement is not expressible at all (J-137);
+ *  - the referenced row's primary key is marked on all three engines. The old path got that only on
+ *    SQL Server, where the executor parsed the table back out of the SQL to enrich the columns; the
+ *    handler is told the table outright;
+ *  - the lookup NO LONGER lands in the query history. It did while it was a `query.execute` call,
+ *    and CLAUDE.md's "SQL Transparency" rule is the argument for keeping it there — but a bound
+ *    statement's history row would read `… WHERE "id" = $1` with the value absent, which is a worse
+ *    record than none. It is still kept out of the result-history snapshots, as it always was.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -64,7 +69,6 @@ import { Button, Spinner, Tooltip, cn } from '../../ui';
 import {
   displayValue,
   fkOpenSql,
-  fkLookupSql,
   fkTabTitle,
   mergeEnrichedColumns,
   parseSingleTableSelect,
@@ -291,7 +295,6 @@ export function RowDetailPanel({ tabId, target, onClose, onNavigate }: RowDetail
                     target={reference}
                     connectionId={connectionId}
                     database={database}
-                    engine={engine}
                     onOpenInTab={() => openInTab(reference)}
                   />
                 ) : null
@@ -553,7 +556,6 @@ interface FkPreviewProps {
   readonly target: FkTarget;
   readonly connectionId: string;
   readonly database: string;
-  readonly engine: DatabaseEngine;
   readonly onOpenInTab: () => void;
 }
 
@@ -563,15 +565,27 @@ interface FkPreviewProps {
  * Mounted only while a field's preview is open, so the query's lifetime is the disclosure's — and
  * closing it cancels nothing that matters (a single-row lookup) while re-opening it inside the
  * cache's 30-second staleness window costs no round trip.
+ *
+ * `query.fetchFkRecord`, not `query.execute` (J-145): the main process builds the statement from
+ * the dialect and BINDS the cell value, so nothing on this path interpolates a value into SQL. See
+ * the module doc above, and `main/services/sql/fk-record.ts`.
  */
-function FkPreview({ target, connectionId, database, engine, onOpenInTab }: FkPreviewProps) {
-  const sql = useMemo(() => fkLookupSql(target, engine, database), [target, engine, database]);
-
+function FkPreview({ target, connectionId, database, onOpenInTab }: FkPreviewProps) {
   const lookup = useIpcQuery({
     namespace: 'query',
-    operation: 'execute',
-    // No `tabId`: that is what would make the main process snapshot a peek into result history.
-    args: [{ connectionId, database, sql }],
+    operation: 'fetchFkRecord',
+    args: [
+      {
+        connectionId,
+        database,
+        schema: target.schema,
+        table: target.table,
+        column: target.column,
+        value: target.value,
+      },
+    ],
+    // Never `args`: the cell value goes in as its display text rather than as itself, because a
+    // key is serialised and a Date or a JSON object has no stable serialisation there.
     keyArgs: [
       connectionId,
       database,
@@ -582,8 +596,7 @@ function FkPreview({ target, connectionId, database, engine, onOpenInTab }: FkPr
     ],
   });
 
-  const resultSet = lookup.data?.resultSets?.[0];
-  const record = resultSet?.rows[0];
+  const record = lookup.data?.record;
   const failure = lookup.error?.message ?? lookup.data?.error;
 
   return (
@@ -630,7 +643,7 @@ function FkPreview({ target, connectionId, database, engine, onOpenInTab }: FkPr
         </p>
       ) : (
         <dl className="flex flex-col p-1.5">
-          {(resultSet?.columns ?? []).map(column => (
+          {(lookup.data?.columns ?? []).map(column => (
             <div key={column.name} className="flex min-w-0 items-baseline gap-2 py-0.5">
               <dt className="flex min-w-0 shrink-0 basis-1/3 items-baseline gap-1 font-mono text-2xs tracking-eyebrow text-fg-subtle uppercase">
                 {column.isPrimaryKey === true ? (

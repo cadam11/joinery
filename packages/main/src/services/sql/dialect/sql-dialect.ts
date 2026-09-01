@@ -13,9 +13,16 @@ import type {
   DeleteDatabaseOptions,
   EngineVariant,
 } from '@joinery/shared';
-import { BoundValues, type ParameterisedQuery, type PlaceholderStyle } from './parameterised-query';
+import {
+  BoundValues,
+  bindableValue,
+  placeholderFor,
+  type ParameterisedQuery,
+  type PlaceholderStyle,
+  type ValueBoundQuery,
+} from './parameterised-query';
 
-export type { ParameterisedQuery, PlaceholderStyle } from './parameterised-query';
+export type { ParameterisedQuery, PlaceholderStyle, ValueBoundQuery } from './parameterised-query';
 
 // Re-export engine type for convenience
 export type { DatabaseEngine };
@@ -28,13 +35,6 @@ export interface QualifiedName {
 /**
  * Abstract SQL dialect — subclassed per database engine.
  */
-/** A non-primitive value as the text a literal will carry. */
-export function textOf(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
-  return String(value);
-}
-
 export abstract class SQLDialect {
   abstract readonly engine: DatabaseEngine;
 
@@ -74,37 +74,30 @@ export abstract class SQLDialect {
   }
 
   /**
-   * A JavaScript value as a literal this engine will read as DATA (J-52).
+   * A single-row lookup by one column's value, with the value BOUND (J-145).
    *
-   * The escaping itself is `quoteLiteral`'s job; this adds the type handling on top of it — NULL,
-   * numbers, and the boolean spelling each engine reads — because the values reaching this one come
-   * from result-set cells rather than from Joinery's own strings.
+   * Two parts are engine-specific, which is why this is the dialect's job rather than a caller's
+   * template: the row cap (`TOP` before the select list, `LIMIT` after the predicate) and the
+   * placeholder spelling. The default is the `LIMIT` shape, which PostgreSQL and MySQL share.
    *
-   * The default is the ANSI shape: quote-doubling, and `1`/`0` for booleans.
+   * The value here is the one input in this application that is neither Joinery's own string nor a
+   * catalogue name: it is a cell out of whatever result set the user is looking at, and the lookup
+   * runs by itself when a disclosure is expanded. Binding it — rather than escaping it into the
+   * predicate, which is what J-52's `formatLiteral` did — takes it off the "is the escaper correct
+   * on this engine under this server setting?" footing that J-134 had to answer three times.
    */
-  formatLiteral(value: unknown): string {
-    if (value === null || value === undefined) return 'NULL';
-    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
-    if (typeof value === 'bigint') return String(value);
-    if (typeof value === 'boolean') return value ? '1' : '0';
-
-    return this.quoteLiteral(textOf(value));
-  }
-
-  /**
-   * A single-row lookup by one column's value.
-   *
-   * The row cap is the engine-specific part — `TOP` before the list, `LIMIT` after the predicate —
-   * which is why this is the dialect's job rather than a caller's template.
-   */
-  selectOneByColumnSQL(ref: {
+  selectOneByColumnQuery(ref: {
     readonly schema: string;
     readonly table: string;
     readonly column: string;
     readonly value: unknown;
-  }): string {
-    const where = `${this.quoteIdentifier(ref.column)} = ${this.formatLiteral(ref.value)}`;
-    return `SELECT * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where} LIMIT 1`;
+  }): ValueBoundQuery {
+    const placeholder = placeholderFor(this.placeholderStyle, 1);
+    const where = `${this.quoteIdentifier(ref.column)} = ${placeholder}`;
+    return {
+      sql: `SELECT * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where} LIMIT 1`,
+      params: [bindableValue(ref.value)],
+    };
   }
 
   // ── SQL generation helpers ──────────────────────────────────

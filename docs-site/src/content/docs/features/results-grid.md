@@ -112,9 +112,13 @@ catalogue metadata and marks the columns that point elsewhere. Clicking one prev
 references, in place, with its own primary key marked; a second button opens that row in a new
 query tab instead.
 
-The lookup is a real query, so it appears in your [query history](../query-history/) like anything
-else. It is deliberately not filed into the result history, so peeking at a referenced row does
-not fill that list up.
+The preview's lookup is not recorded anywhere: not in your [query history](../query-history/), and
+not in the result history either, so peeking at a referenced row leaves neither list longer than it
+was. Joinery builds that statement itself and sends the cell's value to the server as a bound
+parameter rather than writing it into the SQL, which is also why there is no statement text worth
+keeping — a history entry would read `WHERE "id" = $1` with the value missing from it. Opening the
+referenced row **in a tab** is an ordinary query you can see and edit, and that one is recorded
+like any other.
 
 A join, a CTE or a multi-statement batch has no single table to enrich from, so no foreign keys
 are offered — the values render as plain text rather than as links that could not resolve.
@@ -183,10 +187,12 @@ Deleting and purging snapshots are not available from this panel.
 | Escape closes the rail, and the grid stays visible beside it                                | `packages/renderer/src/features/query/row-detail-panel.tsx:8-16, 179-196`                                                                             |
 | A field expands to the full value plus nullability, default and reference                   | `packages/renderer/src/features/query/row-detail-panel.tsx:400-403, 505-533`                                                                          |
 | pk / fk / id markers, and copy-one-value / copy-the-row                                     | `packages/renderer/src/features/query/row-detail-panel.tsx:239-249, 411-421, 492-502`                                                                 |
-| FK enrichment needs a single-table SELECT to parse                                          | `packages/renderer/src/features/query/row-detail-panel.tsx:343-371`                                                                                   |
-| The FK preview, and the open-in-a-new-tab button                                            | `packages/renderer/src/features/query/row-detail-panel.tsx:560-657, 659-683`                                                                          |
-| The FK lookup lands in query history but is not snapshotted                                 | `packages/renderer/src/features/query/row-detail-panel.tsx:28-40, 570-583`                                                                            |
-| Snapshots are written by the main process on every execute                                  | `packages/main/src/ipc/query.ipc.ts:58-77`                                                                                                            |
+| FK enrichment needs a single-table SELECT to parse                                          | `packages/renderer/src/features/query/row-detail-panel.tsx:346-374`                                                                                   |
+| The FK preview, and the open-in-a-new-tab button                                            | `packages/renderer/src/features/query/row-detail-panel.tsx:555-670, 679-696`                                                                          |
+| The preview's lookup is neither recorded in query history nor snapshotted                   | `packages/renderer/src/features/query/row-detail-panel.tsx:573-599`, `packages/main/src/ipc/query.ipc.ts:177-192`                                     |
+| Its value is bound, not written into the SQL                                                | `packages/main/src/services/sql/fk-record.ts:43-70`, `services/sql/dialect/sql-dialect.ts:89-101`                                                     |
+| Opening the referenced row in a tab is an ordinary, recorded query                          | `packages/renderer/src/features/query/fk-lookup.ts:331-349`, `row-detail-panel.tsx:679-696`                                                           |
+| Snapshots are written by the main process on every execute                                  | `packages/main/src/ipc/query.ipc.ts:64-85`                                                                                                            |
 | Viewing a snapshot shows an amber "saved result" notice                                     | `packages/renderer/src/features/query/query-results.tsx:315-326`                                                                                      |
 | Label inline (Enter commits, Escape abandons, blur commits), pin, capture, compare          | `packages/renderer/src/features/query/result-history-panel.tsx:196-267, 430-477`                                                                      |
 | Matching is by inferred key column rather than by position                                  | `packages/main/src/services/config/query-results-store.ts:524-543`                                                                                    |

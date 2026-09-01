@@ -790,127 +790,122 @@ describe('capabilitiesForDialect', () => {
   });
 });
 
-describe('formatLiteral and selectOneByColumnSQL (J-52)', () => {
+describe('selectOneByColumnQuery — the FK lookup, bound (J-145)', () => {
   /**
-   * The FK-lookup handler built `SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'v'` for EVERY engine.
-   * Bracket delimiters, `TOP` and the `N''` prefix are all T-SQL, so the purpose-built bridge
-   * member was a syntax error on two of three engines.
+   * The FK-lookup handler built `SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'v'` for EVERY engine
+   * (J-52 made the row cap and the quoting engine-correct but left the value INSIDE the SQL, as
+   * `formatLiteral`). J-145 removes the escaping question from this surface the way J-135 removed
+   * it from the metadata surface: the value is bound, so it reaches the server out of band and is
+   * never lexed as SQL.
    *
-   * The values here come from result-set cells, not from Joinery's own strings. J-134 moved the
-   * escaping itself down to `quoteLiteral`, which every metadata query goes through too; what is
-   * left in this block is the type handling `formatLiteral` adds on top of it.
+   * That matters more here than anywhere else in the app. The value is a result-set cell — data
+   * from whatever table the user opened, i.e. the most attacker-influenceable input Joinery has —
+   * and the lookup auto-executes when a disclosure is expanded.
    */
 
-  it('caps the row the way each engine spells it', () => {
+  const REF = { schema: 'public', table: 'users', column: 'id', value: 7 };
+
+  it('caps the row the way each engine spells it, with the value bound', () => {
     expect(
-      getDialect('mssql').selectOneByColumnSQL({
-        schema: 'dbo',
-        table: 'Users',
-        column: 'id',
-        value: 7,
-      })
-    ).toBe('SELECT TOP 1 * FROM [dbo].[Users] WHERE [id] = 7');
+      getDialect('mssql').selectOneByColumnQuery({ ...REF, schema: 'dbo', table: 'Users' })
+    ).toEqual({
+      sql: 'SELECT TOP 1 * FROM [dbo].[Users] WHERE [id] = @p0',
+      params: [7],
+    });
 
-    expect(
-      getDialect('postgresql').selectOneByColumnSQL({
-        schema: 'public',
-        table: 'users',
-        column: 'id',
-        value: 7,
-      })
-    ).toBe('SELECT * FROM "public"."users" WHERE "id" = 7 LIMIT 1');
+    expect(getDialect('postgresql').selectOneByColumnQuery(REF)).toEqual({
+      sql: 'SELECT * FROM "public"."users" WHERE "id" = $1 LIMIT 1',
+      params: [7],
+    });
 
-    expect(
-      getDialect('mysql').selectOneByColumnSQL({
-        schema: 'shop',
-        table: 'users',
-        column: 'id',
-        value: 7,
-      })
-    ).toContain('LIMIT 1');
+    expect(getDialect('mysql').selectOneByColumnQuery({ ...REF, schema: 'shop' })).toEqual({
+      sql: 'SELECT * FROM `shop`.`users` WHERE `id` = ? LIMIT 1',
+      params: [7],
+    });
   });
 
-  it('quotes identifiers with the engine’s own delimiters', () => {
-    expect(
-      getDialect('mysql').selectOneByColumnSQL({
-        schema: 'shop',
-        table: 'users',
-        column: 'id',
-        value: 1,
-      })
-    ).toContain('`id`');
-  });
-
-  it('writes booleans as each engine reads them', () => {
-    expect(getDialect('postgresql').formatLiteral(true)).toBe('TRUE');
-    expect(getDialect('mssql').formatLiteral(true)).toBe('1');
-    expect(getDialect('mysql').formatLiteral(false)).toBe('0');
-  });
-
-  it.each([
-    ['mssql' as const, "N'O''Brien'"],
-    ['postgresql' as const, "E'O''Brien'"],
-    ['mysql' as const, "'O''Brien'"],
-  ])('doubles a quote for %s', (engine, expected) => {
-    expect(getDialect(engine).formatLiteral("O'Brien")).toBe(expected);
-  });
-
-  it('doubles backslashes for PostgreSQL, and does not for SQL Server', () => {
-    // PostgreSQL: with `standard_conforming_strings` off a backslash starts an escape, so a value
-    // ending in one would consume the closing quote and let the next `'` open a NEW literal —
-    // putting a statement terminator outside it, on a driver that multiplexes statements.
-    expect(getDialect('postgresql').formatLiteral('C:\\path')).toBe("E'C:\\\\path'");
-
-    // T-SQL has no backslash escape in any configuration, so doubling would corrupt the data and
-    // the lookup would miss the row.
-    expect(getDialect('mssql').formatLiteral('C:\\path')).toBe("N'C:\\path'");
-  });
-
-  it('keeps a backslash-led injection attempt inside the literal (J-134)', () => {
-    // The payload the cycle-4 audit demonstrated against a real MySQL 8.4 server: the leading
-    // backslash escapes the quote the escaper doubles, so the NEXT quote closes the literal and
-    // `DROP TABLE users` runs as a second statement on any pool that negotiated
-    // CLIENT_MULTI_STATEMENTS — which, since J-137, is the query editor's pool only. The
-    // earlier version of this test used a payload with no backslash plus a quote-parity heuristic
-    // that the exploit string also satisfied, so it asserted the defect was fine.
-    const payload = String.raw`\'; DROP TABLE users; --`;
-    const ref = { schema: 's', table: 't', column: 'c', value: payload };
-
-    // T-SQL has no backslash escape in any configuration: the backslash stays single, and the
-    // doubled quote is the whole defence.
-    expect(getDialect('mssql').selectOneByColumnSQL(ref)).toBe(
-      String.raw`SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'\''; DROP TABLE users; --'`
-    );
-
-    // PostgreSQL: `E'…'` is escape-string syntax whatever `standard_conforming_strings` is set to,
-    // so doubling the backslash there closes the escape the payload opened.
-    expect(getDialect('postgresql').selectOneByColumnSQL(ref)).toBe(
-      String.raw`SELECT * FROM "s"."t" WHERE "c" = E'\\''; DROP TABLE users; --' LIMIT 1`
-    );
-
-    // MySQL: backslash is an escape character in the default `sql_mode`, so it must be doubled too.
-    expect(getDialect('mysql').selectOneByColumnSQL(ref)).toBe(
-      'SELECT * FROM `s`.`t` WHERE `c` = ' + String.raw`'\\''; DROP TABLE users; --'` + ' LIMIT 1'
-    );
+  it('gives Aurora DSQL PostgreSQL’s form', () => {
+    expect(getDialect('postgresql', 'dsql').selectOneByColumnQuery(REF)).toEqual({
+      sql: 'SELECT * FROM "public"."users" WHERE "id" = $1 LIMIT 1',
+      params: [7],
+    });
   });
 
   it.each(['mssql' as const, 'postgresql' as const, 'mysql' as const])(
-    'writes NULL for absent values and non-finite numbers on %s',
+    'keeps the cycle-4 injection payload out of the SQL entirely on %s',
     engine => {
-      const dialect = getDialect(engine);
-      expect(dialect.formatLiteral(null)).toBe('NULL');
-      expect(dialect.formatLiteral(undefined)).toBe('NULL');
-      expect(dialect.formatLiteral(Number.POSITIVE_INFINITY)).toBe('NULL');
-      expect(dialect.formatLiteral(Number.NaN)).toBe('NULL');
+      // The payload the cycle-4 audit demonstrated against a real MySQL 8.4 server: the leading
+      // backslash escapes the quote an escaper doubles, so the NEXT quote closes the literal and
+      // `DROP TABLE users` lands outside it. Nothing to escape now — the SQL never carries it.
+      const payload = String.raw`\'; DROP TABLE users; --`;
+      const { sql, params } = getDialect(engine).selectOneByColumnQuery({
+        schema: 's',
+        table: 't',
+        column: 'c',
+        value: payload,
+      });
+
+      expect(sql).not.toContain('DROP');
+      expect(sql).not.toContain(payload);
+      expect(sql.split(';')).toHaveLength(1);
+      expect(params).toEqual([payload]);
     }
   );
 
-  it('serialises a Date as ISO and an object as JSON', () => {
-    expect(getDialect('mysql').formatLiteral(new Date('2026-08-25T00:00:00.000Z'))).toBe(
-      "'2026-08-25T00:00:00.000Z'"
-    );
-    expect(getDialect('mysql').formatLiteral({ a: 1 })).toBe('\'{"a":1}\'');
+  it('binds one placeholder, once, per engine', () => {
+    // MySQL's `?` is positional: a builder that wrote two would consume a value that is not there.
+    expect(getDialect('mysql').selectOneByColumnQuery(REF).sql.split('?')).toHaveLength(2);
+    expect(getDialect('postgresql').selectOneByColumnQuery(REF).sql).not.toContain('$2');
+    expect(getDialect('mssql').selectOneByColumnQuery(REF).sql).not.toContain('@p1');
   });
+
+  it.each(['mssql' as const, 'postgresql' as const, 'mysql' as const])(
+    'quotes the identifiers with %s’s own delimiters, and never binds them',
+    engine => {
+      const dialect = getDialect(engine);
+      const { sql, params } = dialect.selectOneByColumnQuery({
+        schema: 's',
+        table: 't',
+        column: 'c',
+        value: 1,
+      });
+
+      // An identifier cannot be bound on any engine, so it stays in the SQL — quoted, not escaped
+      // as a literal.
+      expect(sql).toContain(dialect.quoteIdentifier('c'));
+      expect(sql).toContain(dialect.quoteSchemaObject('s', 't'));
+      expect(params).toEqual([1]);
+    }
+  );
+
+  it.each(['mssql' as const, 'postgresql' as const, 'mysql' as const])(
+    'binds a driver-native value for every cell type on %s',
+    engine => {
+      const bind = (value: unknown) =>
+        getDialect(engine).selectOneByColumnQuery({ ...REF, value }).params[0];
+
+      // Numbers, booleans and strings go across as themselves; every driver types them.
+      expect(bind(7)).toBe(7);
+      expect(bind(true)).toBe(true);
+      expect(bind('plain')).toBe('plain');
+
+      // A Date stays a Date: each driver serialises it in its own engine's datetime form, which
+      // an ISO string would NOT be on MySQL (it does not parse the `T`/`Z` shape).
+      const when = new Date('2026-08-25T00:00:00.000Z');
+      expect(bind(when)).toBe(when);
+
+      // No literal exists for these, so they cannot be bound as themselves.
+      expect(bind(null)).toBeNull();
+      expect(bind(undefined)).toBeNull();
+      expect(bind(Number.NaN)).toBeNull();
+      expect(bind(Number.POSITIVE_INFINITY)).toBeNull();
+
+      // A bigint is out of range for every driver's number binding; a JSON column's value is an
+      // object. Both go as text, which is what the old `formatLiteral` wrote into the SQL too.
+      expect(bind(10n ** 20n)).toBe('100000000000000000000');
+      expect(bind({ a: 1 })).toBe('{"a":1}');
+    }
+  );
 });
 
 describe('quoteLiteral — engine-correct string literals (J-134)', () => {
@@ -972,17 +967,27 @@ describe('quoteLiteral — engine-correct string literals (J-134)', () => {
     expect(params).toEqual(['s\\', 't\\']);
   });
 
-  it('formatLiteral and quoteLiteral agree on every engine', () => {
-    // One escaping implementation per engine, not two: `formatLiteral` adds the type handling
-    // (NULL, numbers, booleans) on top of `quoteLiteral` and nothing else.
-    const value = String.raw`mixed '\ value`;
-    expect(getDialect('mssql').formatLiteral(value)).toBe(
-      `N${getDialect('mssql').quoteLiteral(value)}`
+  it('keeps a backslash-led injection attempt inside the literal (J-134)', () => {
+    // The payload the cycle-4 audit demonstrated against a real MySQL 8.4 server. `quoteLiteral` is
+    // no longer on any path that carries a result-set cell — J-145 bound that one — but it is still
+    // what the DDL builders write a collation and a `pg_stat_activity.datname` with, so the
+    // property it was hardened for has to keep holding.
+    const payload = String.raw`\'; DROP TABLE users; --`;
+
+    // T-SQL has no backslash escape in any configuration: the backslash stays single, and the
+    // doubled quote is the whole defence.
+    expect(getDialect('mssql').quoteLiteral(payload)).toBe(String.raw`'\''; DROP TABLE users; --'`);
+
+    // PostgreSQL: `E'…'` is escape-string syntax whatever `standard_conforming_strings` is set to,
+    // so doubling the backslash there closes the escape the payload opened.
+    expect(getDialect('postgresql').quoteLiteral(payload)).toBe(
+      String.raw`E'\\''; DROP TABLE users; --'`
     );
-    expect(getDialect('postgresql').formatLiteral(value)).toBe(
-      getDialect('postgresql').quoteLiteral(value)
+
+    // MySQL: backslash is an escape character in the default `sql_mode`, so it must be doubled too.
+    expect(getDialect('mysql').quoteLiteral(payload)).toBe(
+      String.raw`'\\''; DROP TABLE users; --'`
     );
-    expect(getDialect('mysql').formatLiteral(value)).toBe(getDialect('mysql').quoteLiteral(value));
   });
 });
 

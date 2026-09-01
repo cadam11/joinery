@@ -6,8 +6,8 @@
  * three corrections, each of which was a real defect rather than a style difference:
  *
  *  1. **The SQL is dialect-correct.** Angular built `SELECT * FROM [schema].[table] WHERE [col] =
- *     N'…'` for every engine (`:1284`), and so does the main process's own `query.fetchFkRecord`
- *     handler (`main/src/ipc/query.ipc.ts:182`). Brackets and the `N''` prefix are T-SQL: against
+ *     N'…'` for every engine (`:1284`), and so did the main process's own `query.fetchFkRecord`
+ *     handler until J-145. Brackets and the `N''` prefix are T-SQL: against
  *     PostgreSQL or MySQL both are syntax errors, so FK navigation was MSSQL-only and silently
  *     broken on two of the three supported engines. Quoting goes through the same
  *     `quoteIdentifier`/`qualifiedTable` the explorer's context menus use, which is why this module
@@ -24,12 +24,12 @@
  *     number or a boolean, so a `Date` reached SQL as `N'Mon Aug 11 2025 …'`. Dates go out as ISO,
  *     and MySQL's backslash escape — on by default, unlike PostgreSQL and SQL Server — is handled.
  *
- * The remaining wart is inherent to the seam: `query.execute` takes a SQL string, so the lookup is
- * a literal in generated SQL rather than a bound parameter. Every value that reaches it is escaped
- * here, by type, in one function, and `sqlLiteral` is the only thing in this renderer that
- * interpolates a value into SQL. Until `QueryRequest` grows a parameter slot (filed as a follow-up),
- * `sqlLiteral` is the security boundary for this feature and is written to be correct under any
- * server setting rather than under the default one — see its own comment.
+ * The wart that used to be here — the preview's lookup was a literal in generated SQL because
+ * `query.execute` takes a SQL string and has nothing to bind to — is gone (J-145): the preview
+ * calls `query.fetchFkRecord`, which builds a bound statement in the main process. What remains is
+ * `fkOpenSql`, the SQL that goes into a query tab for the user to read, and `sqlLiteral` is the one
+ * thing in this renderer that interpolates a value into SQL. It stays written to be correct under
+ * any server setting rather than under the default one — see its own comment.
  */
 
 import type { ColumnMetadata, DatabaseEngine } from '@joinery/shared';
@@ -268,14 +268,16 @@ export function mergeEnrichedColumns(
  * `main/services/sql/mysql-pool-options.ts` opens a `'restricted'` pool without the flag for
  * metadata and the AI tools, and a `'script'` pool with it for the query editor.
  *
- * That split does NOT cover this file. `row-detail-panel.tsx` runs `fkLookupSql`'s output through
- * `query.execute` (see its module doc for why it does not use `query.fetchFkRecord`), and that is
- * the QUERY.EXECUTE channel, which asks for the `'script'` pool. The main process's own
- * FETCH_FK_RECORD handler IS on the restricted pool, but nothing in this renderer calls it. So on
- * MySQL the escaping below is still the ONLY thing standing between a result-set cell and a second
- * statement — J-137 is not defence in depth here yet. Closing that needs the FETCH_FK_RECORD
- * handler moved onto the dialect layer (it emits T-SQL today, which is why this file exists) and
- * the preview switched back onto it.
+ * **What this escaper is, and is no longer, responsible for.** Until J-145 the FK preview ran
+ * `fkLookupSql`'s output through `query.execute` — the QUERY.EXECUTE channel, which asks for the
+ * `'script'` pool — so on MySQL the escaping below was the only thing standing between a
+ * result-set cell and a second statement. That path is gone: the preview calls
+ * `query.fetchFkRecord`, the main process binds the value, and MySQL's restricted pool cannot carry
+ * a second statement anyway.
+ *
+ * What is left is `fkOpenSql`, whose output goes into a query tab for the user to read and edit
+ * before running it. That SQL is executed on the script pool, by the user, so the escaping still
+ * has to be right — but the value has been through a person by then, and the SQL is on screen.
  */
 export function sqlLiteral(value: unknown, engine: DatabaseEngine): string {
   if (value === null || value === undefined) return 'NULL';
@@ -327,26 +329,18 @@ function fkTableRef(target: FkTarget, engine: DatabaseEngine, database: string):
 }
 
 /**
- * The single-row lookup for one FK value.
+ * The query an "open the referenced row in a new tab" action runs: the preview's lookup without the
+ * single-row cap, because a tab is where a user goes to explore rather than to peek.
  *
- * `TOP 1` before the select list on SQL Server, `LIMIT 1` after the predicate elsewhere — the same
- * split `selectWithLimit` makes, spelled out here because that helper has no room for a `WHERE`.
+ * The last SQL this module generates: J-145 took the preview's own lookup off `fkLookupSql` and
+ * onto `query.fetchFkRecord`, which the main process builds and binds. What is generated here is
+ * generated to be READ — it lands in a query tab as the user's own editable text — so it has to
+ * spell the value out rather than leave a placeholder standing where one was bound. `sqlLiteral`
+ * is what makes that safe, and this is now its only caller.
  *
  * `database` is the database the query will execute against; it only changes the SQL on MySQL — see
- * `fkTableRef` — but it is required rather than optional so no caller can forget it on the one engine
- * where forgetting it reads the wrong table.
- */
-export function fkLookupSql(target: FkTarget, engine: DatabaseEngine, database: string): string {
-  const table = fkTableRef(target, engine, database);
-  const column = quoteIdentifier(target.column, engine);
-  const predicate = `${column} = ${sqlLiteral(target.value, engine)}`;
-  if (engine === 'mssql') return `SELECT TOP 1 * FROM ${table} WHERE ${predicate}`;
-  return `SELECT * FROM ${table} WHERE ${predicate} LIMIT 1`;
-}
-
-/**
- * The query a "open the referenced row in a new tab" action runs: the same lookup without the
- * single-row cap, because a tab is where a user goes to explore rather than to peek.
+ * `fkTableRef` — but it is required rather than optional so no caller can forget it on the one
+ * engine where forgetting it reads the wrong table.
  */
 export function fkOpenSql(target: FkTarget, engine: DatabaseEngine, database: string): string {
   const table = fkTableRef(target, engine, database);

@@ -79,3 +79,50 @@ export class BoundValues {
 export function unboundQuery(sql: string): ParameterisedQuery {
   return { sql, params: [] };
 }
+
+/**
+ * A value every driver here can bind directly.
+ *
+ * `Date` is in the list on purpose: node-pg, mysql2 and tedious each serialise one into their own
+ * engine's datetime form, and an ISO string would not survive that trip on MySQL, which does not
+ * parse the `T`/`Z` shape.
+ */
+export type BindableValue = string | number | boolean | Date | null;
+
+/**
+ * A statement whose values are BOUND rather than written into it (J-145).
+ *
+ * Distinct from `ParameterisedQuery`, whose params are `string[]` because the metadata surface
+ * only ever binds names. This one carries a result-set cell, which is any JavaScript value a
+ * driver handed back, so its params are typed as what a driver will take.
+ */
+export interface ValueBoundQuery {
+  readonly sql: string;
+  readonly params: readonly BindableValue[];
+}
+
+/**
+ * A result-set cell as something a driver will bind.
+ *
+ * The type rules are `SQLDialect.formatLiteral`'s, which this replaces — minus the escaping, which
+ * is the point: nothing here produces SQL text. What is left is the handful of JavaScript values no
+ * driver can bind as itself:
+ *
+ *  - `null`/`undefined` and non-finite numbers have no literal on any engine, so they go as NULL
+ *    (a predicate against NULL matches nothing, which is the honest answer for a cell that holds
+ *    no value — and `fkTargetFor` in the renderer refuses to offer a link on one anyway);
+ *  - a `bigint` is outside every driver's number binding, so it goes as its digits. All three
+ *    engines coerce a string to the column's numeric type for a comparison;
+ *  - an object — a JSON or JSONB column's value — goes as its JSON text, which is what
+ *    `formatLiteral` wrote into the SQL before.
+ */
+export function bindableValue(value: unknown): BindableValue {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
