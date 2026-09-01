@@ -186,9 +186,18 @@ describe('mysqlPoolOptions idle reaper (J-146)', () => {
  * Two copies of the pool options used to live in the test-connection paths
  * (`connection-pool.ts` testMySQLConnection, `provider/mysql-provider.ts`
  * testConnection). They drifted from `mysqlPoolOptions` — J-146's `maxIdle`
- * never reached them, and neither would the next fix. These tests pin the
- * derivation itself: anything added to the shared builder must show up in the
- * probe options too, or the first assertion fails.
+ * never reached them, and neither would the next fix.
+ *
+ * What the first assertion pins is the **override list**, not the inheritance:
+ * `mysqlTestPoolOptions` may differ from the shared restricted options in
+ * `connectionLimit` and `maxIdle` and nothing else. A key added to
+ * `mysqlPoolOptions` reaches the probe through the spread on its own and would
+ * not fail this test — the spread is what makes drift structurally impossible.
+ * The test's job is to stop someone re-introducing drift the other way, by
+ * quietly overriding a third option here.
+ *
+ * That the two call sites actually *use* this builder is a separate claim, and
+ * `mysql-test-pool.spec.ts` is where it is pinned.
  */
 describe('mysqlTestPoolOptions (J-149)', () => {
   const probeProfile = baseProfile({ database: 'appdb' });
