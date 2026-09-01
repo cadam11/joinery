@@ -7,9 +7,8 @@
 
 import { spawn } from 'child_process';
 import { BrowserWindow } from 'electron';
-import { Client as PgClient } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
-import type { CliBackupRequest, RestoreRequest } from '@joinery/shared';
+import type { CliBackupRequest, ConnectionProfile, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
@@ -19,6 +18,7 @@ import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
 import { buildPgDumpArgs, buildPgRestoreArgs } from './backup-args';
+import { pgDatabaseExists } from './restore-verify';
 
 const log = createLogger('PgBackup');
 
@@ -129,18 +129,13 @@ export class PgBackupService extends BaseSingleton {
     const env = { ...process.env };
     if (password) env.PGPASSWORD = password;
 
-    // Connection config for the post-restore verify step.
-    const verifyConfig = {
-      host: profile.server,
-      port: profile.port,
-      user: profile.username || 'postgres',
-      password: password ?? undefined,
-    };
-
     // Fire and forget — run in background, report via IPC events
     this.runProcess(operationId, 'pg_restore', args, env, operation, 'restore', {
       targetDb,
-      verifyConfig,
+      // The post-restore check connects from the profile itself, not from a
+      // hand-rolled subset of it — TLS included (J-151).
+      profile,
+      password: password ?? undefined,
     });
 
     return operationId;
@@ -158,7 +153,8 @@ export class PgBackupService extends BaseSingleton {
     type: 'backup' | 'restore',
     verify?: {
       targetDb: string;
-      verifyConfig: { host: string; port: number; user: string; password?: string };
+      profile: ConnectionProfile;
+      password: string | undefined;
     }
   ): void {
     const proc = spawn(command, args, { env });
@@ -188,7 +184,7 @@ export class PgBackupService extends BaseSingleton {
       // warnings" path. Pin success to "the target database is actually
       // visible in pg_database after the dust settles."
       try {
-        const exists = await this.verifyDatabaseExists(verify.targetDb, verify.verifyConfig);
+        const exists = await pgDatabaseExists(verify.targetDb, verify.profile, verify.password);
         if (exists) {
           log.info(`${command} completed successfully → ${verify.targetDb} (${operationId})`);
           this.onRestored(operation, type);
@@ -281,32 +277,6 @@ export class PgBackupService extends BaseSingleton {
       log.info(`Shutdown: stopped PG ${op.type} operation ${id}`);
     }
     this.activeOperations.clear();
-  }
-
-  /**
-   * Verify a database exists by querying pg_database on a fresh connection.
-   * Used by the restore flow to catch the false-positive case where
-   * pg_restore exits cleanly but the target database wasn't actually
-   * present (empty dump, missing target, no --create flag, etc.).
-   */
-  private async verifyDatabaseExists(
-    name: string,
-    config: { host: string; port: number; user: string; password?: string }
-  ): Promise<boolean> {
-    const client = new PgClient({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: 'postgres', // verify connects to the management db
-    });
-    await client.connect();
-    try {
-      const r = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [name]);
-      return r.rowCount === 1;
-    } finally {
-      await client.end();
-    }
   }
 
   /**

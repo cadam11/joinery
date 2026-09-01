@@ -10,8 +10,7 @@ import { createReadStream } from 'fs';
 import { Transform } from 'stream';
 import { BrowserWindow } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import mysql from 'mysql2/promise';
-import type { CliBackupRequest, RestoreRequest } from '@joinery/shared';
+import type { CliBackupRequest, ConnectionProfile, RestoreRequest } from '@joinery/shared';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
@@ -25,6 +24,7 @@ import {
   buildMysqlRestorePrelude,
   resolveReplaceExisting,
 } from './backup-args';
+import { mysqlDatabaseExists } from './restore-verify';
 
 const log = createLogger('MySQLBackup');
 
@@ -202,14 +202,6 @@ export class MySQLBackupService extends BaseSingleton {
     const env = { ...process.env };
     if (password) env.MYSQL_PWD = password;
 
-    // Connection config we'll re-use for the post-restore verify step.
-    const verifyConfig = {
-      host: profile.server,
-      port: profile.port,
-      user: profile.username || 'root',
-      password: password ?? undefined,
-    };
-
     // Fire and forget — run in background, report via IPC events
     this.runRestoreProcess(
       operationId,
@@ -218,7 +210,9 @@ export class MySQLBackupService extends BaseSingleton {
       args,
       env,
       operation,
-      verifyConfig,
+      // The post-restore check connects from the profile itself, not from a
+      // hand-rolled subset of it — TLS included (J-151).
+      { profile, password: password ?? undefined },
       resolveReplaceExisting(request)
     );
 
@@ -266,12 +260,7 @@ export class MySQLBackupService extends BaseSingleton {
     args: string[],
     env: NodeJS.ProcessEnv,
     operation: MySQLBackupOperation,
-    verifyConfig: {
-      host: string;
-      port: number;
-      user: string;
-      password?: string;
-    },
+    verify: { profile: ConnectionProfile; password: string | undefined },
     replace: boolean
   ): void {
     const proc = spawn('mysql', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -326,7 +315,7 @@ export class MySQLBackupService extends BaseSingleton {
       //   - mysql connected but the prelude write was lost in some pipe
       //     timing / version-specific quirk we don't control.
       // Verify the target database actually exists before reporting success.
-      this.verifyDatabaseExists(targetDb, verifyConfig)
+      mysqlDatabaseExists(targetDb, verify.profile, verify.password)
         .then(exists => {
           if (exists) {
             log.info(`mysql restore completed successfully → ${targetDb}`);
@@ -358,33 +347,6 @@ export class MySQLBackupService extends BaseSingleton {
       log.error(`mysql restore error: ${errMsg}`);
       this.sendComplete(operationId, 'restore', false, errMsg);
     });
-  }
-
-  /**
-   * Verify a database exists by querying information_schema.SCHEMATA on a
-   * fresh connection. Used by the restore flow to catch the false-positive
-   * case where mysql CLI exits 0 but the target database wasn't actually
-   * created (empty dump, privilege error, prelude write lost, etc.).
-   */
-  private async verifyDatabaseExists(
-    name: string,
-    config: { host: string; port: number; user: string; password?: string }
-  ): Promise<boolean> {
-    const conn = await mysql.createConnection({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-    });
-    try {
-      const [rows] = await conn.query<mysql.RowDataPacket[]>(
-        'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?',
-        [name]
-      );
-      return rows.length === 1;
-    } finally {
-      await conn.end();
-    }
   }
 
   /**
