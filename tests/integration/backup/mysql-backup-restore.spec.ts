@@ -27,6 +27,20 @@ import { withFreshDatabase, TEST_CONNECTIONS } from '../../helpers/db-fixtures';
 const fakeProfiles: Map<string, any> = new Map();
 const fakePasswords: Map<string, string> = new Map();
 
+/**
+ * Connection-shaped fields every real `ConnectionProfile` carries, merged under
+ * whatever a test sets. The restore path reads them — since J-151 the
+ * post-restore existence check builds its connection from the profile, TLS and
+ * connect timeout included — so a double that omits them is not the object the
+ * service is handed in production. A test that cares overrides them.
+ */
+const PROFILE_DEFAULTS = {
+  authenticationType: 'sql',
+  encrypt: false,
+  trustServerCertificate: false,
+  connectionTimeout: 15,
+};
+
 vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
@@ -40,7 +54,10 @@ vi.mock('electron', () => ({
 vi.mock('@joinery/main/services/config/connection-profiles', () => ({
   ConnectionProfilesStore: {
     getInstance: () => ({
-      getById: (id: string) => fakeProfiles.get(id),
+      getById: (id: string) => {
+        const profile = fakeProfiles.get(id);
+        return profile ? { ...PROFILE_DEFAULTS, ...profile } : undefined;
+      },
       getPassword: async (id: string) => fakePasswords.get(id) ?? null,
     }),
   },
@@ -380,5 +397,93 @@ describe('mysql backup/restore round-trip', () => {
     // Either mysql aborts with non-zero (clear failure) or exits 0 and
     // the verify step catches the missing target — both are acceptable.
     expect(result.error).toBeTruthy();
+  }, 60_000);
+
+  /**
+   * J-151 — the post-restore existence check must connect the way the profile
+   * says, TLS included.
+   *
+   * It used to build its own `createConnection` literal of
+   * `{ host, port, user, password }`, so `profile.encrypt` never reached it. A
+   * server that refuses plaintext therefore rejected the check, and a restore
+   * that had *succeeded* was reported to the user as a failure.
+   *
+   * The refusal is expressed per-user (`CREATE USER ... REQUIRE SSL`) rather
+   * than server-wide: `SET GLOBAL require_secure_transport = ON` would break
+   * every other spec sharing this container if this test died before resetting
+   * it. The user is dropped in a `finally`.
+   *
+   * The mysql CLI that performs the restore itself needs no help — MySQL 8's
+   * client defaults to `--ssl-mode=PREFERRED` and negotiates TLS on its own.
+   * `trustServerCertificate: true` is required on Joinery's side because the
+   * mysql:8 image auto-generates a self-signed server certificate.
+   *
+   * Before the fix this fails with "post-restore verification failed: Access
+   * denied for user" while the database it is asking about does exist.
+   */
+  it('verifies the restore over TLS when the profile requires it (J-151)', async () => {
+    const c = TEST_CONNECTIONS.mysql;
+    const suffix = randomUUID().slice(0, 8).replace(/-/g, '');
+    const tlsUser = `joinery_tls_${suffix}`;
+    const newDb = `joinery_tls_${suffix}`;
+
+    const admin = await mysql.createConnection({
+      host: c.host,
+      port: c.port,
+      user: c.user,
+      password: c.password,
+      multipleStatements: true,
+    });
+    try {
+      // REQUIRE SSL: this user cannot authenticate over a plaintext socket.
+      // Privileges on *.* because the restore prelude creates the target.
+      await admin.query(
+        `CREATE USER '${tlsUser}'@'%' IDENTIFIED BY 'joinery' REQUIRE SSL;` +
+          `GRANT ALL PRIVILEGES ON *.* TO '${tlsUser}'@'%'`
+      );
+
+      const connectionId = randomUUID();
+      fakeProfiles.set(connectionId, {
+        id: connectionId,
+        engine: 'mysql',
+        server: c.host,
+        port: c.port,
+        username: tlsUser,
+        encrypt: true,
+        trustServerCertificate: true, // the container's cert is self-signed
+      });
+      fakePasswords.set(connectionId, 'joinery');
+
+      const dumpPath = join(tmpdir(), `joinery-mysql-tls-${connectionId}.sql`);
+      tmpFiles.push(dumpPath);
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(dumpPath, '', 'utf8');
+
+      const restoreOpId = await MySQLBackupService.getInstance().startRestore({
+        connectionId,
+        backupPath: dumpPath,
+        targetDatabase: newDb,
+      });
+      const result = await waitForOperation(ipcCapture, restoreOpId);
+      expect(result.success, `restore failed: ${result.error}`).toBe(true);
+
+      const [rows] = await admin.query<mysql.RowDataPacket[]>(
+        'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?',
+        [newDb]
+      );
+      expect(rows.length).toBe(1);
+    } finally {
+      // Cleanup failure must not mask the real result, but it must be visible:
+      // a leaked REQUIRE SSL user would confuse the next run of this tier.
+      // eslint-disable-next-line no-console -- cleanup diagnostics, same as db-fixtures.ts:281
+      const warn = (what: string, err: unknown) => console.error(`[j-151] ${what}:`, err);
+      await admin
+        .query(`DROP DATABASE IF EXISTS \`${newDb}\``)
+        .catch(err => warn(`failed to drop database ${newDb}`, err));
+      await admin
+        .query(`DROP USER IF EXISTS '${tlsUser}'@'%'`)
+        .catch(err => warn(`failed to drop user ${tlsUser}`, err));
+      await admin.end();
+    }
   }, 60_000);
 });
