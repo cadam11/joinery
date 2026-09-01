@@ -11,9 +11,6 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "start": "unset ELECTRON_RUN_AS_NODE && electron .",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts --max-warnings 0",
     "lint:fix": "eslint src --ext .ts --fix"
   },
