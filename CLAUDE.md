@@ -36,7 +36,7 @@ joinery/
 │   │       ├── ipc/          # IPC handlers
 │   │       ├── services/
 │   │       │   ├── ai/       # AI service, chat, tool registry, LLM providers
-│   │       │   ├── sql/      # Database operations (providers, dialects, metadata)
+│   │       │   ├── sql/      # Database operations (dialects, pools, metadata)
 │   │       │   ├── docker/   # Docker detection
 │   │       │   ├── keychain/ # Credential storage
 │   │       │   └── config/   # App state persistence
@@ -118,10 +118,10 @@ joinery/
 
 5. **SQL Transparency**: Store and display the actual SQL being executed for user reference.
 
-6. **Multi-Engine Architecture**: All database operations go through an abstraction layer:
-   - **Dialects** (`sql/dialect/`): Engine-specific SQL generation (MSSQL, PostgreSQL, MySQL). Use `getDialect(engine)` — never write raw engine-specific SQL in services.
-   - **Providers** (`sql/provider/`): Engine-specific connection/execution (`DatabaseProvider` base class, with `PgProvider`, `MySQLProvider` implementations; MSSQL uses the legacy `mssql` pool directly).
-   - **Pool routing**: `ConnectionPoolManager` routes to the correct pool type via `getEngineForProfile()`.
+6. **Multi-Engine Architecture**: SQL generation is abstracted; connections are not.
+   - **Dialects** (`sql/dialect/`): Engine-specific SQL generation (MSSQL, PostgreSQL, MySQL). Use `getDialect(engine)` or `ConnectionPoolManager.getDialectForProfile(profileId)` — never write raw engine-specific SQL in services.
+   - **Pools** (`sql/connection-pool.ts`): `ConnectionPoolManager` owns every engine's connections directly — `getPool` (MSSQL via `mssql`), `getPgPool` (`pg`), `getMySQLPool` (`mysql2`, one pool per trust level) — plus each engine's "Test Connection" probe. There is no provider-class layer: J-148 deleted `sql/provider/` because nothing ever constructed it. Pool options live inline or in pure builder modules (`mysql-pool-options.ts`, `aurora-dsql-pool-options.ts`).
+   - **Execution routing**: `QueryExecutor.execute` branches on `ConnectionPoolManager.getEngineForProfile(connectionId)` into an engine-specific method. A new engine means a dialect, a pool getter on the pool manager, and a branch here.
    - **Metadata/AI tools**: Use dialect-generated SQL — they work identically across all engines.
 
 ### Code Style

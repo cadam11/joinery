@@ -94,11 +94,11 @@ and MariaDB servers are reached with the MySQL engine and the `mysql2` driver.
 | MySQL offers only Password Authentication                                                        | `packages/renderer/src/features/connections/form-model.ts:95`                                       |
 | The picker is hidden unless the engine offers a choice, or the stored mode is invalid for it     | `packages/renderer/src/features/connections/connection-editor.tsx:313-317`                          |
 | `mysql` is placeholder text only, never submitted                                                | `packages/renderer/src/features/connections/form-model.ts:98-106`, `connection-editor.tsx:451-453`  |
-| A blank Default database sends `database: undefined` to the driver                               | `packages/main/src/services/sql/provider/mysql-provider.ts:32`                                      |
+| A blank Default database sends `database: undefined` to the driver                               | `packages/main/src/services/sql/connection-pool.ts:736`, `mysql-pool-options.ts:56`                 |
 | The no-database pool is keyed `<profileId>:__default__`, unlike PostgreSQL's `postgres` fallback | `packages/main/src/services/sql/connection-pool.ts:725-726` vs `:598-599`                           |
 | The collation options, and the "Illegal mix of collations" hint                                  | `packages/renderer/src/features/connections/form-model.ts:116-123`, `connection-editor.tsx:465-479` |
-| Collation is sent as the connection's `charset`; blank sends nothing                             | `packages/main/src/services/sql/provider/mysql-provider.ts:33`                                      |
-| `ssl: profile.encrypt ? { rejectUnauthorized: !profile.trustServerCertificate } : undefined`     | `packages/main/src/services/sql/provider/mysql-provider.ts:34`                                      |
+| Collation is sent as the connection's `charset`; blank sends nothing                             | `packages/main/src/services/sql/mysql-pool-options.ts:57`                                           |
+| `ssl: encrypt ? { rejectUnauthorized: !trustServerCertificate } : undefined`                     | `packages/main/src/services/sql/mysql-pool-options.ts:58`                                           |
 | Encrypt on / trust cert on are the shipped defaults                                              | `packages/renderer/src/features/connections/form-model.ts:152-153`                                  |
 | MySQL pools are keyed per database and share the profile's tunnel                                | `packages/main/src/services/sql/connection-pool.ts:117, 194-246`                                    |
 | MariaDB images are classified as MySQL                                                           | `packages/main/src/services/docker/detector.ts:65`                                                  |

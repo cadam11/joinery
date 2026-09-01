@@ -83,7 +83,7 @@ joinery/
 │   │       ├── ipc/       # IPC handler registration
 │   │       └── services/
 │   │           ├── ai/    # LLM providers, chat service, tool registry
-│   │           ├── sql/   # Multi-engine SQL: dialect/, provider/ (mssql, postgresql, mysql)
+│   │           ├── sql/   # Multi-engine SQL: dialect/, connection-pool.ts (mssql, postgresql, mysql)
 │   │           ├── docker/# Container detection (dockerode)
 │   │           ├── keychain/ # Credential storage (keytar)
 │   │           └── config/   # App state persistence (electron-store)

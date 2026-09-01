@@ -1,7 +1,7 @@
 # Multi-Database Provider Architecture
 
 > **Status: Largely Implemented (as of April 2025)**
-> PostgreSQL and MySQL support have been shipped. The actual implementation differs from some of the proposals below (e.g., uses `DatabaseEngine` type + dialect/provider pattern in `sql/dialect/` and `sql/provider/` rather than the `IDatabaseProvider` interface proposed here). SQLite and Oracle remain unimplemented. This document is retained for historical context.
+> PostgreSQL and MySQL support have been shipped. The actual implementation differs from the proposals below: it uses a `DatabaseEngine` type plus a dialect layer (`sql/dialect/`) for SQL generation, and keeps every engine's connections in `ConnectionPoolManager` (`sql/connection-pool.ts`) — there is no provider-class abstraction. A `DatabaseProvider` hierarchy did exist in `sql/provider/` but was never wired to anything and was deleted in J-148. SQLite and Oracle remain unimplemented. This document is retained for historical context; the sections below describe the proposal, not the code.
 
 ## Overview
 

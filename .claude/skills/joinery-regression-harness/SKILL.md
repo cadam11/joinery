@@ -128,7 +128,7 @@ When a test fails, do this — not a dump-and-pray full-pipeline retry:
 Match the tier to what you touched:
 
 - **Pure logic changes** (utilities, parsers, validators in `packages/*/src/`) → `pnpm test` (unit). Almost always the right starting point.
-- **Service / SQL / DB changes** (anything in `packages/main/src/services/sql`, `services/ssh`, dialects, providers) → `pnpm run test:integration`. Real DB roundtrips catch what mocks can't.
+- **Service / SQL / DB changes** (anything in `packages/main/src/services/sql`, `services/ssh`, dialects, connection pools) → `pnpm run test:integration`. Real DB roundtrips catch what mocks can't.
 - **AI / LLM provider changes** → `pnpm run test` for the unit-level llm-providers spec. (Live LLM calls are intentionally not in the suite — manual pre-release check.)
 - **UI / React component changes** → `pnpm run build && pnpm run test:e2e:react` for functional, plus `pnpm run test:visual:react` for layout regression.
 - **Anything significant** → `pnpm run test:full` before declaring done.

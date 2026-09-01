@@ -19,7 +19,8 @@
  *    `USE [db];` prefix survives being run inside `sp_executesql`.
  *
  * The MySQL connections are opened `multipleStatements: true`, matching
- * Joinery's own pools (`connection-pool.ts`, `provider/mysql-provider.ts`), so
+ * Joinery's own script-trust pools (`connection-pool.ts` via
+ * `mysql-pool-options.ts`), so
  * a stacked statement that reaches the server really would run. The PostgreSQL
  * arms run with `standard_conforming_strings` off, the per-database setting
  * that makes quote-doubling alone an injection there.

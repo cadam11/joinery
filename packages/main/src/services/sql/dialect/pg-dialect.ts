@@ -65,7 +65,8 @@ export class PgDialect extends SQLDialect {
 
   useDatabaseSQL(_database: string): string {
     // PostgreSQL switches databases at the connection level, not via SQL.
-    // Returning empty string; the provider handles this at connect time.
+    // Returning empty string; ConnectionPoolManager.getPgPool handles this by
+    // keying a separate pool per database.
     return '';
   }
 

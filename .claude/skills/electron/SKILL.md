@@ -18,7 +18,7 @@ Joinery structure:
 
 Key services in main process (`packages/main/src/services/`):
 
-- `sql/` — Multi-engine database providers (MSSQL, PostgreSQL, MySQL), dialects, metadata
+- `sql/` — Multi-engine SQL (MSSQL, PostgreSQL, MySQL): dialects, connection pools, metadata
 - `ai/` — AI service, chat, tool registry, LLM provider abstraction
 - `docker/` — Docker container detection
 - `keychain/` — macOS Keychain credential storage
@@ -65,11 +65,13 @@ Follow the existing pattern in this codebase:
 
 ## Multi-Engine Database Layer
 
-All database operations go through an abstraction layer:
+SQL generation is abstracted; connections are not.
 
 - Dialects (`sql/dialect/`): engine-specific SQL generation — use `getDialect(engine)`
-- Providers (`sql/provider/`): engine-specific connection/execution
-- Pool routing: `ConnectionPoolManager` routes to correct pool type
+- Pools (`sql/connection-pool.ts`): `ConnectionPoolManager` owns every engine's connections
+  directly — `getPool` (MSSQL), `getPgPool`, `getMySQLPool` — plus each engine's probe. There is
+  no provider-class layer; J-148 deleted the unwired `sql/provider/`
+- Execution routing: `QueryExecutor` branches on `getEngineForProfile(connectionId)`
 - Never write raw engine-specific SQL in services — always go through dialects
 
 ## Performance Targets

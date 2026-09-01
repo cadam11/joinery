@@ -183,10 +183,11 @@ describe('mysqlPoolOptions idle reaper (J-146)', () => {
 /**
  * J-149 — the "Test Connection" probe pool is derived, not hand-rolled.
  *
- * Two copies of the pool options used to live in the test-connection paths
- * (`connection-pool.ts` testMySQLConnection, `provider/mysql-provider.ts`
- * testConnection). They drifted from `mysqlPoolOptions` — J-146's `maxIdle`
- * never reached them, and neither would the next fix.
+ * A copy of the pool options used to live in the test-connection path
+ * (`connection-pool.ts` testMySQLConnection). It drifted from
+ * `mysqlPoolOptions` — J-146's `maxIdle` never reached it, and neither would
+ * the next fix. (A second copy lived in the unwired `MySQLProvider`, since
+ * deleted in J-148.)
  *
  * What the first assertion pins is the **override list**, not the inheritance:
  * `mysqlTestPoolOptions` may differ from the shared restricted options in
