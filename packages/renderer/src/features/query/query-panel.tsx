@@ -474,8 +474,11 @@ export function QueryPanel(props: IDockviewPanelProps) {
     void sqlIntellisense.loadMetadata({
       connectionId: tab.connectionId,
       database: tab.databaseName,
+      // J-138: the same `engine` the tokenizer and the formatter are given above, so this tab's
+      // prefetch caches under the engine the tab is actually connected to.
+      engine: engine ?? null,
     });
-  }, [tab?.connectionId, tab?.databaseName]);
+  }, [tab?.connectionId, tab?.databaseName, engine]);
 
   /**
    * PLAN.md R5 finding 4: an inactive Dockview panel's DOM subtree is detached from the document, and the

@@ -4,8 +4,14 @@
  * PLAN.md §1.6 requires `sql-intellisense.service.ts` to be ported near-verbatim, and "near-verbatim"
  * is only a checkable claim if something asserts the parts a reader cannot eyeball: the completion
  * KINDS (raw numbers, now held against Monaco's own enum rather than the original's five wrong ones),
- * the `sortText` ordering that decides what the widget shows first, the bracket-quoting in every
- * `insertText`, the seven context branches, and the ghost-text prompt.
+ * the `sortText` ordering that decides what the widget shows first, the quoting in every `insertText`,
+ * the seven context branches, and the ghost-text prompt.
+ *
+ * **J-138 made the provider engine-aware**, so the identifier-quoting, keyword and snippet
+ * assertions below run once per engine rather than pinning the T-SQL answer. The default fixture is
+ * PostgreSQL — its `public` schema is what the fixture already used — and `describe.each` covers all
+ * three. What is asserted is what each engine's own parser accepts: `"s"."t"` on PostgreSQL,
+ * `` `t` `` on MySQL (no schema part — MySQL has no schema layer), `[s].[t]` on SQL Server.
  *
  * All of it runs without a Monaco EDITOR: the module under test imports Monaco as types only, and the
  * model is the three-method structural shape the service declares. That is the payoff for keeping the
@@ -14,7 +20,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ColumnInfo, ObjectMetadata } from '@joinery/shared';
+import type { ColumnInfo, DatabaseEngine, ObjectMetadata } from '@joinery/shared';
 import { setDiagnosticsSink } from '../state/diagnostics';
 import {
   createSqlIntellisense,
@@ -48,6 +54,29 @@ const CUSTOMERS: ColumnInfo[] = [
 
 const object = (name: string, schema = 'public'): ObjectMetadata =>
   ({ name, schema, type: 'table' }) as ObjectMetadata;
+
+/** What each engine's explorer IPC actually reports as an object's schema. */
+const DEFAULT_SCHEMA: Record<DatabaseEngine, string> = {
+  postgresql: 'public',
+  mysql: 'shop', // the database — MySQL has no separate schema layer
+  mssql: 'dbo',
+};
+
+/** How each engine spells "this object", with and without a schema part. */
+const QUOTED = {
+  postgresql: { table: '"public"."customers"', column: '"id"', proc: '"public"."sp_reset"' },
+  mysql: { table: '`customers`', column: '`id`', proc: '`sp_reset`' },
+  mssql: { table: '[dbo].[customers]', column: '[id]', proc: '[dbo].[sp_reset]' },
+} as const;
+
+/** The keyword that puts the caret "about to name a stored procedure", per engine. */
+const CALL_KEYWORDS: Record<DatabaseEngine, readonly string[]> = {
+  postgresql: ['CALL '],
+  mysql: ['CALL '],
+  mssql: ['EXEC ', 'EXECUTE '],
+};
+
+const ENGINES: readonly DatabaseEngine[] = ['postgresql', 'mysql', 'mssql'];
 
 /**
  * A model over some SQL, with the caret where a `|` is — or at the end when there is none.
@@ -88,13 +117,15 @@ interface Harness {
   readonly getExplorerChildren: ReturnType<typeof vi.fn>;
   readonly getTableColumns: ReturnType<typeof vi.fn>;
   readonly generateSql: ReturnType<typeof vi.fn>;
-  target: { connectionId: string | null; database: string | null };
+  target: { connectionId: string | null; database: string | null; engine: DatabaseEngine | null };
   supportsStoredProcedures: boolean;
   ghostTextEnabled: boolean;
 }
 
 function harness(
   overrides: {
+    engine?: DatabaseEngine;
+    schema?: string;
     tables?: readonly ObjectMetadata[];
     views?: readonly ObjectMetadata[];
     procedures?: readonly ObjectMetadata[];
@@ -102,17 +133,22 @@ function harness(
     sql?: string | null;
   } = {}
 ): Harness {
+  const engine: DatabaseEngine = overrides.engine ?? 'postgresql';
+  // MySQL's `schema` slot IS the database (`mysql-dialect.ts:127` — "MySQL conflates database and
+  // schema — return the database as a single schema"), so the fixture says `shop` there and `public`
+  // elsewhere, which is what the real explorer IPC hands back.
+  const schema = overrides.schema ?? DEFAULT_SCHEMA[engine];
   const state = {
-    target: { connectionId: 'conn-1', database: 'shop' },
+    target: { connectionId: 'conn-1', database: 'shop', engine },
     supportsStoredProcedures: true,
     ghostTextEnabled: true,
   };
   const getExplorerChildren = vi.fn(async (_c: string, _d: string, parentPath: string) => {
     // Lowercase, which is what `explorer.ipc.ts` compares against — the capitalised paths the Angular
     // service used matched nothing and returned `[]`.
-    if (parentPath === 'tables') return overrides.tables ?? [object('customers')];
-    if (parentPath === 'views') return overrides.views ?? [object('active_customers')];
-    return overrides.procedures ?? [object('sp_reset')];
+    if (parentPath === 'tables') return overrides.tables ?? [object('customers', schema)];
+    if (parentPath === 'views') return overrides.views ?? [object('active_customers', schema)];
+    return overrides.procedures ?? [object('sp_reset', schema)];
   });
   const getTableColumns = vi.fn(async () => overrides.columns ?? CUSTOMERS);
   const generateSql = vi.fn(async () => ({ sql: overrides.sql ?? 'WHERE id = 1' }));
@@ -146,7 +182,14 @@ async function completionsFor(
   sql: string,
   setup: Harness = harness()
 ): Promise<
-  { label: string; kind: number; insertText: string; sortText?: string; detail?: string }[]
+  {
+    label: string;
+    kind: number;
+    insertText: string;
+    insertTextRules?: number;
+    sortText?: string;
+    detail?: string;
+  }[]
 > {
   const intellisense = createSqlIntellisense(setup.deps);
   await intellisense.loadMetadata();
@@ -156,6 +199,7 @@ async function completionsFor(
     label: String(item.label),
     kind: item.kind as number,
     insertText: item.insertText,
+    insertTextRules: item.insertTextRules,
     sortText: item.sortText,
     detail: item.detail,
   }));
@@ -200,20 +244,67 @@ describe('context detection', () => {
     expect(suggestions.map(s => s.label)).toEqual(['id', 'email']);
   });
 
+  /**
+   * J-138: the two identifier regexes accepted `[` and `]` only, so a PostgreSQL or MySQL user who
+   * had let the provider insert its own quoting — or who quotes by habit — got nothing back after
+   * the dot, and no alias resolved.
+   */
+  it('reads a quoted table name after a dot, in every engine’s delimiters', async () => {
+    for (const [engine, sql] of [
+      ['postgresql', 'SELECT "customers".|'],
+      ['mysql', 'SELECT `customers`.|'],
+      ['mssql', 'SELECT [customers].|'],
+    ] as const) {
+      const suggestions = await completionsFor(sql, harness({ engine }));
+      expect(
+        suggestions.map(s => s.label),
+        engine
+      ).toEqual(['id', 'email']);
+    }
+  });
+
+  it('resolves an alias declared against a quoted table name', async () => {
+    for (const [engine, sql] of [
+      ['postgresql', 'SELECT c.| FROM "public"."customers" c'],
+      ['mysql', 'SELECT c.| FROM `customers` c'],
+      ['mssql', 'SELECT c.| FROM [dbo].[customers] c'],
+    ] as const) {
+      const suggestions = await completionsFor(sql, harness({ engine }));
+      expect(
+        suggestions.map(s => s.label),
+        engine
+      ).toEqual(['id', 'email']);
+    }
+  });
+
   it('never mistakes a clause keyword for an alias', async () => {
     // `FROM customers WHERE` would otherwise register `where` as an alias of `customers`.
     const suggestions = await completionsFor('SELECT where.| FROM customers WHERE x');
     expect(suggestions).toEqual([]);
   });
 
-  it('offers stored procedures after EXEC and after EXECUTE', async () => {
-    for (const keyword of ['EXEC ', 'EXECUTE ']) {
-      const suggestions = await completionsFor(keyword);
-      expect(
-        suggestions.map(s => s.label),
-        keyword
-      ).toEqual(['public.sp_reset']);
+  it('offers stored procedures after the engine’s own call keyword, and only then', async () => {
+    // PostgreSQL and MySQL invoke a procedure with `CALL`; only SQL Server has `EXEC`/`EXECUTE`.
+    // Before J-138 the branch was `EXEC|EXECUTE` for everyone, so it could never fire on the two
+    // engines whose users would actually type `CALL`.
+    for (const engine of ENGINES) {
+      for (const keyword of CALL_KEYWORDS[engine]) {
+        const suggestions = await completionsFor(keyword, harness({ engine }));
+        expect(
+          suggestions.map(s => s.label),
+          `${engine} ${keyword}`
+        ).toEqual([engine === 'mysql' ? 'sp_reset' : `${DEFAULT_SCHEMA[engine]}.sp_reset`]);
+      }
     }
+  });
+
+  it('does not fire the procedure branch on another engine’s call keyword', async () => {
+    expect(await completionsFor('EXEC ', harness({ engine: 'postgresql' }))).not.toContainEqual(
+      expect.objectContaining({ label: 'public.sp_reset' })
+    );
+    expect(await completionsFor('CALL ', harness({ engine: 'mssql' }))).not.toContainEqual(
+      expect.objectContaining({ label: 'dbo.sp_reset' })
+    );
   });
 
   it('offers referenced columns plus keywords inside a WHERE clause', async () => {
@@ -239,7 +330,7 @@ describe('context detection', () => {
 
   it('returns nothing at all with no connection or database', async () => {
     const setup = harness();
-    setup.target = { connectionId: null, database: null };
+    setup.target = { connectionId: null, database: null, engine: null };
     expect(await completionsFor('SELECT * FROM ', setup)).toEqual([]);
   });
 });
@@ -270,7 +361,7 @@ describe('the completion items themselves', () => {
     // for `Field` and was handed `Variable`'s number; a procedure asked for `Function` and was handed
     // `Constructor`'s.
     expect((await completionsFor('SELECT customers.|'))[0]?.kind).toBe(KIND.Field);
-    expect((await completionsFor('EXEC '))[0]?.kind).toBe(KIND.Function);
+    expect((await completionsFor('CALL '))[0]?.kind).toBe(KIND.Function);
   });
 
   /**
@@ -314,21 +405,58 @@ describe('the completion items themselves', () => {
     expect(suggestions.find(s => s.label === 'id')?.sortText).toBe('0');
   });
 
-  it('bracket-quotes every identifier it inserts', async () => {
-    // KNOWN DEFECT, not intended behaviour: brackets are T-SQL, and this fixture's schema is the
-    // PostgreSQL `public`. The completion provider has no engine to consult — `IntellisenseTarget`
-    // carries only `{connectionId, database}` — so every PostgreSQL and MySQL user is handed
-    // `[schema].[table]`. J-138 adds the engine and rewrites this test to assert `"s"."t"` and
-    // `` `t` ``. J-134 fixed the same class of bug in the main-process dialect layer and left this
-    // one to its own ticket rather than reach into the renderer.
-    expect((await completionsFor('SELECT * FROM '))[0]?.insertText).toBe('[public].[customers]');
-    expect((await completionsFor('SELECT customers.|'))[0]?.insertText).toBe('[id]');
-    // A view is quoted as one name, because the cache holds it as one string. Verbatim.
-    expect((await completionsFor('SELECT * FROM '))[1]?.insertText).toBe(
-      '[public.active_customers]'
-    );
-    // A procedure is NOT quoted. Also verbatim.
-    expect((await completionsFor('EXEC '))[0]?.insertText).toBe('public.sp_reset');
+  /**
+   * J-138. This replaces "bracket-quotes every identifier it inserts", which pinned the bug: the
+   * provider had no engine, so `[schema].[table]`, `[column]` and a view quoted as the single name
+   * `[public.active_customers]` were handed to PostgreSQL and MySQL users alike — against a fixture
+   * whose schema is the PostgreSQL `public`. What is asserted now is what each engine's parser
+   * accepts, produced by the same `quoteIdentifier`/`qualifiedTable` the explorer's context menus
+   * use (`shell/sidebar/sql-text.ts:28-48`), so there is one right answer per engine and one place
+   * that knows it.
+   */
+  describe.each(ENGINES)('identifier quoting on %s', engine => {
+    const setup = () => harness({ engine });
+
+    it('quotes a table with the engine’s delimiters, and omits the schema on MySQL', async () => {
+      // MySQL has no schema layer between database and table, so a two-part name would name the
+      // wrong thing — `qualifiedTable` is the one place that decision lives.
+      expect((await completionsFor('SELECT * FROM ', setup()))[0]?.insertText).toBe(
+        QUOTED[engine].table
+      );
+    });
+
+    it('quotes a column', async () => {
+      expect((await completionsFor('SELECT customers.|', setup()))[0]?.insertText).toBe(
+        QUOTED[engine].column
+      );
+    });
+
+    it('quotes a view as two identifiers, not one', async () => {
+      // The old behaviour quoted the joined `schema.name` string as a single identifier, which is
+      // not a reference to anything on any engine.
+      const views = await completionsFor('SELECT * FROM ', setup());
+      expect(views[1]?.insertText).toBe(
+        QUOTED[engine].table.replace('customers', 'active_customers')
+      );
+    });
+
+    it('quotes a stored procedure the same way', async () => {
+      const suggestions = await completionsFor(CALL_KEYWORDS[engine][0] ?? '', setup());
+      expect(suggestions[0]?.insertText).toBe(QUOTED[engine].proc);
+    });
+
+    it('escapes the engine’s own closing delimiter by doubling it', async () => {
+      const odd = harness({
+        engine,
+        tables: [object('we]ird"name`x', DEFAULT_SCHEMA[engine])],
+      });
+      const inserted = (await completionsFor('SELECT * FROM ', odd))[0]?.insertText ?? '';
+      const closing = { postgresql: '"', mysql: '`', mssql: ']' }[engine];
+      // The name's own copy of the closing delimiter is doubled; everything after the opening
+      // delimiter is therefore unambiguous to the parser.
+      expect(inserted).toContain(`${closing}${closing}`);
+      expect(inserted.endsWith(closing)).toBe(true);
+    });
   });
 
   it('describes a column with its type and nullability, and marks the primary key', async () => {
@@ -337,21 +465,124 @@ describe('the completion items themselves', () => {
     expect(suggestions[1]?.detail).toBe('varchar (nullable)');
   });
 
-  it('keeps the whole keyword list, duplicates included', async () => {
-    const suggestions = await completionsFor('SEL');
-    const keywords = suggestions.filter(s => s.kind === KIND.Keyword).map(s => s.label);
-    expect(keywords).toHaveLength(107);
-    // Two entries appear twice in the original (`ELSE` and `END`, both from the CASE block repeating
-    // the IF block's). Removing them would renumber every `sortText` after them, which is ordering that
-    // shipped.
-    expect(keywords.filter(label => label === 'ELSE')).toHaveLength(2);
-    expect(keywords.filter(label => label === 'END')).toHaveLength(2);
+  it('labels a table with its schema, except on MySQL where there is no schema layer', async () => {
+    const labelOf = async (engine: DatabaseEngine) =>
+      (await completionsFor('SELECT * FROM ', harness({ engine })))[0]?.label;
+    expect(await labelOf('postgresql')).toBe('public.customers');
+    expect(await labelOf('mssql')).toBe('dbo.customers');
+    expect(await labelOf('mysql')).toBe('customers');
+  });
+});
+
+/**
+ * J-138: the keyword and snippet lists, split into a shared set plus one per engine.
+ *
+ * The single list this replaced was the Angular original's, and it was T-SQL throughout: `TOP`,
+ * `NOLOCK`, `GETDATE`, `CHARINDEX`, `RAISERROR`, `CLUSTERED`, a `SELECT TOP` snippet and a
+ * `BEGIN TRY` one were offered to every PostgreSQL and MySQL user. These tests assert both
+ * directions — the engine's own vocabulary is present AND the other engines' is absent — because
+ * only the second half fails on the old code.
+ */
+describe('engine-specific keywords and snippets', () => {
+  const keywordsFor = async (engine: DatabaseEngine): Promise<string[]> =>
+    (await completionsFor('SEL', harness({ engine })))
+      .filter(s => s.kind === KIND.Keyword)
+      .map(s => s.label);
+
+  const snippetsFor = async (engine: DatabaseEngine): Promise<string[]> =>
+    (await completionsFor('SEL', harness({ engine })))
+      .filter(s => s.kind === KIND.Snippet)
+      .map(s => s.label);
+
+  it('offers the shared SQL vocabulary on every engine', async () => {
+    for (const engine of ENGINES) {
+      const keywords = await keywordsFor(engine);
+      for (const shared of ['SELECT', 'FROM', 'WHERE', 'INNER JOIN', 'GROUP BY', 'COALESCE']) {
+        expect(keywords, `${engine} ${shared}`).toContain(shared);
+      }
+    }
   });
 
-  it('ships the ten snippets as snippet-mode insertions', async () => {
-    const snippets = (await completionsFor('SEL')).filter(s => s.kind === KIND.Snippet);
-    expect(snippets).toHaveLength(10);
-    expect(snippets.map(s => s.label)).toContain('merge');
+  it('offers T-SQL keywords only on SQL Server', async () => {
+    const tsql = ['TOP', 'NOLOCK', 'GETDATE', 'CHARINDEX', 'RAISERROR', 'CLUSTERED', 'EXEC'];
+    const mssql = await keywordsFor('mssql');
+    for (const keyword of tsql) expect(mssql).toContain(keyword);
+    for (const engine of ['postgresql', 'mysql'] as const) {
+      const keywords = await keywordsFor(engine);
+      for (const keyword of tsql) expect(keywords, `${engine} ${keyword}`).not.toContain(keyword);
+    }
+  });
+
+  it('offers LIMIT on PostgreSQL and MySQL, and never on SQL Server', async () => {
+    expect(await keywordsFor('postgresql')).toContain('LIMIT');
+    expect(await keywordsFor('mysql')).toContain('LIMIT');
+    expect(await keywordsFor('mssql')).not.toContain('LIMIT');
+  });
+
+  it('offers each engine’s own dialect keywords', async () => {
+    const pg = await keywordsFor('postgresql');
+    expect(pg).toEqual(expect.arrayContaining(['ILIKE', 'RETURNING', 'ON CONFLICT']));
+    const mysql = await keywordsFor('mysql');
+    expect(mysql).toEqual(
+      expect.arrayContaining(['AUTO_INCREMENT', 'IFNULL', 'ON DUPLICATE KEY UPDATE'])
+    );
+    // And they do not leak into each other.
+    expect(pg).not.toContain('AUTO_INCREMENT');
+    expect(mysql).not.toContain('ILIKE');
+  });
+
+  it('offers no keyword twice on any engine', async () => {
+    // The original list carried `ELSE`, `END` and `NOT NULL` twice, which the port kept only
+    // because renumbering `sortText` was a bigger change than the duplicate was worth. Splitting
+    // the list renumbers it anyway, so the duplicates go.
+    for (const engine of ENGINES) {
+      const keywords = await keywordsFor(engine);
+      expect(new Set(keywords).size, engine).toBe(keywords.length);
+    }
+  });
+
+  it('offers the row-limiting snippet each engine can actually run', async () => {
+    expect(await snippetsFor('mssql')).toContain('select_top');
+    expect(await snippetsFor('postgresql')).toContain('select_limit');
+    expect(await snippetsFor('mysql')).toContain('select_limit');
+    expect(await snippetsFor('postgresql')).not.toContain('select_top');
+    expect(await snippetsFor('mysql')).not.toContain('select_top');
+  });
+
+  it('offers TRY/CATCH and MERGE only on SQL Server, and an upsert elsewhere', async () => {
+    expect(await snippetsFor('mssql')).toEqual(expect.arrayContaining(['try_catch', 'merge']));
+    for (const engine of ['postgresql', 'mysql'] as const) {
+      const snippets = await snippetsFor(engine);
+      expect(snippets, engine).not.toContain('try_catch');
+      expect(snippets, engine).not.toContain('merge');
+      expect(snippets, engine).toContain('upsert');
+    }
+  });
+
+  it('writes each engine’s own procedure body into create_procedure', async () => {
+    const bodyOf = async (engine: DatabaseEngine): Promise<string> =>
+      (await completionsFor('SEL', harness({ engine }))).find(s => s.label === 'create_procedure')
+        ?.insertText ?? '';
+    // `@param … AS BEGIN` is T-SQL and parses on nothing else; PostgreSQL needs a language and a
+    // dollar-quoted body; MySQL takes an `IN` parameter and no `AS`.
+    expect(await bodyOf('mssql')).toContain('@');
+    expect(await bodyOf('postgresql')).toContain('LANGUAGE plpgsql');
+    expect(await bodyOf('mysql')).toContain('IN ');
+    expect(await bodyOf('mysql')).not.toContain('LANGUAGE plpgsql');
+  });
+
+  it('keeps every snippet a snippet-mode insertion on every engine', async () => {
+    for (const engine of ENGINES) {
+      const snippets = (await completionsFor('SEL', harness({ engine }))).filter(
+        s => s.kind === KIND.Snippet
+      );
+      expect(snippets.length, engine).toBeGreaterThan(0);
+      for (const snippet of snippets) {
+        expect(snippet.insertTextRules, `${engine} ${snippet.label}`).toBe(
+          CompletionItemInsertTextRule.InsertAsSnippet
+        );
+      }
+    }
   });
 });
 
@@ -374,7 +605,7 @@ describe('loadMetadata', () => {
 
   it('does nothing without a connection or a database', async () => {
     const setup = harness();
-    setup.target = { connectionId: 'conn-1', database: null };
+    setup.target = { connectionId: 'conn-1', database: null, engine: 'postgresql' };
     await createSqlIntellisense(setup.deps).loadMetadata();
     expect(setup.getExplorerChildren).not.toHaveBeenCalled();
   });
@@ -421,7 +652,7 @@ describe('loadMetadata', () => {
     const intellisense = createSqlIntellisense(setup.deps);
     await intellisense.loadMetadata();
 
-    setup.target = { connectionId: 'conn-1', database: 'other' };
+    setup.target = { connectionId: 'conn-1', database: 'other', engine: 'postgresql' };
     const { model, position } = modelFor('SELECT * FROM ');
     // Nothing loaded for `other` yet, so the cache miss is empty rather than the first database's tables.
     expect((await intellisense.getContextAwareCompletions(model, position)).suggestions).toEqual(

@@ -25,15 +25,30 @@
 
 import { selectQueryAssistEnabled, selectHasConfiguredVendors, aiStore } from '../state/ai';
 import { capabilitiesStore, selectCapabilitiesFor } from '../state/capabilities';
+import { connectionStore, selectProfileFor } from '../state/connection';
 import { selectActiveTab, tabStore } from '../state/tab';
 import { ipc, isIpcAvailable } from '../ipc';
 import { createSqlIntellisense, type IntellisenseTarget } from './sql-intellisense';
 
-/** The active tab's connection and database, or nulls when there is no query tab focused. */
+/**
+ * The active tab's connection, database and engine, or nulls when there is no query tab focused.
+ *
+ * The engine comes from the connection PROFILE rather than the tab, which is where `query-panel.tsx`
+ * already reads it from for the tokenizer and the formatter (`query-panel.tsx:75-76`). Reading it
+ * the same way is the point: the completion provider, Monaco's tokenizer and `sql-formatter` now
+ * cannot disagree about which dialect a tab is.
+ */
 export function activeTabTarget(): IntellisenseTarget {
   const tab = selectActiveTab(tabStore.getState());
-  if (tab === null || tab.type !== 'query') return { connectionId: null, database: null };
-  return { connectionId: tab.connectionId ?? null, database: tab.databaseName ?? null };
+  if (tab === null || tab.type !== 'query') {
+    return { connectionId: null, database: null, engine: null };
+  }
+  const connectionId = tab.connectionId ?? null;
+  return {
+    connectionId,
+    database: tab.databaseName ?? null,
+    engine: selectProfileFor(connectionId)(connectionStore.getState())?.engine ?? null,
+  };
 }
 
 export const sqlIntellisense = createSqlIntellisense({

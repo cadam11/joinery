@@ -4,7 +4,9 @@
  *
  * **Ported near-verbatim from `packages/renderer/src/app/core/services/sql-intellisense.service.ts`
  * (768 LOC), as PLAN.md §1.6 requires.** Every keyword, every snippet, every `sortText`, every
- * context-detection regex and the whole ghost-text prompt are byte-identical to the Angular original.
+ * context-detection regex and the whole ghost-text prompt were byte-identical to the Angular original
+ * — until J-138 split the T-SQL half of that out per engine; see the section at the end of this
+ * comment for exactly what moved and why.
  * The completion-KIND numbers are the exception and are corrected — see `COMPLETION_ITEM_KIND` below,
  * which explains all five and the spec that pins them. What else changed is only the seams that cannot
  * survive the move:
@@ -28,7 +30,7 @@
  * component instead registered its own 40-line inline provider (`query.component.ts:1390-1485`) that
  * offered keywords and table names with no context awareness. So the better provider existed, fully
  * written, and was dead. This port registers the real one and drops the inline duplicate; the keyword
- * list the inline provider carried is a strict subset of `SQL_KEYWORDS` below.
+ * list the inline provider carried is a strict subset of `SHARED_KEYWORDS` below.
  *
  * **2. `getContextAwareCompletions` is the provider body.** The dead `registerCompletionProvider`
  * called the weaker `isAfterDot` → `getColumnCompletions` path, which cannot resolve an alias, while
@@ -47,10 +49,32 @@
  * procedures too (capability-gated, exactly as the query component's own prefetch was), because a
  * provider that is now LIVE and returns nothing for `FROM ` is a defect a user sees. `functionsCache`
  * has no reader and is dropped rather than carried forward as a fourth empty map.
+ *
+ * ── J-138: the provider is engine-aware ─────────────────────────────────────────────────────
+ *
+ * Everything above was T-SQL, because the Angular original was written against SQL Server and
+ * `IntellisenseTarget` carried no engine for anything downstream to branch on. A PostgreSQL user was
+ * handed `[public].[customers]`, `SELECT TOP`, `BEGIN TRY`, `GETDATE` and `CHARINDEX`; a MySQL user
+ * got the same, plus a two-part `schema.table` naming something MySQL has no concept of. Four things
+ * changed, and nothing else:
+ *
+ *  - `IntellisenseTarget` carries `engine`, resolved per request from the active tab's connection
+ *    profile (`intellisense.ts:activeTabTarget`). `null` — no connection, or a profile not yet
+ *    loaded — falls back to `mssql`, the same fallback `sql-dialect.ts:21-25` makes for the tokenizer;
+ *  - every `insertText` is quoted by `quoteIdentifier`/`qualifiedTable`
+ *    (`shell/sidebar/sql-text.ts:28-48`) — the same functions the explorer's context menus use, so
+ *    the two surfaces cannot drift and MySQL's missing schema layer is handled in one place;
+ *  - `SQL_KEYWORDS` and `SQL_SNIPPETS` are a shared set plus a per-engine set, and the procedure
+ *    branch fires on `CALL` for PostgreSQL and MySQL rather than only on T-SQL's `EXEC`;
+ *  - the two identifier regexes accept `"` and `` ` `` alongside `[`/`]`, so a quoted name resolves
+ *    to a table on every engine instead of only on SQL Server.
+ *
+ * The ghost-text prompt still says nothing about the dialect. That is J-139, deliberately not here.
  */
 
 import type * as monaco from 'monaco-editor/editor/editor.api.js';
-import type { ColumnInfo, ObjectMetadata } from '@joinery/shared';
+import type { ColumnInfo, DatabaseEngine, ObjectMetadata } from '@joinery/shared';
+import { qualifiedTable, quoteIdentifier } from '../shell/sidebar/sql-text';
 import { diagnostics } from '../state/diagnostics';
 
 /**
@@ -102,10 +126,20 @@ const COMPLETION_ITEM_KIND = {
 /** `InsertAsSnippet`. The original spelled it `insertTextRules: 4` with the same comment. */
 const INSERT_AS_SNIPPET = 4;
 
-// SQL Keywords — verbatim, including the three entries that appear twice (`ELSE`, `END`, `NOT NULL`).
-// The duplicates are harmless (Monaco de-duplicates identical labels in the widget) and removing them
-// would change every subsequent `sortText`, which is ordering the original shipped.
-const SQL_KEYWORDS = [
+/**
+ * The keywords every engine understands.
+ *
+ * Derived from the Angular original's single 107-entry list by removing the T-SQL-only entries (now
+ * in `MSSQL_KEYWORDS`) and the three labels it carried twice — `ELSE`, `END` and `NOT NULL`, all
+ * from the CASE block repeating the IF block's. The port kept those duplicates because removing them
+ * would have renumbered every subsequent `sortText`; splitting the list renumbers it anyway, so the
+ * reason to keep them is gone. `SELECT` and `FROM` stay first and second, which is the only part of
+ * the numbering anything asserts.
+ *
+ * `EXCEPT`/`INTERSECT` are here rather than in the two dialect lists: MySQL has had both since
+ * 8.0.31, and Joinery's MySQL support targets 8.
+ */
+const SHARED_KEYWORDS = [
   'SELECT',
   'FROM',
   'WHERE',
@@ -119,13 +153,11 @@ const SQL_KEYWORDS = [
   'GROUP BY',
   'HAVING',
   'DISTINCT',
-  'TOP',
   'AS',
   'JOIN',
   'INNER JOIN',
   'LEFT JOIN',
   'RIGHT JOIN',
-  'FULL JOIN',
   'CROSS JOIN',
   'ON',
   'INSERT',
@@ -156,8 +188,6 @@ const SQL_KEYWORDS = [
   'CASE',
   'WHEN',
   'THEN',
-  'ELSE',
-  'END',
   'UNION',
   'UNION ALL',
   'EXCEPT',
@@ -165,7 +195,6 @@ const SQL_KEYWORDS = [
   'ASC',
   'DESC',
   'WITH',
-  'NOLOCK',
   'COALESCE',
   'NULLIF',
   'COUNT',
@@ -174,6 +203,42 @@ const SQL_KEYWORDS = [
   'MIN',
   'MAX',
   'CAST',
+  'SUBSTRING',
+  'REPLACE',
+  'ROW_NUMBER',
+  'OVER',
+  'PARTITION BY',
+  'RANK',
+  'DENSE_RANK',
+  'TRANSACTION',
+  'COMMIT',
+  'ROLLBACK',
+  'PRIMARY KEY',
+  'FOREIGN KEY',
+  'REFERENCES',
+  'UNIQUE',
+  'CHECK',
+  'DEFAULT',
+  'CONSTRAINT',
+  'NOT NULL',
+] as const;
+
+/**
+ * T-SQL. Every entry here was in the Angular original's single list and was being offered to
+ * PostgreSQL and MySQL users, which is the defect J-138 exists to fix.
+ *
+ * `SAVE TRANSACTION` replaces the original's `SAVEPOINT`, which is the ANSI spelling SQL Server does
+ * not accept — so the one entry in this file that was wrong for SQL Server too is fixed by the split.
+ */
+const MSSQL_KEYWORDS = [
+  'TOP',
+  'FULL JOIN',
+  'CROSS APPLY',
+  'OUTER APPLY',
+  'NOLOCK',
+  'OFFSET',
+  'FETCH NEXT',
+  'MERGE',
   'CONVERT',
   'GETDATE',
   'DATEADD',
@@ -182,15 +247,8 @@ const SQL_KEYWORDS = [
   'MONTH',
   'DAY',
   'LEN',
-  'SUBSTRING',
   'CHARINDEX',
-  'REPLACE',
   'ISNULL',
-  'ROW_NUMBER',
-  'OVER',
-  'PARTITION BY',
-  'RANK',
-  'DENSE_RANK',
   'EXEC',
   'EXECUTE',
   'PRINT',
@@ -198,34 +256,98 @@ const SQL_KEYWORDS = [
   'TRY',
   'CATCH',
   'THROW',
-  'TRANSACTION',
-  'COMMIT',
-  'ROLLBACK',
-  'SAVEPOINT',
-  'PRIMARY KEY',
-  'FOREIGN KEY',
-  'REFERENCES',
-  'UNIQUE',
-  'CHECK',
-  'DEFAULT',
-  'CONSTRAINT',
+  'SAVE TRANSACTION',
   'IDENTITY',
-  'NOT NULL',
   'CLUSTERED',
   'NONCLUSTERED',
 ] as const;
 
-/** Common snippets — verbatim, `${n:placeholder}` syntax included. */
-const SQL_SNIPPETS: readonly { label: string; detail: string; insertText: string }[] = [
+const POSTGRESQL_KEYWORDS = [
+  'LIMIT',
+  'OFFSET',
+  'FULL JOIN',
+  'LATERAL',
+  'RETURNING',
+  'ON CONFLICT',
+  'DO NOTHING',
+  'DO UPDATE',
+  'ILIKE',
+  'SIMILAR TO',
+  'CALL',
+  'SAVEPOINT',
+  'LENGTH',
+  'POSITION',
+  'NOW',
+  'CURRENT_DATE',
+  'CURRENT_TIMESTAMP',
+  'EXTRACT',
+  'DATE_TRUNC',
+  'AGE',
+  'STRING_AGG',
+  'ARRAY_AGG',
+  'JSONB',
+  'SERIAL',
+  'BIGSERIAL',
+  'GENERATED ALWAYS AS IDENTITY',
+  'TRUE',
+  'FALSE',
+] as const;
+
+const MYSQL_KEYWORDS = [
+  'LIMIT',
+  'OFFSET',
+  'STRAIGHT_JOIN',
+  'ON DUPLICATE KEY UPDATE',
+  'CALL',
+  'SAVEPOINT',
+  'IFNULL',
+  'LENGTH',
+  'CONCAT',
+  'GROUP_CONCAT',
+  'NOW',
+  'CURDATE',
+  'DATE_ADD',
+  'DATE_SUB',
+  'DATEDIFF',
+  'YEAR',
+  'MONTH',
+  'DAY',
+  'AUTO_INCREMENT',
+  'UNSIGNED',
+  'ENGINE',
+  'CHARACTER SET',
+  'REGEXP',
+  'RLIKE',
+  'SHOW',
+  'DESCRIBE',
+  'TRUE',
+  'FALSE',
+] as const;
+
+const ENGINE_KEYWORDS: Record<DatabaseEngine, readonly string[]> = {
+  mssql: MSSQL_KEYWORDS,
+  postgresql: POSTGRESQL_KEYWORDS,
+  mysql: MYSQL_KEYWORDS,
+};
+
+/** Shared first, then the engine's own — so `SELECT` and `FROM` keep `sortText` `0000`/`0001`. */
+const keywordsFor = (engine: DatabaseEngine): readonly string[] => [
+  ...SHARED_KEYWORDS,
+  ...ENGINE_KEYWORDS[engine],
+];
+
+interface SqlSnippet {
+  readonly label: string;
+  readonly detail: string;
+  readonly insertText: string;
+}
+
+/** The six snippets whose bodies are already engine-neutral. Verbatim from the original. */
+const SHARED_SNIPPETS: readonly SqlSnippet[] = [
   {
     label: 'select_all',
     detail: 'SELECT * FROM table',
     insertText: 'SELECT *\nFROM ${1:table_name}\nWHERE ${2:condition}',
-  },
-  {
-    label: 'select_top',
-    detail: 'SELECT TOP N FROM table',
-    insertText: 'SELECT TOP ${1:100} *\nFROM ${2:table_name}',
   },
   {
     label: 'insert_values',
@@ -249,28 +371,89 @@ const SQL_SNIPPETS: readonly { label: string; detail: string; insertText: string
       'CREATE TABLE ${1:table_name} (\n\t${2:column_name} ${3:datatype} ${4:constraints}\n)',
   },
   {
-    label: 'create_procedure',
-    detail: 'CREATE PROCEDURE template',
-    insertText:
-      'CREATE PROCEDURE ${1:procedure_name}\n\t@${2:param} ${3:datatype}\nAS\nBEGIN\n\t${4:-- body}\nEND',
-  },
-  {
-    label: 'try_catch',
-    detail: 'TRY CATCH block',
-    insertText:
-      'BEGIN TRY\n\t${1:-- statements}\nEND TRY\nBEGIN CATCH\n\tSELECT ERROR_MESSAGE() AS ErrorMessage\nEND CATCH',
-  },
-  {
     label: 'cte',
     detail: 'Common Table Expression',
     insertText: 'WITH ${1:cte_name} AS (\n\t${2:-- query}\n)\nSELECT *\nFROM ${1:cte_name}',
   },
-  {
-    label: 'merge',
-    detail: 'MERGE statement',
-    insertText:
-      'MERGE INTO ${1:target_table} AS target\nUSING ${2:source_table} AS source\nON ${3:condition}\nWHEN MATCHED THEN\n\tUPDATE SET ${4:updates}\nWHEN NOT MATCHED THEN\n\tINSERT (${5:columns}) VALUES (${6:values});',
-  },
+];
+
+/**
+ * The four whose bodies only parse on one engine. The MSSQL column is the original's text,
+ * unchanged; the other two are the same idea written in a grammar that engine accepts.
+ *
+ * `merge` is SQL Server's; PostgreSQL and MySQL get `upsert` instead — `ON CONFLICT DO UPDATE` and
+ * `ON DUPLICATE KEY UPDATE` — which is what a user reaches for there. (PostgreSQL 15 did add MERGE,
+ * but offering it would put a statement in the editor that fails on 14 and earlier.)
+ */
+const ENGINE_SNIPPETS: Record<DatabaseEngine, readonly SqlSnippet[]> = {
+  mssql: [
+    {
+      label: 'select_top',
+      detail: 'SELECT TOP N FROM table',
+      insertText: 'SELECT TOP ${1:100} *\nFROM ${2:table_name}',
+    },
+    {
+      label: 'create_procedure',
+      detail: 'CREATE PROCEDURE template',
+      insertText:
+        'CREATE PROCEDURE ${1:procedure_name}\n\t@${2:param} ${3:datatype}\nAS\nBEGIN\n\t${4:-- body}\nEND',
+    },
+    {
+      label: 'try_catch',
+      detail: 'TRY CATCH block',
+      insertText:
+        'BEGIN TRY\n\t${1:-- statements}\nEND TRY\nBEGIN CATCH\n\tSELECT ERROR_MESSAGE() AS ErrorMessage\nEND CATCH',
+    },
+    {
+      label: 'merge',
+      detail: 'MERGE statement',
+      insertText:
+        'MERGE INTO ${1:target_table} AS target\nUSING ${2:source_table} AS source\nON ${3:condition}\nWHEN MATCHED THEN\n\tUPDATE SET ${4:updates}\nWHEN NOT MATCHED THEN\n\tINSERT (${5:columns}) VALUES (${6:values});',
+    },
+  ],
+  postgresql: [
+    {
+      label: 'select_limit',
+      detail: 'SELECT … LIMIT N',
+      insertText: 'SELECT *\nFROM ${1:table_name}\nLIMIT ${2:100}',
+    },
+    {
+      label: 'create_procedure',
+      detail: 'CREATE PROCEDURE template',
+      insertText:
+        'CREATE OR REPLACE PROCEDURE ${1:procedure_name}(${2:param} ${3:datatype})\nLANGUAGE plpgsql\nAS $$\nBEGIN\n\t${4:-- body}\nEND;\n$$;',
+    },
+    {
+      label: 'upsert',
+      detail: 'INSERT … ON CONFLICT DO UPDATE',
+      insertText:
+        'INSERT INTO ${1:table_name} (${2:columns})\nVALUES (${3:values})\nON CONFLICT (${4:key_column}) DO UPDATE\nSET ${5:column} = EXCLUDED.${5:column}',
+    },
+  ],
+  mysql: [
+    {
+      label: 'select_limit',
+      detail: 'SELECT … LIMIT N',
+      insertText: 'SELECT *\nFROM ${1:table_name}\nLIMIT ${2:100}',
+    },
+    {
+      label: 'create_procedure',
+      detail: 'CREATE PROCEDURE template',
+      insertText:
+        'CREATE PROCEDURE ${1:procedure_name}(IN ${2:param} ${3:datatype})\nBEGIN\n\t${4:-- body}\nEND',
+    },
+    {
+      label: 'upsert',
+      detail: 'INSERT … ON DUPLICATE KEY UPDATE',
+      insertText:
+        'INSERT INTO ${1:table_name} (${2:columns})\nVALUES (${3:values})\nON DUPLICATE KEY UPDATE ${4:column} = VALUES(${4:column})',
+    },
+  ],
+};
+
+const snippetsFor = (engine: DatabaseEngine): readonly SqlSnippet[] => [
+  ...SHARED_SNIPPETS,
+  ...ENGINE_SNIPPETS[engine],
 ];
 
 /** The words that may never be mistaken for a table alias. Verbatim (`:519-553`). */
@@ -307,6 +490,19 @@ const ALIAS_STOP_WORDS: readonly string[] = [
   'SELECT',
 ];
 
+/**
+ * Every engine's identifier delimiters: `[…]` (SQL Server), `"…"` (PostgreSQL), `` `…` `` (MySQL).
+ *
+ * Before J-138 both patterns below accepted brackets only, so a PostgreSQL user who typed
+ * `"customers".` — or who accepted the provider's own `"public"."customers"` and then typed a dot —
+ * matched nothing and was offered no columns. One class for the opening and closing delimiter alike:
+ * the patterns are recognisers for "an identifier a user might have quoted", not validators.
+ */
+const IDENTIFIER_DELIMITERS = /["`[\]]/g;
+
+/** `schema.table.` or `alias.` immediately before the caret. */
+const IDENTIFIER_BEFORE_DOT = /(["`[\]]?\w+["`[\]]?(?:\.["`[\]]?\w+["`[\]]?)?)\s*\.$/;
+
 /** How many tables' columns are prefetched. Verbatim: `tables.slice(0, 50)` "Limit for performance". */
 const MAX_TABLES_WITH_COLUMNS = 50;
 
@@ -315,17 +511,62 @@ const GHOST_TEXT_DEBOUNCE_MS = 500;
 const GHOST_TEXT_MIN_PREFIX = 3;
 const GHOST_TEXT_MAX_TABLES = 5;
 
-interface TableInfo {
+/** A schema-qualified object name, kept in two parts so it can be quoted as two identifiers. */
+interface ObjectRef {
   readonly schema: string;
   readonly name: string;
+}
+
+interface TableInfo extends ObjectRef {
   readonly columns: readonly ColumnInfo[];
 }
 
-/** Which connection and database the caches are keyed on. Resolved per call, never cached. */
+/**
+ * Which connection and database the caches are keyed on, and which engine the SQL is written for.
+ * Resolved per call, never cached.
+ *
+ * The engine is not part of the cache key: it is a property of the connection, so `connectionId`
+ * already determines it.
+ */
 export interface IntellisenseTarget {
   readonly connectionId: string | null;
   readonly database: string | null;
+  readonly engine: DatabaseEngine | null;
 }
+
+/**
+ * The engine to generate SQL for. A null engine — no connection, or a profile the connection store
+ * has not loaded yet — falls back to `mssql`, which is the same fallback `sql-dialect.ts:21-25`
+ * makes for the tokenizer and the formatter, so all three agree about an unknown engine.
+ */
+const engineOf = (target: IntellisenseTarget): DatabaseEngine => target.engine ?? 'mssql';
+
+/**
+ * The schema an object belongs to when the explorer did not report one.
+ *
+ * Not `sql-text.ts:defaultSchema`, which answers `''` for MySQL: that value is then handed to
+ * `deps.getTableColumns`, and MySQL's column query binds it to `TABLE_SCHEMA`
+ * (`mysql-dialect.ts:195-214`), where an empty string matches nothing. MySQL conflates database and
+ * schema (`mysql-dialect.ts:127`), so the database is the right answer there.
+ */
+const schemaFallbackFor = (target: IntellisenseTarget): string => {
+  switch (engineOf(target)) {
+    case 'mysql':
+      return target.database ?? '';
+    case 'postgresql':
+      return 'public';
+    case 'mssql':
+      return 'dbo';
+  }
+};
+
+/**
+ * The unquoted form shown in the completion list. MySQL has no schema layer between database and
+ * table, so a two-part label there would name something that does not exist — the same reason
+ * `sql-text.ts:qualifiedTable` drops the schema for MySQL.
+ */
+const displayName = (ref: ObjectRef, engine: DatabaseEngine): string =>
+  engine === 'mysql' ? ref.name : `${ref.schema}.${ref.name}`;
 
 /**
  * Everything the service used to reach for through Angular DI, stated.
@@ -421,8 +662,8 @@ export const SQL_LANGUAGE_IDS = ['sql', 'pgsql', 'mysql'] as const;
 export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
   // Cache of loaded metadata, keyed `${connectionId}:${database}`.
   const tablesCache = new Map<string, readonly TableInfo[]>();
-  const viewsCache = new Map<string, readonly string[]>();
-  const proceduresCache = new Map<string, readonly string[]>();
+  const viewsCache = new Map<string, readonly ObjectRef[]>();
+  const proceduresCache = new Map<string, readonly ObjectRef[]>();
 
   // Ghost text state. One in-flight request and one timer, both replaced by the next keystroke.
   let ghostTextTimer: ReturnType<typeof setTimeout> | null = null;
@@ -461,20 +702,30 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
 
   const isAfterDot = (text: string): boolean => text.trimEnd().endsWith('.');
 
-  const isAfterExec = (text: string): boolean => /\b(EXEC|EXECUTE)\s+$/i.test(text);
+  /**
+   * "The caret is about to name a stored procedure." T-SQL spells that `EXEC`/`EXECUTE`; PostgreSQL
+   * and MySQL spell it `CALL`, and before J-138 this branch tested for the T-SQL spelling on all
+   * three, so it could never fire for the two engines whose users would type `CALL`. Same decision,
+   * and same wording, as `sql-text.ts:executeProcedure`.
+   */
+  const isAfterExec = (text: string, engine: DatabaseEngine): boolean =>
+    engine === 'mssql' ? /\b(EXEC|EXECUTE)\s+$/i.test(text) : /\bCALL\s+$/i.test(text);
 
   const extractTableName = (text: string): string | null =>
-    /(\[?\w+\]?(?:\.\[?\w+\]?)?)\s*\.$/.exec(text)?.[1] ?? null;
+    IDENTIFIER_BEFORE_DOT.exec(text)?.[1] ?? null;
 
   const isKeyword = (word: string): boolean => ALIAS_STOP_WORDS.includes(word.toUpperCase());
 
   /** alias → table name, from the whole query text. Verbatim (`:503-517`). */
   const extractAliases = (fullText: string): Map<string, string> => {
     const aliases = new Map<string, string>();
-    const pattern = /\b(?:FROM|JOIN)\s+(\[?\w+\]?(?:\.\[?\w+\]?)?)\s+(?:AS\s+)?(\w+)/gi;
+    // Built per call rather than hoisted: it carries `g`, so a shared instance would carry
+    // `lastIndex` from the previous completion request into this one.
+    const pattern =
+      /\b(?:FROM|JOIN)\s+(["`[\]]?\w+["`[\]]?(?:\.["`[\]]?\w+["`[\]]?)?)\s+(?:AS\s+)?(\w+)/gi;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(fullText)) !== null) {
-      const tableName = match[1]?.replace(/[[\]]/g, '');
+      const tableName = match[1]?.replace(IDENTIFIER_DELIMITERS, '');
       const alias = match[2]?.toLowerCase();
       if (tableName === undefined || alias === undefined) continue;
       if (!isKeyword(alias)) aliases.set(alias, tableName);
@@ -500,8 +751,23 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
 
   // ── Completion producers. Kinds, sortText and insertText verbatim (`:368-471`). ────────────
 
-  const keywordCompletions = (range: monaco.IRange): monaco.languages.CompletionItem[] =>
-    SQL_KEYWORDS.map((keyword, index) => ({
+  // Each producer takes the resolved target rather than calling `deps.target()` itself: one
+  // completion request must not straddle two engines if the active tab changes mid-flight, and it
+  // makes the engine an argument a reader can follow rather than an ambient read.
+
+  const cachedFor = <T>(
+    cache: Map<string, readonly T[]>,
+    target: IntellisenseTarget
+  ): readonly T[] => {
+    const key = cacheKeyFor(target);
+    return key === null ? [] : (cache.get(key) ?? []);
+  };
+
+  const keywordCompletions = (
+    target: IntellisenseTarget,
+    range: monaco.IRange
+  ): monaco.languages.CompletionItem[] =>
+    keywordsFor(engineOf(target)).map((keyword, index) => ({
       label: keyword,
       kind: COMPLETION_ITEM_KIND.Keyword,
       insertText: keyword,
@@ -509,8 +775,11 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
       sortText: `0${String(index).padStart(3, '0')}`, // Keywords first
     }));
 
-  const snippetCompletions = (range: monaco.IRange): monaco.languages.CompletionItem[] =>
-    SQL_SNIPPETS.map(snippet => ({
+  const snippetCompletions = (
+    target: IntellisenseTarget,
+    range: monaco.IRange
+  ): monaco.languages.CompletionItem[] =>
+    snippetsFor(engineOf(target)).map(snippet => ({
       label: snippet.label,
       kind: COMPLETION_ITEM_KIND.Snippet,
       detail: snippet.detail,
@@ -520,55 +789,67 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
       sortText: '1', // Snippets after keywords
     }));
 
-  const tableCompletions = (range: monaco.IRange): monaco.languages.CompletionItem[] => {
-    const key = cacheKeyFor(deps.target());
-    const tables = key === null ? [] : (tablesCache.get(key) ?? []);
-    return tables.map(table => ({
-      label: `${table.schema}.${table.name}`,
+  const tableCompletions = (
+    target: IntellisenseTarget,
+    range: monaco.IRange
+  ): monaco.languages.CompletionItem[] => {
+    const engine = engineOf(target);
+    return cachedFor(tablesCache, target).map(table => ({
+      label: displayName(table, engine),
       kind: COMPLETION_ITEM_KIND.Class,
       detail: 'Table',
-      insertText: `[${table.schema}].[${table.name}]`,
+      insertText: qualifiedTable(table.schema, table.name, engine),
       range,
       sortText: '2',
     }));
   };
 
-  const viewCompletions = (range: monaco.IRange): monaco.languages.CompletionItem[] => {
-    const key = cacheKeyFor(deps.target());
-    const views = key === null ? [] : (viewsCache.get(key) ?? []);
-    return views.map(view => ({
-      label: view,
+  const viewCompletions = (
+    target: IntellisenseTarget,
+    range: monaco.IRange
+  ): monaco.languages.CompletionItem[] => {
+    const engine = engineOf(target);
+    // The cache holds schema and name apart, where the port held the joined string and then quoted
+    // the whole of it — `[public.active_customers]`, which is not a reference to anything anywhere.
+    return cachedFor(viewsCache, target).map(view => ({
+      label: displayName(view, engine),
       kind: COMPLETION_ITEM_KIND.Interface,
       detail: 'View',
-      insertText: `[${view}]`,
+      insertText: qualifiedTable(view.schema, view.name, engine),
       range,
       sortText: '3',
     }));
   };
 
-  const procedureCompletions = (range: monaco.IRange): monaco.languages.CompletionItem[] => {
-    const key = cacheKeyFor(deps.target());
-    const procedures = key === null ? [] : (proceduresCache.get(key) ?? []);
-    return procedures.map(procedure => ({
-      label: procedure,
+  const procedureCompletions = (
+    target: IntellisenseTarget,
+    range: monaco.IRange
+  ): monaco.languages.CompletionItem[] => {
+    const engine = engineOf(target);
+    return cachedFor(proceduresCache, target).map(procedure => ({
+      label: displayName(procedure, engine),
       kind: COMPLETION_ITEM_KIND.Function,
       detail: 'Stored Procedure',
-      insertText: procedure,
+      // Quoted, where the port left it bare: a procedure whose name needs quoting is exactly the
+      // case a bare insert breaks, and every engine accepts a quoted routine name after EXEC/CALL.
+      insertText: qualifiedTable(procedure.schema, procedure.name, engine),
       range,
     }));
   };
 
   const columnCompletions = (
+    target: IntellisenseTarget,
     tableName: string,
     range: monaco.IRange
   ): monaco.languages.CompletionItem[] => {
-    const key = cacheKeyFor(deps.target());
-    const tables = key === null ? [] : (tablesCache.get(key) ?? []);
+    const engine = engineOf(target);
 
     // Handle schema.table or just table.
     const parts = tableName.split('.');
-    const searchName = (parts[parts.length - 1] ?? '').replace(/[[\]]/g, '');
-    const table = tables.find(t => t.name.toLowerCase() === searchName.toLowerCase());
+    const searchName = (parts[parts.length - 1] ?? '').replace(IDENTIFIER_DELIMITERS, '');
+    const table = cachedFor(tablesCache, target).find(
+      t => t.name.toLowerCase() === searchName.toLowerCase()
+    );
     if (!table) return [];
 
     return table.columns.map(column => ({
@@ -576,7 +857,7 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
       kind: COMPLETION_ITEM_KIND.Field,
       detail: `${column.dataType}${column.isNullable ? ' (nullable)' : ''}`,
       documentation: column.isPrimaryKey ? 'Primary Key' : undefined,
-      insertText: `[${column.name}]`,
+      insertText: quoteIdentifier(column.name, engine),
       range,
       sortText: '0',
     }));
@@ -584,20 +865,22 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
 
   /** Resolves an alias before falling back to a direct table-name lookup. Verbatim (`:558-574`). */
   const columnCompletionsWithAlias = (
+    target: IntellisenseTarget,
     prefix: string,
     fullText: string,
     range: monaco.IRange
   ): monaco.languages.CompletionItem[] => {
     const aliases = extractAliases(fullText);
-    const cleanPrefix = prefix.replace(/[[\]]/g, '').toLowerCase();
+    const cleanPrefix = prefix.replace(IDENTIFIER_DELIMITERS, '').toLowerCase();
     const resolvedTable = aliases.get(cleanPrefix);
-    return columnCompletions(resolvedTable ?? prefix, range);
+    return columnCompletions(target, resolvedTable ?? prefix, range);
   };
 
   const getContextAwareCompletions = async (
     model: CompletionModel,
     position: CompletionPosition
   ): Promise<{ suggestions: monaco.languages.CompletionItem[] }> => {
+    const target = deps.target();
     const range = rangeFor(model, position);
     const lineContent = model.getLineContent(position.lineNumber);
     const textBeforeCursor = lineContent.substring(0, position.column - 1);
@@ -605,25 +888,25 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
     const suggestions: monaco.languages.CompletionItem[] = [];
 
     if (isAfterFrom(textBeforeCursor) || isAfterJoin(textBeforeCursor)) {
-      suggestions.push(...tableCompletions(range), ...viewCompletions(range));
+      suggestions.push(...tableCompletions(target, range), ...viewCompletions(target, range));
     } else if (isAfterDot(textBeforeCursor)) {
       const prefix = extractTableName(textBeforeCursor);
       if (prefix !== null) {
-        suggestions.push(...columnCompletionsWithAlias(prefix, fullText, range));
+        suggestions.push(...columnCompletionsWithAlias(target, prefix, fullText, range));
       }
-    } else if (isAfterExec(textBeforeCursor)) {
-      suggestions.push(...procedureCompletions(range));
+    } else if (isAfterExec(textBeforeCursor, engineOf(target))) {
+      suggestions.push(...procedureCompletions(target, range));
     } else if (isInWhereClause(textBeforeCursor, fullText)) {
       // In WHERE clause: suggest columns from referenced tables.
       for (const tableName of extractAliases(fullText).values()) {
-        suggestions.push(...columnCompletions(tableName, range));
+        suggestions.push(...columnCompletions(target, tableName, range));
       }
-      suggestions.push(...keywordCompletions(range));
+      suggestions.push(...keywordCompletions(target, range));
     } else {
       suggestions.push(
-        ...keywordCompletions(range),
-        ...snippetCompletions(range),
-        ...tableCompletions(range)
+        ...keywordCompletions(target, range),
+        ...snippetCompletions(target, range),
+        ...tableCompletions(target, range)
       );
     }
 
@@ -633,12 +916,12 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
   // ── Metadata loading ──────────────────────────────────────────────────────────────────────
 
   const loadTableColumns = async (
-    connectionId: string,
-    database: string,
+    target: IntellisenseTarget & { connectionId: string; database: string },
+    schema: string,
     table: ObjectMetadata
   ): Promise<readonly ColumnInfo[]> => {
     try {
-      return await deps.getTableColumns(connectionId, database, table.schema || 'dbo', table.name);
+      return await deps.getTableColumns(target.connectionId, target.database, schema, table.name);
     } catch {
       // Verbatim: one table's columns failing must not lose the other forty-nine.
       return [];
@@ -690,27 +973,30 @@ export function createSqlIntellisense(deps: IntellisenseDeps): SqlIntellisense {
         : Promise.resolve([] as readonly ObjectMetadata[]),
     ]);
 
+    // `|| 'dbo'` was the original's fallback for a schema the explorer did not report, and it was a
+    // T-SQL default handed to every engine. `schemaFallbackFor` answers per engine.
+    const fallbackSchema = schemaFallbackFor(target);
+    const refFor = (metadata: ObjectMetadata): ObjectRef => ({
+      schema: metadata.schema || fallbackSchema,
+      name: metadata.name,
+    });
+
     // Columns for the first 50 tables only — the original's performance bound, kept, and now an
     // explicit slice bound rather than an implicit one (CLAUDE.md: bound every loop).
+    const located = { ...target, connectionId, database };
     const withColumns: TableInfo[] = [];
     for (const table of tables.slice(0, MAX_TABLES_WITH_COLUMNS)) {
+      const ref = refFor(table);
       withColumns.push({
-        schema: table.schema || 'dbo',
-        name: table.name,
-        columns: await loadTableColumns(connectionId, database, table),
+        ...ref,
+        columns: await loadTableColumns(located, ref.schema, table),
       });
     }
     tablesCache.set(key, withColumns);
 
-    // Names only: that is all the view and procedure producers render.
-    viewsCache.set(
-      key,
-      views.map(view => (view.schema ? `${view.schema}.${view.name}` : view.name))
-    );
-    proceduresCache.set(
-      key,
-      procedures.map(p => (p.schema ? `${p.schema}.${p.name}` : p.name))
-    );
+    // Schema and name apart, not joined: the producers quote them as two identifiers.
+    viewsCache.set(key, views.map(refFor));
+    proceduresCache.set(key, procedures.map(refFor));
   };
 
   // ── Registration ──────────────────────────────────────────────────────────────────────────
