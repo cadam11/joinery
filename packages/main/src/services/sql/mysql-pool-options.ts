@@ -60,6 +60,14 @@ export function mysqlPoolOptions(
     connectionLimit: 10,
     waitForConnections: true,
     idleTimeout: 30000,
+    // J-146: `idleTimeout` is inert on its own. mysql2 arms its idle reaper in
+    // the pool constructor only when `maxIdle < connectionLimit`
+    // (`lib/base/pool.js:50-52`), and `maxIdle` defaults to `connectionLimit`
+    // (`lib/pool_config.js:18-20`) — so without this line the 30s timeout above
+    // never starts, and every connection a burst opens is held until the pool
+    // closes. Burst capacity is unchanged at connectionLimit: 10; the pool just
+    // gives the connections back once they go idle.
+    maxIdle: 2,
     // Written explicitly on both branches: `false` is also mysql2's default,
     // but the security property here is the point of the module and should not
     // depend on a driver default staying put.

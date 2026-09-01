@@ -26,8 +26,9 @@
  * then pinned without mocking the pool-manager singleton or the driver.
  */
 import { describe, expect, it } from 'vitest';
+import { createPool, type PoolOptions } from 'mysql2/promise';
 import type { ConnectionProfile } from '@joinery/shared';
-import { mysqlPoolKey, mysqlPoolOptions } from './mysql-pool-options';
+import { MYSQL_POOL_TRUSTS, mysqlPoolKey, mysqlPoolOptions } from './mysql-pool-options';
 
 const baseProfile = (over: Partial<ConnectionProfile> = {}): ConnectionProfile => ({
   id: 'profile-1',
@@ -103,6 +104,74 @@ describe('mysqlPoolOptions', () => {
   it('leaves database undefined when the profile has no default database', () => {
     const opts = mysqlPoolOptions(baseProfile(), undefined, 'restricted', 'secret');
     expect(opts.database).toBeUndefined();
+  });
+});
+
+/**
+ * J-146 — `idleTimeout` is inert unless `maxIdle < connectionLimit`.
+ *
+ * mysql2 starts the idle reaper in the pool constructor, behind exactly that
+ * comparison (`mysql2/lib/base/pool.js:50-52`, v3.23.3):
+ *
+ *     if (this.config.maxIdle < this.config.connectionLimit) {
+ *       // create idle connection timeout automatically release job
+ *       this._removeIdleTimeoutConnections();
+ *     }
+ *
+ * and `maxIdle` defaults to `connectionLimit` (`mysql2/lib/pool_config.js:18-20`):
+ *
+ *     this.maxIdle = isNaN(options.maxIdle)
+ *       ? this.connectionLimit
+ *       : Number(options.maxIdle);
+ *
+ * So a pool that sets `connectionLimit` and `idleTimeout` but no `maxIdle`
+ * never arms the reaper at all — verified empirically in cycle 5, where six
+ * connections opened by six parallel queries were all still open long after
+ * the 30s timeout elapsed. The reaper, once armed, polls every second and
+ * destroys free connections above `maxIdle` or past `idleTimeout`
+ * (`lib/base/pool.js:321-344`).
+ *
+ * These tests drive the REAL mysql2 pool constructor rather than a double, so
+ * they pin the driver's actual arming rule, not our reading of it. Creating a
+ * pool does not connect — mysql2 opens a socket lazily on `getConnection` —
+ * so no server is needed. The pool is always ended: its reaper timer would
+ * otherwise hold the event loop open.
+ */
+describe('mysqlPoolOptions idle reaper (J-146)', () => {
+  /** mysql2 keeps the reaper handle on the core pool; it is not in the public types. */
+  type ReaperProbe = { pool: { _removeIdleTimeoutConnectionsTimer?: NodeJS.Timeout } };
+
+  const reaperArmed = async (options: PoolOptions): Promise<boolean> => {
+    const pool = createPool(options);
+    try {
+      return Boolean((pool as unknown as ReaperProbe).pool._removeIdleTimeoutConnectionsTimer);
+    } finally {
+      await pool.end();
+    }
+  };
+
+  it.each(MYSQL_POOL_TRUSTS)('arms mysql2’s idle reaper on the %s pool', async trust => {
+    const opts = mysqlPoolOptions(baseProfile(), 'app', trust, 'secret');
+    await expect(reaperArmed(opts)).resolves.toBe(true);
+  });
+
+  it.each(MYSQL_POOL_TRUSTS)('keeps maxIdle below connectionLimit on the %s pool', trust => {
+    const opts = mysqlPoolOptions(baseProfile(), 'app', trust, 'secret');
+    expect(opts.maxIdle).toBe(2);
+    expect(opts.connectionLimit).toBe(10);
+    expect(opts.maxIdle).toBeLessThan(opts.connectionLimit as number);
+  });
+
+  it('leaves the reaper disarmed when maxIdle is dropped — the defect this pins', async () => {
+    // The control case: the exact options we ship, minus maxIdle. If this ever
+    // starts passing, mysql2 changed its default and the guard above is moot.
+    const { maxIdle: _dropped, ...withoutMaxIdle } = mysqlPoolOptions(
+      baseProfile(),
+      'app',
+      'restricted',
+      'secret'
+    );
+    await expect(reaperArmed(withoutMaxIdle)).resolves.toBe(false);
   });
 });
 
