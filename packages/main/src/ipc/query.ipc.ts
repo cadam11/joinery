@@ -7,10 +7,8 @@ import * as fs from 'fs';
 import { IPC_CHANNELS } from '@joinery/shared';
 import { SQLConverterService, type ConversionResult } from '../services/sql/sql-converter';
 import { PythonDepsService } from '../services/sql/python-deps';
-import { getDialect } from '../services/sql/dialect';
-import { ConnectionPoolManager } from '../services/sql/connection-pool';
+import { fetchFkRecord } from '../services/sql/fk-record';
 import type {
-  DatabaseEngine,
   PythonDepsResult,
   QueryRequest,
   QueryResult,
@@ -176,65 +174,22 @@ export function registerQueryHandlers(): void {
     }
   );
 
-  // Fetch foreign key referenced record
+  // Fetch foreign key referenced record.
+  //
+  // The row inspector's FK preview (J-145). Everything this used to do inline — dialect selection,
+  // the single-row lookup with its value BOUND rather than escaped into the predicate, MySQL's
+  // restricted pool, and the catalogue decoration that marks the referenced row's primary key —
+  // is in `services/sql/fk-record.ts`, where it is testable without Electron. It deliberately does
+  // NOT go through `QueryExecutor`: that seam takes a SQL string and has nothing to bind values to,
+  // which is exactly why this path used to interpolate a result-set cell.
+  //
+  // Nor does it write to query history, and that is the one behaviour the move gives up: while the
+  // preview ran on QUERY.EXECUTE, every disclosure a user expanded filed an entry. A bound
+  // statement's history row would read `… WHERE "id" = $1` with the value absent, which is a worse
+  // record than none.
   safeHandle(
     IPC_CHANNELS.QUERY.FETCH_FK_RECORD,
-    async (_event, request: FkRecordRequest): Promise<FkRecordResult> => {
-      try {
-        // Through the dialect, not a T-SQL template (J-52). This built
-        // `SELECT TOP 1 * FROM [s].[t] WHERE [c] = N'v'` for EVERY engine — bracket delimiters,
-        // `TOP` and the `N''` prefix are all T-SQL, so on PostgreSQL and MySQL the purpose-built
-        // bridge member was a syntax error and the renderer had to generate its own SQL instead.
-        const dialect = getDialect(
-          ConnectionPoolManager.getInstance().getEngineForProfile(
-            request.connectionId
-          ) as DatabaseEngine
-        );
-
-        const sql = dialect.selectOneByColumnSQL({
-          schema: request.schema,
-          table: request.table,
-          column: request.column,
-          value: request.value,
-        });
-
-        // No trust option: this SQL is dialect-built and single-statement, but
-        // its WHERE value is a cell out of a result set — i.e. arbitrary data
-        // from whatever table the user opened. It runs on the restricted pool,
-        // where a second statement is not expressible (J-137).
-        //
-        // Note what this does NOT cover: the React renderer does not call this
-        // channel. `renderer/features/query/row-detail-panel.tsx` builds its own
-        // per-engine SQL (`fkLookupSql`) and sends it through QUERY.EXECUTE,
-        // because the T-SQL template this handler used to emit was a syntax
-        // error on PostgreSQL and MySQL. So the live FK preview still lands on
-        // the script pool. Moving it back here is what would close that.
-        const result = await queryExecutor.execute({
-          connectionId: request.connectionId,
-          database: request.database,
-          sql,
-          queryId: `fk-lookup-${Date.now()}`,
-        });
-
-        if (!result.success || !result.resultSets?.length || !result.resultSets[0].rows.length) {
-          return {
-            success: false,
-            error: result.error || 'Record not found',
-          };
-        }
-
-        return {
-          success: true,
-          record: result.resultSets[0].rows[0],
-          columns: result.resultSets[0].columns,
-        };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : 'Failed to fetch FK record',
-        };
-      }
-    }
+    async (_event, request: FkRecordRequest): Promise<FkRecordResult> => fetchFkRecord(request)
   );
 
   // Convert SQL between dialects

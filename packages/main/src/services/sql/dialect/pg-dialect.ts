@@ -10,7 +10,7 @@ import type {
   RenameDatabaseOptions,
   DeleteDatabaseOptions,
 } from '@joinery/shared';
-import { SQLDialect, textOf } from './sql-dialect';
+import { SQLDialect } from './sql-dialect';
 import {
   unboundQuery,
   type ParameterisedQuery,
@@ -48,21 +48,14 @@ export class PgDialect extends SQLDialect {
    *
    * This reasoning is the renderer's, from `features/query/fk-lookup.ts`, which had it first and
    * whose SQL this replaces on the main side. J-134 moved it from `formatLiteral` — the
-   * result-set path alone — down to `quoteLiteral`, which every metadata query now goes
-   * through as well.
+   * result-set path alone — down to `quoteLiteral`, which every metadata query then went through
+   * as well. J-135 bound the metadata names and J-145 bound the result-set cell, so what is left
+   * on this escaper is the DDL builders, where a collation and a `pg_stat_activity.datname` are
+   * part of the statement rather than values in it.
    */
   override quoteLiteral(value: string): string {
     const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "''");
     return `E'${escaped}'`;
-  }
-
-  override formatLiteral(value: unknown): string {
-    if (value === null || value === undefined) return 'NULL';
-    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
-    if (typeof value === 'bigint') return String(value);
-    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-
-    return this.quoteLiteral(textOf(value));
   }
 
   quoteIdentifier(name: string): string {

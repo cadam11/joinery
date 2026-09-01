@@ -24,6 +24,7 @@ import { BaseSingleton } from '../../utils/singleton';
 import { ObjectCache } from '../../utils/object-cache';
 import { TsqlBuilder } from '../../utils/tsql-builder';
 import { ConnectionPoolManager } from './connection-pool';
+import { runBoundQuery } from './bound-query';
 import type { SQLDialect } from './dialect';
 import type { ParameterisedQuery } from './dialect/parameterised-query';
 import { tablePropertiesPgDsqlQuery, tablePropertiesPgStandardQuery } from './pg-table-properties';
@@ -65,44 +66,17 @@ export class MetadataService extends BaseSingleton {
    * close a literal or start a statement whatever it contains, on any engine, under any server
    * setting.
    *
-   * A query carrying none stays on the call it used before: the MySQL arm's `query` and, on SQL
-   * Server, `ConnectionPoolManager.query` (`request.batch`), which is where every `TsqlBuilder`
-   * statement still goes — T-SQL has no backslash escape in any configuration, so its
-   * quote-doubling is correct and J-135 leaves it alone.
-   *
-   * The MySQL arm asks for the restricted pool either way (J-137): a second statement is not
-   * expressible on that connection, which is defence in depth behind the binding rather than the
-   * fix itself.
+   * The dispatch itself lives in `bound-query.ts` now that the foreign-key lookup binds too
+   * (J-145); every rule it follows, and why each arm is spelled the way it is, is documented
+   * there. This wrapper exists to keep the call sites below reading as metadata rather than as
+   * plumbing.
    */
   private async queryAny<T>(
     connectionId: string,
     query: ParameterisedQuery,
     database?: string
   ): Promise<T[]> {
-    const engine = this.poolManager.getEngineForProfile(connectionId);
-    const params = [...query.params];
-
-    if (engine === 'postgresql') {
-      const pool = await this.poolManager.getPgPool(connectionId, database);
-      const result = params.length
-        ? await pool.query(query.sql, params)
-        : await pool.query(query.sql);
-      return result.rows as T[];
-    }
-
-    if (engine === 'mysql') {
-      const pool = await this.poolManager.getMySQLPool(connectionId, database, 'restricted');
-      const [rows] = params.length
-        ? await pool.execute(query.sql, params)
-        : await pool.query(query.sql);
-      return rows as T[];
-    }
-
-    // Default: SQL Server
-    const result = params.length
-      ? await this.poolManager.queryWithParams<T>(connectionId, query.sql, params, database)
-      : await this.poolManager.query<T>(connectionId, query.sql, database);
-    return result.recordset;
+    return runBoundQuery<T>(this.poolManager, connectionId, query, database);
   }
 
   constructor() {

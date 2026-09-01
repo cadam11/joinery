@@ -30,7 +30,6 @@ export {
   type RowDetailTarget,
 } from './row-detail-panel';
 export {
-  fkLookupSql,
   fkOpenSql,
   fkTabTitle,
   fkTargetFor,

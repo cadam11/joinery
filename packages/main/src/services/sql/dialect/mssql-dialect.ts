@@ -11,11 +11,14 @@ import type {
   RenameDatabaseOptions,
   DeleteDatabaseOptions,
 } from '@joinery/shared';
-import { SQLDialect, textOf } from './sql-dialect';
+import { SQLDialect } from './sql-dialect';
 import {
+  bindableValue,
+  placeholderFor,
   unboundQuery,
   type ParameterisedQuery,
   type PlaceholderStyle,
+  type ValueBoundQuery,
 } from './parameterised-query';
 import { TsqlBuilder } from '../../../utils/tsql-builder';
 
@@ -39,30 +42,23 @@ export class MSSQLDialect extends SQLDialect {
   protected readonly placeholderStyle: PlaceholderStyle = 'at';
 
   /**
-   * `N'…'` — the national-character prefix, so a value with non-ASCII text compares as itself.
+   * `TOP` goes before the select list here, not `LIMIT` after the predicate.
    *
-   * Quote-doubling only: T-SQL has no backslash escape in any configuration, so doubling
-   * backslashes the way PostgreSQL needs would turn one backslash in the data into two in the
-   * predicate, and the lookup would miss the row (J-52).
+   * The `N'…'` prefix the J-52 literal carried is gone with the literal: a bound string reaches
+   * tedious as NVarChar already, so the Unicode question the prefix answered does not arise.
    */
-  override formatLiteral(value: unknown): string {
-    if (value === null || value === undefined) return 'NULL';
-    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
-    if (typeof value === 'bigint') return String(value);
-    if (typeof value === 'boolean') return value ? '1' : '0';
-
-    return `N${this.quoteLiteral(textOf(value))}`;
-  }
-
-  /** `TOP` goes before the select list here, not `LIMIT` after the predicate. */
-  override selectOneByColumnSQL(ref: {
+  override selectOneByColumnQuery(ref: {
     readonly schema: string;
     readonly table: string;
     readonly column: string;
     readonly value: unknown;
-  }): string {
-    const where = `${this.quoteIdentifier(ref.column)} = ${this.formatLiteral(ref.value)}`;
-    return `SELECT TOP 1 * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where}`;
+  }): ValueBoundQuery {
+    const placeholder = placeholderFor(this.placeholderStyle, 1);
+    const where = `${this.quoteIdentifier(ref.column)} = ${placeholder}`;
+    return {
+      sql: `SELECT TOP 1 * FROM ${this.quoteSchemaObject(ref.schema, ref.table)} WHERE ${where}`,
+      params: [bindableValue(ref.value)],
+    };
   }
 
   quoteIdentifier(name: string): string {

@@ -9,14 +9,16 @@
  *  2. `mergeEnrichedColumns` folds the catalogue's keys onto the driver's columns without touching
  *     the array the grid's `columnDefs` memo is keyed on;
  *  3. the generated SQL is correct **per engine**, which the Angular original and the main
- *     process's own FK handler both get wrong (T-SQL brackets everywhere).
+ *     process's own FK handler both got wrong (T-SQL brackets everywhere). Since J-145 that is
+ *     `fkOpenSql` alone — the preview's lookup is built and bound in the main process, and its
+ *     per-engine form is pinned in `main/services/sql/dialect/dialect.spec.ts` and
+ *     `main/services/sql/fk-record.spec.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { ColumnMetadata } from '@joinery/shared';
 
 import {
-  fkLookupSql,
   fkOpenSql,
   fkTabTitle,
   fkTargetFor,
@@ -297,45 +299,44 @@ describe('sqlLiteral', () => {
   });
 });
 
-describe('fkLookupSql', () => {
+describe('fkOpenSql', () => {
+  /**
+   * The one SQL generator left in this module (J-145). Its sibling `fkLookupSql` — the preview's
+   * own single-row lookup — is gone: that statement is built by the dialect layer in the main
+   * process now, with its value BOUND rather than escaped (`selectOneByColumnQuery` in
+   * `main/services/sql/dialect/sql-dialect.ts`, run by `main/services/sql/fk-record.ts`). What is
+   * generated here is generated to be READ — it goes into a query tab as the user's own editable
+   * text — which is why it still spells the value out.
+   */
   const target = { schema: 'public', table: 'customers', column: 'id', value: 3 };
 
-  it('caps to one row the way each engine spells it', () => {
-    expect(fkLookupSql(target, 'postgresql', 'shop')).toBe(
-      'SELECT * FROM "public"."customers" WHERE "id" = 3 LIMIT 1'
+  it('is a multi-line, uncapped SELECT, per engine, because it is going into a tab', () => {
+    expect(fkOpenSql(target, 'postgresql', 'shop')).toBe(
+      'SELECT *\nFROM "public"."customers"\nWHERE "id" = 3'
     );
-    expect(fkLookupSql({ ...target, schema: 'dbo', table: 'Customers' }, 'mssql', 'shop')).toBe(
-      'SELECT TOP 1 * FROM [dbo].[Customers] WHERE [id] = 3'
+    expect(fkOpenSql({ ...target, schema: 'dbo', table: 'Customers' }, 'mssql', 'shop')).toBe(
+      'SELECT *\nFROM [dbo].[Customers]\nWHERE [id] = 3'
     );
   });
 
   it('writes a bare name on MySQL when the reference is in the connected database', () => {
-    expect(fkLookupSql({ ...target, schema: 'shop' }, 'mysql', 'shop')).toBe(
-      'SELECT * FROM `customers` WHERE `id` = 3 LIMIT 1'
+    expect(fkOpenSql({ ...target, schema: 'shop' }, 'mysql', 'shop')).toBe(
+      'SELECT *\nFROM `customers`\nWHERE `id` = 3'
     );
   });
 
   it('QUALIFIES a MySQL reference into another database, which is what referencedSchema means', () => {
     // A MySQL FK's `referencedSchema` is a DATABASE (`REFERENTIAL_CONSTRAINTS`.
     // `UNIQUE_CONSTRAINT_SCHEMA`), and MySQL allows the constraint across databases. Dropping it —
-    // which `qualifiedTable` does, correctly, for the explorer — sent this lookup to a same-named
+    // which `qualifiedTable` does, correctly, for the explorer — sent this query to a same-named
     // table in the connected database or to nothing at all.
-    expect(fkLookupSql({ ...target, schema: 'crm' }, 'mysql', 'shop')).toBe(
-      'SELECT * FROM `crm`.`customers` WHERE `id` = 3 LIMIT 1'
-    );
     expect(fkOpenSql({ ...target, schema: 'crm' }, 'mysql', 'shop')).toBe(
       'SELECT *\nFROM `crm`.`customers`\nWHERE `id` = 3'
     );
   });
 
   it('quotes an identifier that carries the delimiter itself', () => {
-    expect(fkLookupSql({ ...target, table: 'we"ird' }, 'postgresql', 'db')).toContain('"we""ird"');
-  });
-
-  it('is a multi-line, uncapped SELECT when it is going into a tab', () => {
-    expect(fkOpenSql(target, 'postgresql', 'shop')).toBe(
-      'SELECT *\nFROM "public"."customers"\nWHERE "id" = 3'
-    );
+    expect(fkOpenSql({ ...target, table: 'we"ird' }, 'postgresql', 'db')).toContain('"we""ird"');
   });
 });
 

@@ -1,30 +1,31 @@
 /**
- * J-137 — which MySQL trust level each query channel asks for.
+ * J-137 — which MySQL pool each query channel ends up on.
  *
- * The trust split only holds if the *call sites* keep asking for the right
- * pool, and there is exactly one call site in the whole main process that is
- * entitled to the multi-statement one: `QUERY.EXECUTE`, the editor channel.
- * Everything else — here, `QUERY.FETCH_FK_RECORD`, whose predicate carries a
- * result-set cell value — must leave the option off and get the restricted
- * pool. Without this spec, deleting `{ mysqlTrust: 'script' }` from the editor
- * handler, or adding it to another one, is an invisible change.
+ * The trust split only holds if the *call sites* keep asking for the right pool, and there is
+ * exactly one call site in the whole main process entitled to the multi-statement one:
+ * `QUERY.EXECUTE`, the editor channel. Without this spec, deleting `{ mysqlTrust: 'script' }` from
+ * that handler, or adding it to another one, is an invisible change.
  *
- * Read `QUERY.EXECUTE` as "the channel the renderer runs SQL on", not "the
- * editor": `row-detail-panel.tsx`'s foreign-key preview also uses it, with a
- * predicate built from a result-set cell, because the FETCH_FK_RECORD handler
- * below emits T-SQL and is unusable on PostgreSQL and MySQL. So the value this
- * spec's second case guards is not on the path the app actually takes — the
- * renderer preview is still on the script pool. Recorded here so the next
- * person does not read a green suite as coverage it does not have.
+ * `QUERY.FETCH_FK_RECORD` is the other channel here, and J-145 changed what it proves. It used to
+ * reach the pools through `QueryExecutor` with an escaped literal in its predicate, and — worse —
+ * the React renderer did not call it at all: `row-detail-panel.tsx` built its own SQL and sent it
+ * down `QUERY.EXECUTE`, so the FK preview really did run on the script pool and this spec's second
+ * case guarded a value nothing produced. Now the handler binds its value and goes straight to the
+ * restricted pool (`services/sql/fk-record.ts`), and the renderer is back on it, so what is
+ * asserted below is: the FK lookup never touches `QueryExecutor`, and the pool it asks mysql2 for
+ * is the restricted one.
  *
- * Harness copied from `credentials.ipc.spec.ts`: `electron` is replaced with
- * the members this file touches and the registered handlers are captured so
- * they can be invoked directly. `QueryExecutor` is a **recorder** — it runs no
- * SQL and makes no routing decision of its own, it only records the
- * `(request, options)` pair it was handed, so it cannot make a wrong call site
- * look right. Its surface matches the real class's `execute` /`cancel`.
- * The behaviour of the pools themselves is proved against the live MySQL
- * server in `tests/integration/sql/mysql-pool-trust.spec.ts`.
+ * Harness copied from `credentials.ipc.spec.ts`: `electron` is replaced with the members this file
+ * touches and the registered handlers are captured so they can be invoked directly. `QueryExecutor`
+ * is a **recorder** — it runs no SQL and makes no routing decision of its own, it only records the
+ * `(request, options)` pair it was handed, so it cannot make a wrong call site look right. Its
+ * surface matches the real class's `execute` / `cancel`. The `ConnectionPoolManager` stand-in
+ * likewise records which pool was asked for; its surface is copied from `connection-pool.ts`
+ * (`getDialectForProfile:258`, `getEngineForProfile:267`, `getMySQLPool:733`), and the dialect it
+ * returns is the REAL one, so the SQL below is production's SQL.
+ *
+ * The behaviour of the pools themselves is proved against the live MySQL server in
+ * `tests/integration/sql/mysql-pool-trust.spec.ts`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,6 +36,10 @@ const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   /** Every QueryExecutor.execute call, in order. */
   executed: [] as { sql: string; options: unknown }[],
+  /** Every MySQL pool the FK path asked for. */
+  mysqlPools: [] as { database: string | undefined; trust: string | undefined }[],
+  /** Every statement the FK path sent, and how. */
+  sent: [] as { via: string; sql: string; params: readonly unknown[] }[],
 }));
 
 vi.mock('electron', () => ({
@@ -73,8 +78,33 @@ vi.mock('../services/config/connection-profiles', () => ({
   ConnectionProfilesStore: { getInstance: () => ({ getById: () => undefined }) },
 }));
 
-vi.mock('../services/sql/connection-pool', () => ({
-  ConnectionPoolManager: { getInstance: () => ({ getEngineForProfile: () => 'mysql' }) },
+vi.mock('../services/sql/connection-pool', async () => {
+  const { getDialect } = await import('../services/sql/dialect');
+  return {
+    ConnectionPoolManager: {
+      getInstance: () => ({
+        getEngineForProfile: () => 'mysql',
+        getDialectForProfile: () => getDialect('mysql'),
+        getMySQLPool: async (_id: string, database?: string, trust?: string) => {
+          harness.mysqlPools.push({ database, trust });
+          return {
+            query: async (sql: string) => {
+              harness.sent.push({ via: 'mysql.query(unbound)', sql, params: [] });
+              return [[{ id: 1 }]];
+            },
+            execute: async (sql: string, values?: readonly unknown[]) => {
+              harness.sent.push({ via: 'mysql.execute(bound)', sql, params: values ?? [] });
+              return [[{ id: 1 }]];
+            },
+          };
+        },
+      }),
+    },
+  };
+});
+
+vi.mock('../services/sql/metadata', () => ({
+  MetadataService: { getInstance: () => ({ getEnrichedColumnMetadata: async () => [] }) },
 }));
 
 // Static, not dynamic: vitest hoists the mocks above every import, and this
@@ -88,10 +118,21 @@ async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
   return handler({}, ...args);
 }
 
+const FK_REQUEST = {
+  connectionId: 'c1',
+  database: 'appdb',
+  schema: 'appdb',
+  table: 'orders',
+  column: 'customer_id',
+  value: String.raw`x\'; DROP TABLE t; -- `,
+};
+
 describe('MySQL pool trust per query channel (J-137)', () => {
   beforeEach(() => {
     harness.handlers.clear();
     harness.executed = [];
+    harness.mysqlPools = [];
+    harness.sent = [];
     registerQueryHandlers();
   });
 
@@ -106,20 +147,18 @@ describe('MySQL pool trust per query channel (J-137)', () => {
     expect(harness.executed[0].options).toEqual({ mysqlTrust: 'script' });
   });
 
-  it('runs the FETCH_FK_RECORD handler on the restricted pool', async () => {
-    await invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, {
-      connectionId: 'c1',
-      database: 'appdb',
-      schema: 'appdb',
-      table: 'orders',
-      column: 'customer_id',
-      value: String.raw`x\'; DROP TABLE t; -- `,
-    });
+  it('runs the FK lookup on the restricted pool, bound, without the executor (J-145)', async () => {
+    await invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, FK_REQUEST);
 
-    expect(harness.executed).toHaveLength(1);
-    // Undefined, not `{ mysqlTrust: 'restricted' }`: the executor's default is
-    // restricted, and this handler must not be able to opt out of it.
-    expect(harness.executed[0].options).toBeUndefined();
+    expect(harness.executed).toHaveLength(0);
+    expect(harness.mysqlPools).toEqual([{ database: 'appdb', trust: 'restricted' }]);
+    expect(harness.sent).toEqual([
+      {
+        via: 'mysql.execute(bound)',
+        sql: 'SELECT * FROM `appdb`.`orders` WHERE `customer_id` = ? LIMIT 1',
+        params: [FK_REQUEST.value],
+      },
+    ]);
   });
 
   it('asks for the script pool on exactly one channel', async () => {
@@ -128,19 +167,13 @@ describe('MySQL pool trust per query channel (J-137)', () => {
       database: 'appdb',
       sql: 'SELECT 1',
     } satisfies QueryRequest);
-    await invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, {
-      connectionId: 'c1',
-      database: 'appdb',
-      schema: 'appdb',
-      table: 'orders',
-      column: 'customer_id',
-      value: 'x',
-    });
+    await invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, FK_REQUEST);
 
     const scripted = harness.executed.filter(
       call => (call.options as { mysqlTrust?: string } | undefined)?.mysqlTrust === 'script'
     );
     expect(scripted).toHaveLength(1);
     expect(scripted[0].sql).toBe('SELECT 1');
+    expect(harness.mysqlPools.every(pool => pool.trust === 'restricted')).toBe(true);
   });
 });

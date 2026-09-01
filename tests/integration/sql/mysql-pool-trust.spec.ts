@@ -21,6 +21,11 @@
  * genuinely dropped. Flip the editor to the restricted pool and the
  * "editor still runs a multi-statement script" test goes red instead, which is
  * the other half of the ticket: `multipleStatements` is load-bearing there.
+ *
+ * J-145 added the FK-preview case at the end. Until that ticket the row inspector's preview was
+ * NOT on this handler at all — the renderer built its own SQL and sent it down the editor channel,
+ * i.e. onto the script pool — so the app's most data-driven lookup was the one exception to
+ * everything above. It now binds its value and runs here.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -47,9 +52,16 @@ const { ConnectionPoolManager } = await import('@joinery/main/services/sql/conne
 const { MetadataService } = await import('@joinery/main/services/sql/metadata');
 const { QueryExecutor } = await import('@joinery/main/services/sql/query-executor');
 const { ToolRegistry } = await import('@joinery/main/services/ai/tool-registry');
+const { fetchFkRecord } = await import('@joinery/main/services/sql/fk-record');
 
 /** Two statements, the second destructive. Runs in full iff the connection carries the flag. */
 const STACKED = 'SELECT 1 AS one; DROP TABLE probe_victim';
+
+/**
+ * The same shape as a cell value: a leading backslash to escape the quote an escaper doubles, then
+ * a `;` and a destructive statement. Short enough to be a `VARCHAR(64)` primary key.
+ */
+const FK_CELL_PAYLOAD = String.raw`\'; DROP TABLE probe_victim; --`;
 
 afterEach(async () => {
   // Release Joinery's own pools before the fixture drops the database.
@@ -157,7 +169,7 @@ describe('MySQL callers on the live server', () => {
     });
   });
 
-  it('refuses a stacked statement on an internally-built query (FETCH_FK_RECORD path)', async () => {
+  it('refuses a stacked statement on an internally-built query (QueryExecutor default)', async () => {
     await withFreshDatabase('mysql', async db => {
       await createVictim(db.databaseName);
       const connectionId = registerProfile(db.databaseName);
@@ -170,6 +182,46 @@ describe('MySQL callers on the live server', () => {
 
       expect(await victimExists(db.databaseName), 'probe_victim was dropped').toBe(true);
       expect(result.success).toBe(false);
+    });
+  });
+
+  it('binds the FK preview’s cell value rather than escaping it (J-145)', async () => {
+    // The row inspector's foreign-key preview: the one auto-executing lookup whose predicate
+    // carries a result-set cell. Two claims at once, and the second is the one escaping could not
+    // make — the payload cannot start a statement (probe_victim survives) AND it round-trips
+    // EXACTLY, where the doubled backslash J-134 had to write is lossy under
+    // `NO_BACKSLASH_ESCAPES`. A bound value is neither escaped nor lexed.
+    await withFreshDatabase('mysql', async db => {
+      await createVictim(db.databaseName);
+      const connectionId = registerProfile(db.databaseName);
+
+      await withAdminConnection(db.databaseName, async conn => {
+        await conn.query(
+          'CREATE TABLE fk_target (code VARCHAR(64) PRIMARY KEY, label VARCHAR(64))'
+        );
+        await conn.query('INSERT INTO fk_target (code, label) VALUES (?, ?)', [
+          FK_CELL_PAYLOAD,
+          'found',
+        ]);
+      });
+
+      const result = await fetchFkRecord({
+        connectionId,
+        database: db.databaseName,
+        schema: db.databaseName,
+        table: 'fk_target',
+        column: 'code',
+        value: FK_CELL_PAYLOAD,
+      });
+
+      expect(await victimExists(db.databaseName), 'probe_victim was dropped').toBe(true);
+      expect(result.success).toBe(true);
+      expect(result.record?.label).toBe('found');
+      expect(result.record?.code).toBe(FK_CELL_PAYLOAD);
+      // The primary-key marker the preview draws. Before J-145 it came from the executor's
+      // SQL-parsing enrichment, which only ever ran on SQL Server; the handler is told the table
+      // outright now, so MySQL gets it too.
+      expect(result.columns?.find(column => column.name === 'code')?.isPrimaryKey).toBe(true);
     });
   });
 
