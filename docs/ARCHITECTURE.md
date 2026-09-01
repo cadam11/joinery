@@ -97,7 +97,8 @@ packages/
 
 ## Multi-Database Architecture
 
-Joinery supports multiple database engines through a dialect + provider abstraction.
+Joinery supports multiple database engines through a dialect abstraction over SQL generation, plus
+per-engine pool management inside a single connection-pool manager.
 
 ### SQL Dialect Layer
 
@@ -120,17 +121,26 @@ dialect/
 - All metadata queries (list databases, schemas, tables, columns, indexes, FKs, etc.)
 - Feature flags (`supportsBackupRestore`, `supportsExtendedProperties`, etc.)
 
-### Database Provider Layer
+### Connection Pool Layer
+
+There is no provider-class layer. `ConnectionPoolManager` (connection-pool.ts) holds MSSQL,
+PostgreSQL, and MySQL pools in parallel maps and exposes one getter per engine — `getPool`
+(`mssql`), `getPgPool` (`pg`), `getMySQLPool` (`mysql2`, one pool per trust level) — along with
+each engine's "Test Connection" probe. Callers pick a getter via
+`getEngineForProfile(profileId)`.
+
+Pool options that are worth testing without standing up a driver live in pure builder modules
+beside it:
 
 ```
-provider/
-├── database-provider.ts  # Abstract base class
-├── pg-provider.ts        # PostgreSQL provider using node-postgres
-└── mysql-provider.ts     # MySQL provider using mysql2
+connection-pool.ts            # Pools, probes, SSH tunnels, engine routing
+mysql-pool-options.ts         # mysql2 options + cache keys, per trust level
+aurora-dsql-pool-options.ts   # Aurora DSQL (IAM-token) pg options
 ```
 
-The `ConnectionPoolManager` (connection-pool.ts) manages MSSQL, PostgreSQL, and MySQL pools in
-parallel maps and routes operations based on `profile.engine`.
+An abstract `DatabaseProvider` hierarchy (`sql/provider/`, with `PgProvider` and `MySQLProvider`)
+existed until J-148 but was never wired to anything; it was deleted rather than completed. Git
+history has it if the abstraction is ever wanted.
 
 ### Connection Profile
 
@@ -150,10 +160,9 @@ Legacy profiles without `engine` are backfilled to `'mssql'` at read time.
 Joinery ships three engines (SQL Server, PostgreSQL, MySQL) today. To add a fourth:
 
 1. Create `dialect/<engine>-dialect.ts` extending `SQLDialect`
-2. Create `provider/<engine>-provider.ts` extending `DatabaseProvider`
-3. Register in `dialect/index.ts`
-4. Add pool management in `connection-pool.ts`
-5. Add routing in `query-executor.ts`
+2. Register it in `dialect/index.ts`
+3. Add a pool getter and a "Test Connection" probe in `connection-pool.ts`
+4. Add routing in `query-executor.ts`
 
 ## IPC Communication
 

@@ -78,11 +78,12 @@ export function mysqlPoolOptions(
 /**
  * Options for the throwaway pool behind "Test Connection" (J-149).
  *
- * Both probe paths — `ConnectionPoolManager.testMySQLConnection` and
- * `MySQLProvider.testConnection` — used to hand-roll their own copy of the
- * option literal, and both had already drifted from the builder above (neither
- * ever received J-146's `maxIdle`). Deriving them here means a future change to
- * the shared options reaches the probe by construction.
+ * The probe path — `ConnectionPoolManager.testMySQLConnection` — used to
+ * hand-roll its own copy of the option literal, and that copy had already
+ * drifted from the builder above (it never received J-146's `maxIdle`).
+ * Deriving it here means a future change to the shared options reaches the
+ * probe by construction. (J-149 also derived a second copy, in the unused
+ * `MySQLProvider.testConnection`; J-148 deleted that never-constructed class.)
  *
  * `restricted` trust: the probe sends one statement, `SELECT VERSION() AS
  * version, DATABASE() AS name`, and has no business holding a connection that
