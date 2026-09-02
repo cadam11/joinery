@@ -21,6 +21,7 @@ import { logStore } from '../state/logs';
 import { tabStore } from '../state/tab';
 import { workbenchStore } from '../state/workbench';
 import { IpcQueryProvider } from '../ipc';
+import { registeredExitFlushNames } from '../persistence/flush-on-exit';
 import { AppShell } from './app-shell';
 import { bootStore, resetBootLatch, runBoot } from './boot';
 import { MENU_CHANNELS } from './menu-bridge';
@@ -111,6 +112,7 @@ afterEach(async () => {
   chatPanelStore.getState().closePanel();
   tabStore.getState().closeAllTabs();
   workbenchStore.getState().setSidebarCollapsed(false);
+  workbenchStore.getState().resetSidebarWidth();
 });
 
 describe('the app shell', () => {
@@ -281,6 +283,33 @@ describe('the app shell', () => {
     expect(screen.queryByTestId('restore-dialog')).toBeNull();
     // The placeholder is gone entirely, not merely unreachable.
     expect(screen.queryByTestId('placeholder-dialog-restore')).toBeNull();
+  });
+
+  it('registers every debounced writer with the exit flush while it is mounted (J-74)', async () => {
+    await mountShell();
+
+    // Wiring, asserted rather than reviewed by eye: a writer that forgets to register loses its
+    // pending value on the way out, and nothing else in the app would notice.
+    expect([...registeredExitFlushNames()].sort()).toEqual([
+      'open tabs',
+      'shell geometry',
+      'workspace layout',
+    ]);
+  });
+
+  it('flushes a resize that happened inside the debounce window when the window goes away (J-74)', async () => {
+    await mountShell();
+    const before = bridge.calls.setState;
+
+    // The reported bug: drag the sidebar, quit inside the 250ms debounce window, and the width is
+    // gone — the timer died with the page, so main never even had the value to flush to disk.
+    workbenchStore.getState().setSidebarWidth(420);
+    expect(bridge.calls.setState).toBe(before);
+
+    window.dispatchEvent(new Event('beforeunload'));
+
+    expect(bridge.calls.setState).toBe(before + 1);
+    expect(bridge.snapshot().sidebarWidth).toBe(420);
   });
 
   it('opens the welcome tab on the View ▸ Welcome command', async () => {

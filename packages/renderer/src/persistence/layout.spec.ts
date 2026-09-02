@@ -8,7 +8,7 @@
  *    is no migration, by decision.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LayoutConfig } from '@joinery/shared';
 import { installJoineryMock, removeJoineryMock } from '../test/joinery-mock';
 import { createAppStateDouble, type AppStateDouble } from '../test/app-state-double';
@@ -18,6 +18,7 @@ import {
   createLayoutPersistence,
   decodeReactLayout,
   encodeReactLayout,
+  LAYOUT_SAVE_DEBOUNCE_MS,
   REACT_LAYOUT_COMPONENT_TYPE,
   REACT_LAYOUT_VERSION,
   type ReactLayoutPayload,
@@ -170,6 +171,98 @@ describe('layout persistence', () => {
     expect(snapshot.goldenLayoutConfig).toEqual(FOREIGN_LAYOUT);
     expect(decodeReactLayout(seeded.snapshot().workspaceLayout)).toEqual(PAYLOAD);
     expect(seeded.calls.setState).toBe(0);
+  });
+
+  describe('the debounced write, and the flush that empties it on the way out (J-74)', () => {
+    // The debounce used to live in `shell/workspace/workspace.tsx` as a `useRef` timer whose only
+    // cleanup DISCARDED the pending arrangement, so a panel moved inside the 500ms window and
+    // followed by the window going away was lost. It lives here now, next to the write it delays,
+    // which is also the only place it can be asserted with fake timers.
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('collapses a burst of layout changes into one write', () => {
+      const layout = unlockedPersistence();
+
+      for (let i = 0; i < 5; i += 1) layout.scheduleSave(() => PAYLOAD);
+      expect(bridge.calls.saveLayout).toBe(0);
+
+      vi.advanceTimersByTime(LAYOUT_SAVE_DEBOUNCE_MS);
+      expect(bridge.calls.saveLayout).toBe(1);
+    });
+
+    it('reads the arrangement when the write goes out, not when it was scheduled', () => {
+      // Dockview fires `onDidLayoutChange` per change, including while a sash is dragged.
+      // Serializing the dock on each one would put back the cost the debounce exists to avoid.
+      const layout = unlockedPersistence();
+      let reads = 0;
+      const readPayload = (): ReactLayoutPayload => {
+        reads += 1;
+        return PAYLOAD;
+      };
+
+      layout.scheduleSave(readPayload);
+      layout.scheduleSave(readPayload);
+      expect(reads).toBe(0);
+
+      vi.advanceTimersByTime(LAYOUT_SAVE_DEBOUNCE_MS);
+      expect(reads).toBe(1);
+    });
+
+    it('persists an arrangement changed inside the debounce window', () => {
+      const layout = unlockedPersistence();
+
+      layout.scheduleSave(() => PAYLOAD);
+      vi.advanceTimersByTime(100);
+      expect(bridge.calls.saveLayout).toBe(0);
+
+      layout.flushPendingSave();
+
+      expect(bridge.calls.saveLayout).toBe(1);
+      expect(decodeReactLayout(bridge.snapshot().workspaceLayout)).toEqual(PAYLOAD);
+    });
+
+    it('does not write a second time when the debounce would have fired', () => {
+      const layout = unlockedPersistence();
+
+      layout.scheduleSave(() => PAYLOAD);
+      layout.flushPendingSave();
+      vi.advanceTimersByTime(LAYOUT_SAVE_DEBOUNCE_MS);
+
+      expect(bridge.calls.saveLayout).toBe(1);
+    });
+
+    it('writes nothing when no save is pending', () => {
+      unlockedPersistence().flushPendingSave();
+
+      expect(bridge.calls.saveLayout).toBe(0);
+    });
+
+    it('drops a pending save when the workspace cancels it', () => {
+      // A hot reload or a remount: the component that scheduled it is going away and its dock
+      // handle with it, so the arrangement it captured must not be written by a stray timer.
+      const layout = unlockedPersistence();
+
+      layout.scheduleSave(() => PAYLOAD);
+      layout.cancelPendingSave();
+      vi.advanceTimersByTime(LAYOUT_SAVE_DEBOUNCE_MS);
+
+      expect(bridge.calls.saveLayout).toBe(0);
+    });
+
+    it('does not fire an IPC call after the bridge has gone', () => {
+      const layout = unlockedPersistence();
+      layout.scheduleSave(() => PAYLOAD);
+      removeJoineryMock();
+
+      expect(() => layout.flushPendingSave()).not.toThrow();
+      expect(bridge.calls.saveLayout).toBe(0);
+    });
   });
 
   it('reports an unavailable bridge rather than throwing', async () => {
