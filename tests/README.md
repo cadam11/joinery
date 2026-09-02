@@ -104,6 +104,21 @@ A test run therefore leaves exactly one stray keychain item, `ca.adam11.joinery.
 Keychain Access (or `security delete-generic-password -s ca.adam11.joinery.tests`) whenever you like;
 the next run recreates it.
 
+### Launchers that start a PACKAGED bundle
+
+`scripts/release/smoke-packaged-app.ts` is the one launcher that boots `Joinery.app` rather than
+`packages/main/dist/index.js`, and setting the environment pin is not enough for it: a shipped,
+signed app is the binary the user has already trusted with their keychain, so it must not let the
+environment aim it somewhere else. The way back in for a test is a property of the ARTIFACT —
+`pnpm run package:test` writes `Contents/Resources/joinery-test-build` into the bundle, nothing in
+the environment can forge it, and `pnpm run verify:package` fails on a release bundle that carries
+it (J-167).
+
+`keychain-service-isolation.spec.ts` therefore splits its launch sites in two. Every launcher must
+set `JOINERY_KEYCHAIN_SERVICE` and must not name the production service; a packaged launcher must
+additionally refuse a bundle that was not stamped, which `assertBundleIsTestCapable` does before
+Electron starts.
+
 ## What's running in the test network
 
 Defined in [`docker-compose.test.yml`](./docker-compose.test.yml). Host ports are deliberately non-standard so they don't clash with anything you already have running.
