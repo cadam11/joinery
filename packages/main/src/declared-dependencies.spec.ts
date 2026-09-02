@@ -46,21 +46,31 @@ function readEntries(dir: string): Dirent<string>[] {
   }
 }
 
+/** What a scan reads: package sources are TypeScript and CSS, root tooling is also plain JS. */
+const PACKAGE_SOURCE = /\.(ts|tsx|css)$/;
+const ROOT_SOURCE = /\.(ts|mts|cts|js|mjs|cjs)$/;
+
+/** Directories no scan descends into. `tests/reports` holds generated artefacts, not source. */
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'reports', '.cache']);
+
 /** Depth-bounded so a symlink cycle cannot spin this forever. */
-function walk(dir: string, prefix: string, out: Array<[string, string]>, depth = 0): void {
+function walk(
+  dir: string,
+  prefix: string,
+  out: Array<[string, string]>,
+  include: RegExp,
+  depth = 0
+): void {
   if (depth > 12) throw new Error(`dependency scan exceeded depth 12 at ${dir}`);
 
   for (const entry of readEntries(dir)) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
-      if (entry.name === '__tests__' || entry.name === '__mocks__' || entry.name === 'test')
-        continue;
-      walk(full, `${prefix}/${entry.name}`, out, depth + 1);
+      if (SKIP_DIRS.has(entry.name)) continue;
+      walk(full, `${prefix}/${entry.name}`, out, include, depth + 1);
       continue;
     }
-    if (!/\.(ts|tsx|css)$/.test(entry.name)) continue;
-    if (/\.(spec|test)\.tsx?$/.test(entry.name)) continue;
+    if (!include.test(entry.name)) continue;
     out.push([`${prefix}/${entry.name}`, readFileSync(full, 'utf8')]);
   }
 }
@@ -102,11 +112,8 @@ export function packageNameOf(specifier: string): string | null {
   return name;
 }
 
-/** `[packageName, sourceFile]` for every bare specifier the package's production sources import. */
-function importsOf(pkg: string): Array<[string, string]> {
-  const sources: Array<[string, string]> = [];
-  walk(join(PACKAGES_DIR, pkg, 'src'), pkg, sources);
-
+/** `[packageName, sourceFile]` for every bare specifier in the given `[path, text]` sources. */
+function specifiersIn(sources: Array<[string, string]>): Array<[string, string]> {
   const found: Array<[string, string]> = [];
   for (const [path, text] of sources) {
     const code = stripComments(text);
@@ -120,9 +127,34 @@ function importsOf(pkg: string): Array<[string, string]> {
   return found;
 }
 
+/** A workspace package's production sources. Spec, mock and fixture files are out of scope. */
+function importsOf(pkg: string): Array<[string, string]> {
+  const sources: Array<[string, string]> = [];
+  walk(join(PACKAGES_DIR, pkg, 'src'), pkg, sources, PACKAGE_SOURCE);
+  return specifiersIn(
+    sources.filter(
+      ([path]) => !/\.(spec|test)\.tsx?$/.test(path) && !/\/(__tests__|__mocks__|test)\//.test(path)
+    )
+  );
+}
+
+/**
+ * The repository's own tooling: `scripts/` (packaging, release, the asar acceptance check) and
+ * `tests/` (every tier outside the packages). No package owns either tree, so their imports are
+ * the ROOT manifest's to declare — and nothing checked that until J-27. `scripts/verify-package.js`
+ * had been reaching a `@electron/asar` it never declared, resolved only because electron-builder
+ * happens to depend on it and the hoisted layout puts it at the top of `node_modules`.
+ */
+function rootToolingImports(): Array<[string, string]> {
+  const sources: Array<[string, string]> = [];
+  walk(join(PACKAGES_DIR, '..', 'scripts'), 'scripts', sources, ROOT_SOURCE);
+  walk(join(PACKAGES_DIR, '..', 'tests'), 'tests', sources, ROOT_SOURCE);
+  return specifiersIn(sources);
+}
+
 /** Every dependency field of a manifest, flattened. Which field is not this spec's business. */
-function declaredIn(pkg: string): Set<string> {
-  const manifest = JSON.parse(readFileSync(join(PACKAGES_DIR, pkg, 'package.json'), 'utf8')) as {
+function declaredIn(manifestPath: string): Set<string> {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
@@ -150,12 +182,28 @@ describe('workspace dependency declarations', () => {
   });
 
   it.each(workspacePackages())('packages/%s declares every package its source imports', pkg => {
-    const declared = declaredIn(pkg);
+    const declared = declaredIn(join(PACKAGES_DIR, pkg, 'package.json'));
     const undeclared = importsOf(pkg)
       .filter(([name]) => !declared.has(name) && !UNDECLARED_BY_DESIGN.has(name))
       .map(([name, path]) => `${name} (imported by ${path})`);
 
     expect([...new Set(undeclared)].sort()).toEqual([]);
+  });
+
+  it('the root manifest declares every package scripts/ and tests/ import', () => {
+    const declared = declaredIn(join(PACKAGES_DIR, '..', 'package.json'));
+    const undeclared = rootToolingImports()
+      .filter(([name]) => !name.startsWith('@joinery/'))
+      .filter(([name]) => !declared.has(name) && !UNDECLARED_BY_DESIGN.has(name))
+      .map(([name, path]) => `${name} (imported by ${path})`);
+
+    expect([...new Set(undeclared)].sort()).toEqual([]);
+  });
+
+  it('scanned scripts/ and tests/ at all, so that pass cannot be vacuous', () => {
+    const names = new Set(rootToolingImports().map(([name]) => name));
+    expect(names).toContain('@electron/asar');
+    expect(names).toContain('@playwright/test');
   });
 
   it('reads real imports, not prose that happens to contain the word from', () => {

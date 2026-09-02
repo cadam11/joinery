@@ -8,6 +8,19 @@ packages:
 # that packaged and signed cleanly but crashed on the first database connection.
 # asar also cannot follow symlinks — see scripts/workspace-links.js.
 #
+# J-27 re-measured that against electron-builder 26.15.3 + pnpm 11.21.0 and the
+# omission no longer reproduces: with `nodeLinker: isolated`, `pnpm run package:dir`
+# exits 0, `pnpm run verify:package` loads all 13 modules from inside the archive,
+# `pnpm run smoke:package` boots the bundle, and the archive's package set is a
+# strict SUPERSET of the hoisted one (+abort-controller, buildcheck, color-convert,
+# color-name, event-target-shim, events, process; nothing missing, 80 MB either way).
+# The flip did NOT ship with J-27 because two proofs were unavailable: the packaged
+# smoke tier (J-88), which needs a Docker engine that could not start containers that
+# day, and the Windows leg of the release build, which no PR-time CI job exercises.
+# What J-27 did land is the prerequisite — every import declared where it is made,
+# including the three root ones the isolated layout exposed (@electron/asar,
+# @types/node, @types/mssql) — so the flip is now a one-line change plus that proof.
+#
 # NOTE: pnpm 11 reads these settings ONLY from this file. The same keys in
 # .npmrc are silently ignored (`pnpm config get node-linker` -> undefined).
 nodeLinker: hoisted
