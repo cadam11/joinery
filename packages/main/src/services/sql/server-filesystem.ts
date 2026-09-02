@@ -317,25 +317,6 @@ export class ServerFilesystemService extends BaseSingleton {
   }
 
   /**
-   * Check if a path exists on the server
-   */
-  async pathExists(connectionId: string, path: string): Promise<boolean> {
-    const safePath = sanitizeServerPath(path);
-    const sql = `
-      DECLARE @exists INT;
-      EXEC master.dbo.xp_fileexist N'${safePath}', @exists OUTPUT;
-      SELECT @exists as exists;
-    `;
-
-    try {
-      const result = await this.poolManager.query<{ exists: number }>(connectionId, sql);
-      return result.recordset[0]?.exists === 1;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Get the parent directory of a path
    */
   getParentPath(path: string): string {
