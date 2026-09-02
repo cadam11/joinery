@@ -399,6 +399,17 @@ export interface JoineryAPI {
       },
       content: string
     ) => Promise<{ canceled: boolean; filePath?: string }>;
+    /**
+     * The quit half of J-74's flush-on-exit contract. Main asks before it writes anything to disk;
+     * the renderer empties its debounced writes and then calls `reportFlushed`. Unload events do
+     * not cover a macOS ⌘Q — `app.exit(0)` closes windows without emitting `close` — so this
+     * exchange is the only thing standing between a drag one tick before ⌘Q and a lost value.
+     *
+     * `reportFlushed` is one-way (`send`, per the project's IPC pattern note) because there is
+     * nothing for main to answer; main's wait is bounded and it quits regardless.
+     */
+    onFlushBeforeQuit: (callback: () => void) => () => void;
+    reportFlushed: () => void;
   };
 
   workspace: {
@@ -818,6 +829,9 @@ const joineryAPI: JoineryAPI = {
     getLayout: () => ipcRenderer.invoke(IPC_CHANNELS.APP.GET_LAYOUT),
     saveToFile: (options, content) =>
       ipcRenderer.invoke(IPC_CHANNELS.APP.SAVE_TO_FILE, options, content),
+    onFlushBeforeQuit: callback =>
+      createEventListener<void>(IPC_CHANNELS.APP.FLUSH_BEFORE_QUIT, () => callback()),
+    reportFlushed: () => ipcRenderer.send(IPC_CHANNELS.APP.FLUSH_BEFORE_QUIT_DONE),
   },
 
   workspace: {

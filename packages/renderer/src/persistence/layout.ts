@@ -120,12 +120,13 @@ export interface LayoutPersistence {
    */
   scheduleSave(readPayload: ReadLayoutPayload): void;
   /**
-   * Sends a pending debounced save now; a no-op when nothing is pending. Registered with
-   * `flush-on-exit.ts` by the shell — J-74: the debounce used to be a `useRef` timer in
-   * `shell/workspace/workspace.tsx` whose only cleanup DISCARDED the pending arrangement, so a
-   * panel moved inside the window and followed by the window going away was lost.
+   * Sends a pending debounced save now and resolves once it has landed; a no-op when nothing is
+   * pending. Registered with `flush-on-exit.ts` by the shell — J-74: the debounce used to be a
+   * `useRef` timer in `shell/workspace/workspace.tsx` whose only cleanup DISCARDED the pending
+   * arrangement, so a panel moved inside the window and followed by the window going away was
+   * lost.
    */
-  flushPendingSave(): void;
+  flushPendingSave(): Promise<void>;
   /**
    * Drops a pending save without sending it. For the workspace tearing down (a hot reload, a
    * remount): the dock handle its `readPayload` closed over is going away with it.
@@ -164,11 +165,11 @@ export function createLayoutPersistence(): LayoutPersistence {
    * two resources above are cleared before the write rather than after it — so a `readPayload`
    * that throws cannot leave a pending save that no timer will ever fire.
    */
-  const writePending = (): void => {
+  const writePending = (): Promise<void> => {
     const readPayload = pendingRead;
     saveTimeout = null;
     pendingRead = null;
-    if (!readPayload) return;
+    if (!readPayload) return Promise.resolve();
 
     let payload: ReactLayoutPayload;
     try {
@@ -177,12 +178,12 @@ export function createLayoutPersistence(): LayoutPersistence {
       // Reading the dock is the caller's code, and this runs from a timer or an unload listener —
       // neither has a caller to catch a throw, so it would surface as an uncaught error.
       diagnostics.error('failed to read the workspace arrangement to persist it', error);
-      return;
+      return Promise.resolve();
     }
 
     // `locked` is the restore-before-save gate doing its job and `unavailable` is browser mode —
     // neither is a failure, and `failed` has already logged its own cause inside `save`.
-    void persistence.save(payload).then(result => {
+    return persistence.save(payload).then(result => {
       if (result !== 'locked') return;
       diagnostics.warn('layout change discarded: the workspace has not finished restoring', {
         activeTabId: payload.activeTabId,
@@ -200,15 +201,16 @@ export function createLayoutPersistence(): LayoutPersistence {
     scheduleSave: readPayload => {
       if (saveTimeout) clearTimeout(saveTimeout);
       pendingRead = readPayload;
-      saveTimeout = setTimeout(writePending, LAYOUT_SAVE_DEBOUNCE_MS);
+      // Nothing to await on the timer path: `writePending` reports its own failures.
+      saveTimeout = setTimeout(() => void writePending(), LAYOUT_SAVE_DEBOUNCE_MS);
     },
 
     flushPendingSave: () => {
       // The pending-timer check is what makes this safe to call on every exit: with nothing
       // pending there is nothing to write, so an exit cannot turn into a write of its own.
-      if (!saveTimeout) return;
+      if (!saveTimeout) return Promise.resolve();
       clearTimeout(saveTimeout);
-      writePending();
+      return writePending();
     },
 
     cancelPendingSave: () => {

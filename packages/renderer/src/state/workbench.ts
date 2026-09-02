@@ -81,12 +81,15 @@ export interface WorkbenchState {
   readonly hydrate: () => Promise<void>;
 
   /**
-   * Sends the pending debounced write now; a no-op when nothing is pending. Registered with
-   * `persistence/flush-on-exit.ts` by the shell, which is its only caller — J-74 was a drag inside
-   * the 250ms window followed by the window going away, which dropped the value entirely because
-   * the timer died with the page before the IPC call was ever made.
+   * Sends the pending debounced write now and resolves once it has landed; a no-op when nothing is
+   * pending. Registered with `persistence/flush-on-exit.ts` by the shell, which is its only caller
+   * — J-74 was a drag inside the 250ms window followed by the window going away, which dropped the
+   * value entirely because the timer died with the page before the IPC call was ever made.
+   *
+   * The promise matters on the quit path: main does not write `AppState` to disk until the renderer
+   * says it is done, so "done" has to mean the `setState` call has been processed, not merely sent.
    */
-  readonly flushPendingWrites: () => void;
+  readonly flushPendingWrites: () => Promise<void>;
 
   readonly setSidebarWidth: (width: number) => void;
   readonly resetSidebarWidth: () => void;
@@ -113,10 +116,10 @@ export function createWorkbenchStore() {
      * Task 16's object-search suite, which toggles the sidebar and then unmounts inside the
      * debounce window.
      */
-    const writeNow = (): void => {
-      if (!isIpcAvailable()) return;
+    const writeNow = (): Promise<void> => {
+      if (!isIpcAvailable()) return Promise.resolve();
       try {
-        void ipc()
+        return ipc()
           .app.setState({
             sidebarWidth: get().sidebarWidth,
             sidebarCollapsed: get().sidebarCollapsed,
@@ -126,6 +129,7 @@ export function createWorkbenchStore() {
           .catch((error: unknown) => diagnostics.error('failed to persist shell geometry', error));
       } catch (error) {
         diagnostics.error('failed to persist shell geometry', error);
+        return Promise.resolve();
       }
     };
 
@@ -134,7 +138,8 @@ export function createWorkbenchStore() {
       if (saveTimeout) clearTimeout(saveTimeout);
       saveTimeout = setTimeout(() => {
         saveTimeout = null;
-        writeNow();
+        // Nothing to await on the timer path: `writeNow` reports its own failures.
+        void writeNow();
       }, SAVE_DEBOUNCE_MS);
     };
 
@@ -177,10 +182,10 @@ export function createWorkbenchStore() {
       flushPendingWrites: () => {
         // The pending-timer check is what makes this safe to call on every exit: with nothing
         // pending there is nothing to write, so an exit cannot turn into a write of its own.
-        if (!saveTimeout) return;
+        if (!saveTimeout) return Promise.resolve();
         clearTimeout(saveTimeout);
         saveTimeout = null;
-        writeNow();
+        return writeNow();
       },
 
       setSidebarWidth: width => {

@@ -24,24 +24,36 @@
  * listeners, and `registeredExitFlushNames()` makes the shell's wiring assertable in a test rather
  * than reviewable by eye.
  *
- * ── The one thing to know about the quit path ─────────────────────────────────────────────────
+ * ── Two ways out, because one is not enough ───────────────────────────────────────────────────
  *
- * `beforeunload` / `pagehide` cover a window close and a reload. They do NOT cover a macOS ⌘Q:
- * `main/src/index.ts`'s `before-quit` handler calls `event.preventDefault()` and then `app.exit(0)`
- * (`:153-156,255`), and `app.exit` closes windows without emitting a `close`, so no unload event
- * reaches this renderer. Closing that hole needs main to ask the renderer to flush and to wait for
- * the answer before it flushes `AppStateStore` — a new IPC channel and a reordered shutdown
- * sequence, both outside J-74's scope. It has its own follow-up ticket.
+ * **Unload.** `beforeunload` / `pagehide` cover a window close and a reload. Nothing can be awaited
+ * there — the page is going away — so those writes are fire-and-forget and rely on main receiving
+ * them before it is told to quit.
+ *
+ * **The quit request.** Unload events do NOT fire for a macOS ⌘Q, which is the ordinary quit
+ * gesture: `main/src/index.ts`'s `before-quit` handler calls `event.preventDefault()` so it can run
+ * its own cleanup and ends at `app.exit(0)`, and `app.exit` closes windows *immediately without
+ * emitting `close`*. So main asks instead, over `APP.FLUSH_BEFORE_QUIT`, and waits (bounded) for
+ * the answer this module sends back. Here the flush IS awaited before the reply, which is what
+ * makes the reply mean something: when main sees it, the values are already in its cache and its
+ * own `AppStateStore.flush()` will write them.
+ *
+ * Both paths can fire in one quit (a window close on Windows/Linux does), and the second is a
+ * no-op: every writer returns early with no pending timer.
  */
 
-import { isIpcAvailable } from '../ipc';
+import { ipc, isIpcAvailable } from '../ipc';
 import { diagnostics } from '../state/diagnostics';
 
 /**
- * Sends a writer's pending debounced write now. Must be a no-op when nothing is pending — this
- * runs on the way out, and a spurious write is a write racing a bridge that is being torn down.
+ * Sends a writer's pending debounced write now, and resolves once it has landed. Must be a no-op
+ * when nothing is pending — this runs on the way out, and a spurious write is a write racing a
+ * bridge that is being torn down.
+ *
+ * The `Promise` is what the quit path awaits before answering main; the unload path cannot await
+ * anything and ignores it.
  */
-export type PendingWriteFlush = () => void;
+export type PendingWriteFlush = () => Promise<void> | void;
 
 /** Registered writers, by the name that identifies them in a diagnostic. Insertion-ordered. */
 const flushers = new Map<string, PendingWriteFlush>();
@@ -70,25 +82,47 @@ export function registeredExitFlushNames(): readonly string[] {
 }
 
 /**
- * Empties every registered writer once.
+ * Empties every registered writer once, and resolves when they have all landed.
  *
  * The bridge check is the guard the ticket asks for: every flush ends in an IPC call, `ipc()`
  * throws synchronously when the preload bridge has gone, and a throw inside an unload listener has
  * no caller to catch it. Each writer re-checks for itself; this is the single place that says so.
  *
- * One writer's failure must not cost the others theirs, so each is called inside its own `try`
- * and the failure is reported rather than swallowed.
+ * One writer's failure must not cost the others theirs, so each is called inside its own `try`,
+ * the async ones are settled rather than raced, and every failure is reported rather than
+ * swallowed. Never rejects: on the quit path a rejection here would strand main's bounded wait.
  */
-export function flushPendingWritesOnExit(): void {
+export async function flushPendingWritesOnExit(): Promise<void> {
   if (!isIpcAvailable()) return;
 
+  const landings: Promise<void>[] = [];
   for (const [name, flush] of [...flushers]) {
     try {
-      flush();
+      const landing = flush();
+      if (isThenable(landing)) landings.push(landing.catch(reportFailure(name)));
     } catch (error) {
-      diagnostics.error(`failed to flush pending writes for ${name}`, error);
+      reportFailure(name)(error);
     }
   }
+
+  await Promise.all(landings);
+}
+
+/**
+ * A thenable check rather than a truthiness one. The union return type does reject a stray value at
+ * compile time — a `Promise<void> | void` parameter is not bare `void`, so TypeScript's
+ * void-return relaxation does not apply and `() => list.push(x)` is an error, which is how the
+ * mistake was caught while writing this. The runtime check stays as the backstop for the same value
+ * arriving from anywhere the compiler is not looking, because the cost of being wrong is a `.catch`
+ * on a number: a throw inside an unload listener, with no caller to catch it, on the one path where
+ * the user's unsaved work is at stake.
+ */
+function isThenable(value: Promise<void> | void): value is Promise<void> {
+  return typeof (value as Promise<void> | undefined)?.then === 'function';
+}
+
+function reportFailure(name: string): (error: unknown) => void {
+  return error => diagnostics.error(`failed to flush pending writes for ${name}`, error);
 }
 
 /**
@@ -100,13 +134,54 @@ export function flushPendingWritesOnExit(): void {
  * no-ops with nothing pending), so a page that fires both flushes once and writes once.
  */
 export function installExitFlush(): () => void {
-  const onExit = (): void => flushPendingWritesOnExit();
+  // `void`, not awaited: an unload listener runs to completion or not at all, and the writes are
+  // already on their way over IPC by the time it returns.
+  const onExit = (): void => {
+    void flushPendingWritesOnExit();
+  };
 
   window.addEventListener('beforeunload', onExit);
   window.addEventListener('pagehide', onExit);
 
+  const teardowns: (() => void)[] = [
+    () => {
+      window.removeEventListener('beforeunload', onExit);
+      window.removeEventListener('pagehide', onExit);
+    },
+  ];
+
+  // The quit path. Subscribing needs the bridge; in browser mode there is no main process to
+  // answer and nothing to persist, so there is nothing to install.
+  if (isIpcAvailable()) {
+    teardowns.push(ipc().app.onFlushBeforeQuit(() => void flushAndReport()));
+  }
+
   return () => {
-    window.removeEventListener('beforeunload', onExit);
-    window.removeEventListener('pagehide', onExit);
+    for (const teardown of teardowns) teardown();
   };
+}
+
+/**
+ * The answer to main's flush request: empty every writer, wait for the writes to land, then say so.
+ *
+ * The order is the whole point. Main does not write `AppState` to disk until this reply arrives, so
+ * replying early would persist the state main held a moment ago — the very bug, with an extra round
+ * trip. The bridge is re-checked before replying, because a window torn down between the request
+ * and the reply leaves `ipc()` throwing, and this runs with no caller to catch it.
+ */
+async function flushAndReport(): Promise<void> {
+  try {
+    await flushPendingWritesOnExit();
+  } catch (error) {
+    // `flushPendingWritesOnExit` reports per-writer failures and does not reject; this is the
+    // belt-and-braces path, and main must still be answered so its bounded wait ends early.
+    diagnostics.error('the flush-before-quit sweep failed', error);
+  }
+
+  if (!isIpcAvailable()) return;
+  try {
+    ipc().app.reportFlushed();
+  } catch (error) {
+    diagnostics.error('failed to answer the flush-before-quit request', error);
+  }
 }

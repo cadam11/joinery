@@ -188,7 +188,7 @@ export interface TabStoreState {
    * schedules this save on every keystroke, so the window going away inside the 500ms window used
    * to lose the last SQL the user typed rather than a sidebar width.
    */
-  readonly flushPendingSave: () => void;
+  readonly flushPendingSave: () => Promise<void>;
   readonly restoreTabs: (connectionId: string) => Promise<void>;
 
   /**
@@ -585,10 +585,12 @@ export function createTabStore(persistence: RendererStatePersistence = rendererS
         // The pending-timer check is what makes this safe to call on every exit: with nothing
         // pending there is nothing to write, so an exit cannot turn into a write of its own.
         // `saveTabs` re-checks the gate and the bridge for itself.
-        if (!saveTimeout) return;
+        if (!saveTimeout) return Promise.resolve();
         clearTimeout(saveTimeout);
         saveTimeout = null;
-        void get().saveTabs();
+        // Returned rather than voided: the quit path awaits this, and `saveTabs` reports its own
+        // failures and never rejects.
+        return get().saveTabs();
       },
 
       saveTabs: async () => {
