@@ -168,6 +168,11 @@ async function loadMonacoFor(nodePlatform: string): Promise<MonacoDefaults> {
 }
 
 beforeAll(async () => {
+  // Pinned to macOS rather than inherited from the host: Monaco reduces its `mac`/`win`/`linux`
+  // branches at import time, so without a pin this guard would check a different keybinding set on
+  // a Linux CI runner than on a developer's Mac. macOS-only is accepted for now because the
+  // collision set was measured identical on all three platforms (J-73's report carries the table),
+  // and covering all three means loading Monaco three times at three times the runtime.
   monaco = await loadMonacoFor('darwin');
 }, 120_000);
 
