@@ -610,7 +610,7 @@ independent full re-captures drifted by at most **8 px**, and a full run at `max
 rectangle). Note that a project's `expect` **replaces** the root's rather than merging with it, which
 is why `timeout: 10000` is restated there.
 
-**Mask conventions — 3 mask regions, landing on 4 of the 22 baselines; the other 18 are compared
+**Mask conventions — 3 mask regions, landing on 4 of the 24 baselines; the other 20 are compared
 whole.** `status-version` and `status-docker-count` on the two connected-shell shots (a version bump
 and the host's container count are not UI regressions), and the `Docker: N of M …` note — not the
 card — on the two welcome shots. Everything else is unmasked, and no dialog, workbench or overlay
@@ -620,12 +620,15 @@ exactly how a mask outlives its element and the baseline quietly starts recordin
 again), and the masked elements are waited for at full width first, because both **grow** when their
 IPC lands.
 
-**The Docker panel is deliberately not captured.** `services/docker/detector.ts` filters by image
-name, not by compose project, so the panel is a picture of one laptop's container inventory — and its
-per-row status line ("Up 44 minutes (healthy)") changes every minute, so masking it would mask the
-surface into meaninglessness. A portable baseline needs a deterministic source behind `docker.detect`,
-which is a `packages/` change. Same reason a streamed chat transcript is absent: no test here calls an
-LLM, and a fake provider is also a `packages/` change. Both are flagged, not forgotten.
+**The Docker panel was not captured at Task 22, and is captured now (J-76).**
+`services/docker/detector.ts` filters by image name, not by compose project, so the panel was a
+picture of one laptop's container inventory — and its per-row status line ("Up 44 minutes (healthy)")
+changes every minute, so masking it would have masked the surface into meaninglessness. That needed a
+deterministic source behind `docker.detect`, which is a `packages/` change Task 22 was forbidden from
+making; J-76 added it (`packages/main/src/services/docker/docker-fixture.ts`, pinned per launch by
+`JOINERY_DOCKER_FIXTURE`), so the two Docker baselines are compared **whole, with no masks** — the
+22 above became 24. A streamed chat transcript is still absent for the sibling reason: no test here
+calls an LLM, and a fake provider is also a `packages/` change. Flagged, not forgotten.
 
 ### Phase C appendix — the perf tier and the a11y sweep (Task 23, delivered)
 

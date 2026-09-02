@@ -5,21 +5,24 @@
  * ELEMENTS: an overlay's job is to be a legible card over a dimmed app, and framing the window
  * would put the app underneath into the comparison.
  *
- * ── The Docker panel is NOT here, and that is a finding rather than an omission ─────────────────
+ * ── The Docker panel, and the hatch that made it baselineable (J-76) ───────────────────────────
  *
- * It was captured, inspected, and pulled. The panel lists every *database container on the host*
- * (`services/docker/detector.ts` filters by image name, not by compose project), so on the machine
- * this tier was written on it showed the four fixture containers followed by three of the
- * developer's own — `mjpg`, `some-postgres`, `sql-cert-fts`. A committed baseline would be asserting
- * one laptop's container inventory, and it would fail for every other developer for a reason that
- * has nothing to do with Joinery.
+ * Task 22 captured it, inspected it, and pulled it. The panel lists every *database container on
+ * the host* (`services/docker/detector.ts` filters by image name, not by compose project), so on
+ * the machine this tier was written on it showed the four fixture containers followed by three of
+ * the developer's own — `mjpg`, `some-postgres`, `sql-cert-fts`. A committed baseline would have
+ * been asserting one laptop's container inventory, and it would have failed for every other
+ * developer for a reason that has nothing to do with Joinery. Masking does not rescue it either:
+ * Docker's status line ("Up 44 minutes (healthy)") is prose the panel renders verbatim and it
+ * changes every minute, so it has to be masked in every row — roughly a third of each row — and the
+ * row SET stays host-dependent regardless.
  *
- * Masking does not rescue it. Docker's status line ("Up 44 minutes (healthy)") is prose the panel
- * renders verbatim and it changes every minute, so it has to be masked in every row — which covers
- * roughly a third of each row, and still leaves the row SET host-dependent. That is masking a
- * surface into meaninglessness, so the surface is flagged instead: a portable Docker baseline needs
- * a deterministic container source behind `docker.detect` (a change under `packages/`, which Task 22
- * is forbidden from making). Recorded for whoever owns that.
+ * So the surface was flagged for a deterministic source behind `docker.detect`, under `packages/`,
+ * which Task 22 was forbidden from making. J-76 made it:
+ * `packages/main/src/services/docker/docker-fixture.ts` lets a launch pin what `detect()` and
+ * `listVolumes()` answer, and `DOCKER_FIXTURE` below is what this tier pins them to. The shot needs
+ * **no masks at all** as a result, which is the whole point — a masked third of every row was the
+ * alternative on offer.
  *
  * ── The assistant, and why there is no streamed transcript here ────────────────────────────────
  *
@@ -39,16 +42,103 @@ import {
   createChatConversation,
   createPostgresProfile,
   dismissToasts,
+  dockerContainerNames,
   ensureJoineryTestSeeded,
   openChatConversations,
   openChatPanel,
+  openDockerPanel,
   openPalette,
   overlayRows,
   selectDatabase,
 } from '../helpers/joinery-actions-react';
+import {
+  DOCKER_FIXTURE_ENV_VAR,
+  type DockerFixture,
+} from '../../packages/main/src/services/docker/docker-fixture';
 
 const PROFILE = 'Test PG';
 const DATABASE = 'joinery_test';
+
+/**
+ * The container inventory this tier's Docker baselines are a picture of.
+ *
+ * **Typed against main's own `DockerFixture`**, so it is checked rather than believed: the shape
+ * `docker.detect` answers is `DockerDetectionResult` from `@joinery/shared`, and a fixture that
+ * drifted from it would fail `pnpm run typecheck` instead of quietly producing a panel that renders
+ * from fields the real detector never sets.
+ *
+ * Chosen to put every branch of a container row in the frame, because a baseline only guards what it
+ * contains: a running container with a published port AND a bind mount (the `docker-container-binds`
+ * sub-list), a second running one, a STOPPED one with no published port (the grey pip, the Start
+ * button, and Connect disabled with "no published port"), and two named volumes (the `Volumes`
+ * section, which is conditional — `docker-panel.tsx` renders it only when main answers with some).
+ *
+ * Every string here is fixed, including the two that are volatile on a real daemon: `status` is
+ * Docker's own prose, which moves every minute, and `created` is a timestamp. Names are prefixed
+ * `joinery-fixture-` so a reader of a failing diff can tell at a glance that no real container of
+ * theirs is in the picture.
+ */
+const DOCKER_FIXTURE: DockerFixture = {
+  detect: {
+    dockerRunning: true,
+    containers: [
+      {
+        id: 'fixture-postgres',
+        name: 'joinery-fixture-postgres',
+        image: 'postgres:16-alpine',
+        state: 'running',
+        status: 'Up 2 hours (healthy)',
+        port: 15432,
+        hostBinding: '0.0.0.0',
+        volumeMappings: [
+          {
+            hostPath: '/Users/joinery/backups',
+            containerPath: '/var/lib/postgresql/backups',
+            mode: 'rw',
+          },
+        ],
+        created: '2026-01-04T09:00:00.000Z',
+      },
+      {
+        id: 'fixture-mysql',
+        name: 'joinery-fixture-mysql',
+        image: 'mysql:8.4',
+        state: 'running',
+        status: 'Up 2 hours',
+        port: 13306,
+        hostBinding: '0.0.0.0',
+        volumeMappings: [],
+        created: '2026-01-04T09:00:00.000Z',
+      },
+      {
+        id: 'fixture-mssql',
+        name: 'joinery-fixture-sqlserver',
+        image: 'mcr.microsoft.com/mssql/server:2022-latest',
+        state: 'exited',
+        status: 'Exited (0) 3 days ago',
+        port: null,
+        hostBinding: '0.0.0.0',
+        volumeMappings: [],
+        created: '2026-01-01T09:00:00.000Z',
+      },
+    ],
+  },
+  volumes: [
+    {
+      name: 'joinery-fixture_pgdata',
+      driver: 'local',
+      mountpoint: '/var/lib/docker/volumes/joinery-fixture_pgdata/_data',
+    },
+    {
+      name: 'joinery-fixture_mysqldata',
+      driver: 'local',
+      mountpoint: '/var/lib/docker/volumes/joinery-fixture_mysqldata/_data',
+    },
+  ],
+};
+
+/** What a launch has to carry for the panel to show {@link DOCKER_FIXTURE} instead of the host. */
+const DOCKER_FIXTURE_ENV = { [DOCKER_FIXTURE_ENV_VAR]: JSON.stringify(DOCKER_FIXTURE) };
 
 test.beforeAll(ensureJoineryTestSeeded);
 
@@ -99,6 +189,47 @@ for (const theme of VISUAL_THEMES) {
 
         await shoot(panel, `chat-conversation-${theme}.png`);
       });
+    });
+
+    test('Docker panel over a pinned container inventory', async () => {
+      await withVisualApp(
+        theme,
+        async ({ window }) => {
+          const panel = await openDockerPanel(window);
+
+          // The claim the whole hatch exists for: these three rows and nothing else. Any container
+          // of the developer's own — or any of the five harness ones this tier's other specs
+          // connect to — would show up here, which is what made the surface unbaselineable.
+          expect(await dockerContainerNames(window)).toEqual([
+            'joinery-fixture-mysql',
+            'joinery-fixture-postgres',
+            'joinery-fixture-sqlserver',
+          ]);
+          // Conditional sections, asserted present so the shot is known to contain them rather than
+          // being a picture of their absence.
+          await expect(panel.getByTestId('docker-volumes')).toBeVisible();
+          await expect(panel.getByTestId('docker-container-binds')).toHaveCount(1);
+          await expect(panel.getByTestId('docker-empty')).toBeHidden();
+
+          // ── Why the pip has to be let go of before the shutter ────────────────────────────
+          //
+          // `Popover` is non-modal (`ui/popover.tsx`), so opening it leaves focus on the trigger —
+          // and the trigger is wrapped in a `Tooltip`, which Radix opens on FOCUS as well as on
+          // hover. Both halves are live here: `openDockerPanel` clicks the pip, which both focuses
+          // it and parks the pointer on it. `shoot` refuses to take a picture with a tooltip up, so
+          // this is the difference between a baseline and a red run rather than tidiness.
+          //
+          // Blur does not dismiss the popover: Radix's dismissal watches `focusin` outside the
+          // layer, and `blur()` moves focus to `<body>` without firing one. Asserted rather than
+          // assumed, immediately below.
+          await window.mouse.move(0, 0);
+          await blurFocus(window);
+          await expect(panel).toBeVisible();
+
+          await shoot(panel, `docker-panel-${theme}.png`);
+        },
+        { envOverrides: DOCKER_FIXTURE_ENV }
+      );
     });
   });
 }

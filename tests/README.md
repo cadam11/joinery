@@ -119,6 +119,27 @@ set `JOINERY_KEYCHAIN_SERVICE` and must not name the production service; a packa
 additionally refuse a bundle that was not stamped, which `assertBundleIsTestCapable` does before
 Electron starts.
 
+## The Docker panel's pinned container inventory (visual tier)
+
+`packages/main/src/services/docker/detector.ts` lists every container on the host whose **image**
+looks like a database, which is right for a user and fatal for a screenshot: the Docker panel becomes
+a picture of whatever you happen to have running, and each row carries Docker's own status prose
+("Up 44 minutes (healthy)"), which changes every minute.
+
+So `tests/e2e-react-visual/overlays.spec.ts` pins the answer for its own launch with
+`JOINERY_DOCKER_FIXTURE` — one environment variable carrying the whole reply as JSON, resolved by
+`packages/main/src/services/docker/docker-fixture.ts` and applied by `DockerDetector.detect()` and
+`.listVolumes()`. The panel, the status-bar pip and the welcome tab's Docker note all read those two,
+so pinning them pins the surface, and the two Docker baselines need **no masks at all**.
+
+- **Read-only.** `startContainer` / `stopContainer` / `createContainer` are untouched and still talk
+  to the real daemon, so a pinned launch that presses Start reaches Docker with an id it does not
+  have and fails loudly. Do not write a spec that drives the lifecycle under a fixture.
+- **Nothing sets it in a shipped app**, so an installed Joinery reads the daemon exactly as before —
+  pinned from both sides by `packages/main/src/services/docker/docker-fixture.spec.ts`.
+- **Unset, the functional tier is unaffected**: `tests/e2e-react/docker-panel.spec.ts` still asserts
+  the panel against the real harness containers, which is the coverage a fixture cannot give.
+
 ## What's running in the test network
 
 Defined in [`docker-compose.test.yml`](./docker-compose.test.yml). Host ports are deliberately non-standard so they don't clash with anything you already have running.
