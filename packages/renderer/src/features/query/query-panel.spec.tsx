@@ -32,6 +32,7 @@ import { setDiagnosticsSink, setNotifier } from '../../state/diagnostics';
 import { connectionStore } from '../../state/connection';
 import { editorPrefsStore } from '../../state/editor-prefs';
 import { queryExecutionStore } from '../../state/query-execution';
+import { queryPlanStore } from '../../state/query-plan';
 import { settingsStore } from '../../state/settings';
 import { tabStore } from '../../state/tab';
 import { TooltipProvider } from '../../ui';
@@ -656,5 +657,97 @@ describe('the SQL dialect converter', () => {
     await waitFor(() => expect(calls).toHaveLength(1));
 
     expect(calls).toEqual([{ sql: 'SELECT * FROM t LIMIT 1', from: 'postgresql', to: 'mysql' }]);
+  });
+});
+
+// ── A closed tab's per-tab state is released, even when the panel was already unmounted (J-62) ──
+//
+// The panel's cleanup used to be an unmount effect guarded by "the tab is gone". That guard cannot see
+// the case that matters: Dockview unmounts a panel when it is DEACTIVATED, so a tab closed while it is
+// not in front never gets another unmount, and its result, its recorded SQL and its plan tree stay in
+// the two stores for the rest of the session. This is the same lifecycle hole the chat stores closed
+// with a `tabStore.tabs` watcher (`features/chat/chat-store-host.ts`), and it is closed the same way.
+
+describe('a closed query tab', () => {
+  afterEach(() => {
+    for (const tabId of [...queryPlanStore.getState().plans.keys()]) {
+      queryPlanStore.getState().forgetTab(tabId);
+    }
+  });
+
+  /** A plan for a tab, written straight into the real store — the panel's own path needs MSSQL and a gate. */
+  function givePlan(tabId: string, forResult: QueryResult): void {
+    queryPlanStore.getState().setPlan(tabId, {
+      forResult,
+      engine: 'postgresql',
+      kind: 'estimated',
+      root: { type: 'Seq Scan', costPercent: 100, extra: [], children: [] },
+      summary: { totalCost: 1, warnings: [] },
+      sql: 'SELECT 1;',
+    });
+  }
+
+  async function runOnce(): Promise<void> {
+    await invoke('execute-query');
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  it('releases its result, its recorded SQL and its plan when it was DEACTIVATED at close time', async () => {
+    teardowns.push(installJoineryMock({ query: { execute: async () => okResult } }));
+    const { tabId, unmount } = mountPanel('SELECT 1;');
+    await runOnce();
+    givePlan(tabId, queryExecutionStore.getState().results.get(tabId) as QueryResult);
+    expect(queryExecutionStore.getState().results.has(tabId)).toBe(true);
+
+    // Deactivation first, then the close: the order that produces no second unmount.
+    unmount();
+    tabStore.getState().closeTab(tabId);
+
+    expect(queryExecutionStore.getState().results.has(tabId)).toBe(false);
+    expect(queryExecutionStore.getState().sqlByTab.has(tabId)).toBe(false);
+    expect(queryPlanStore.getState().plans.has(tabId)).toBe(false);
+  });
+
+  it('releases its result when it was the ACTIVE tab, which the old unmount cleanup already did', async () => {
+    teardowns.push(installJoineryMock({ query: { execute: async () => okResult } }));
+    const { tabId, unmount } = mountPanel('SELECT 1;');
+    await runOnce();
+    givePlan(tabId, queryExecutionStore.getState().results.get(tabId) as QueryResult);
+
+    tabStore.getState().closeTab(tabId);
+    unmount();
+
+    expect(queryExecutionStore.getState().results.has(tabId)).toBe(false);
+    expect(queryPlanStore.getState().plans.has(tabId)).toBe(false);
+  });
+
+  it('leaves the results of the tabs that are still open alone', async () => {
+    teardowns.push(installJoineryMock({ query: { execute: async () => okResult } }));
+    const first = mountPanel('SELECT 1;');
+    await runOnce();
+    const second = mountPanel('SELECT 2;');
+    await runOnce();
+    expect(queryExecutionStore.getState().results.has(first.tabId)).toBe(true);
+    expect(queryExecutionStore.getState().results.has(second.tabId)).toBe(true);
+
+    first.unmount();
+    tabStore.getState().closeTab(first.tabId);
+
+    expect(queryExecutionStore.getState().results.has(first.tabId)).toBe(false);
+    expect(queryExecutionStore.getState().results.has(second.tabId)).toBe(true);
+    second.unmount();
+  });
+
+  it('survives a panel that is unmounted without its tab being closed', async () => {
+    teardowns.push(installJoineryMock({ query: { execute: async () => okResult } }));
+    const { tabId, unmount } = mountPanel('SELECT 1;');
+    await runOnce();
+
+    // Plain deactivation: the tab is still open, so nothing may be forgotten.
+    unmount();
+
+    expect(queryExecutionStore.getState().results.has(tabId)).toBe(true);
   });
 });
