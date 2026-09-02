@@ -120,34 +120,34 @@ Docker and why the answer can differ from your terminal's.
 | Claim                                                                  | Source                                                                                                                |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | The pip lives in the status bar and anchors the panel                  | `packages/renderer/src/shell/status-bar.tsx:410-414`, `features/docker/docker-pip.tsx:57-102`                         |
-| The five pip states and their exact tooltips                           | `packages/renderer/src/features/docker/docker-model.ts:112-173`                                                       |
+| The five pip states and their exact tooltips                           | `packages/renderer/src/features/docker/docker-model.ts:114-175`                                                       |
 | The colour per state, with no brand colours                            | `packages/renderer/src/features/docker/docker-pip.tsx:34-41`                                                          |
 | The count renders only above zero                                      | `packages/renderer/src/features/docker/docker-pip.tsx:67-73`                                                          |
 | ⌘K ▸ "Docker containers" opens rather than toggles                     | `packages/renderer/src/commands/catalogue.ts:657-665`, `docker-pip.tsx:53-55`                                         |
 | Escape closes the popover                                              | `packages/renderer/src/ui/popover.tsx:12-50, 127-134`                                                                 |
-| Docker is polled every 30 seconds                                      | `packages/renderer/src/features/docker/use-docker.ts:26, 51-78`                                                       |
+| Docker is polled every 30 seconds                                      | `packages/renderer/src/features/docker/use-docker.ts:26, 51-82`                                                       |
 | The pip, panel and welcome tab share one query                         | `packages/renderer/src/features/docker/use-docker.ts:1-16`, `features/welcome/welcome-panel.tsx:282-295`              |
-| The engine is derived from the image name, per engine                  | `packages/renderer/src/features/docker/docker-model.ts:57-66`                                                         |
-| The port inside the container is derived from the engine, not believed | `packages/renderer/src/features/docker/docker-model.ts:16-20, 38-44`                                                  |
+| The engine is derived from the image name, per engine                  | `packages/renderer/src/features/docker/docker-model.ts:60-68`                                                         |
+| The port inside the container is derived from the engine, not believed | `packages/renderer/src/features/docker/docker-model.ts:16-20, 41-46`                                                  |
 | All three engines are listed, not SQL Server only                      | `packages/renderer/src/features/docker/docker-panel.tsx:6-9, 151-161`                                                 |
 | The panel's heading and its Refresh                                    | `packages/renderer/src/features/docker/docker-panel.tsx:50-66`                                                        |
-| A row's name, engine, port pair and Docker status line                 | `packages/renderer/src/features/docker/docker-panel.tsx:215-227`                                                      |
-| The status string is shown verbatim and never matched on               | `packages/renderer/src/features/docker/docker-model.ts:75-77, 93-96`                                                  |
-| Running containers sort first, then alphabetically                     | `packages/renderer/src/features/docker/docker-model.ts:103-110`                                                       |
-| Bind mounts are listed, with a read-only marker                        | `packages/renderer/src/features/docker/docker-panel.tsx:228-244`                                                      |
+| A row's name, engine, port pair and Docker status line                 | `packages/renderer/src/features/docker/docker-panel.tsx:222-234`                                                      |
+| The status string is shown verbatim and never matched on               | `packages/renderer/src/features/docker/docker-model.ts:77-79, 97-98`                                                  |
+| Running containers sort first, then alphabetically                     | `packages/renderer/src/features/docker/docker-model.ts:106-112`                                                       |
+| Bind mounts are listed, with a read-only marker                        | `packages/renderer/src/features/docker/docker-panel.tsx:235-251`                                                      |
 | Named volumes are listed, filtered to the database containers' mounts  | `packages/main/src/services/docker/detector.ts` (`listVolumes`), `docker-panel.tsx:177-190`                           |
-| Start, Stop and Connect, and which appears when                        | `packages/renderer/src/features/docker/docker-panel.tsx:246-305`                                                      |
-| Connect pre-fills the connection editor with localhost and the port    | `packages/renderer/src/features/docker/docker-panel.tsx:259-289`, `features/connections/connection-dialogs.tsx:94-96` |
-| It is disabled with a stated reason when no port is published          | `packages/renderer/src/features/docker/docker-panel.tsx:265-284`                                                      |
-| A refused start or stop carries Docker's own reason                    | `packages/main/src/ipc/docker.ipc.ts:41-61`, `packages/renderer/src/features/docker/use-docker.ts:124-152`            |
-| A container that had already stopped is not reported as a failure      | `packages/main/src/services/docker/detector.ts:155-182, 294-302`                                                      |
-| The container list is re-read after either action                      | `packages/renderer/src/features/docker/use-docker.ts:132-134, 147-149`                                                |
-| The create call sets ACCEPT_EULA, MSSQL_SA_PASSWORD and binds 1433     | `packages/main/src/services/docker/detector.ts:212-227`                                                               |
-| The create form is SQL Server only, and the panel says so              | `packages/renderer/src/features/docker/docker-panel.tsx:90-99, 311-318`                                               |
-| The three fields, their defaults and their rules                       | `packages/renderer/src/features/docker/docker-panel.tsx:41, 335-337`, `docker-model.ts:185-218`                       |
-| Why the password is checked before the round trip                      | `packages/renderer/src/features/docker/docker-model.ts:175-184`                                                       |
-| The EULA sentence and the image it pulls                               | `packages/renderer/src/features/docker/docker-panel.tsx:413-417`                                                      |
-| The password is cleared on success and on failure alike                | `packages/renderer/src/features/docker/docker-panel.tsx:356-361`                                                      |
+| Start, Stop and Connect, and which appears when                        | `packages/renderer/src/features/docker/docker-panel.tsx:253-312`                                                      |
+| Connect pre-fills the connection editor with localhost and the port    | `packages/renderer/src/features/docker/docker-panel.tsx:266-296`, `features/connections/connection-dialogs.tsx:94-96` |
+| It is disabled with a stated reason when no port is published          | `packages/renderer/src/features/docker/docker-panel.tsx:272-291`                                                      |
+| A refused start or stop carries Docker's own reason                    | `packages/main/src/ipc/docker.ipc.ts:40-60`, `packages/renderer/src/features/docker/use-docker.ts:128-156`            |
+| A container that had already stopped is not reported as a failure      | `packages/main/src/services/docker/detector.ts:170-203, 343-351`                                                      |
+| The container list is re-read after either action                      | `packages/renderer/src/features/docker/use-docker.ts:137, 152`                                                        |
+| The create call sets ACCEPT_EULA, MSSQL_SA_PASSWORD and binds 1433     | `packages/main/src/services/docker/detector.ts:233-248`                                                               |
+| The create form is SQL Server only, and the panel says so              | `packages/renderer/src/features/docker/docker-panel.tsx:90-99, 318-325`                                               |
+| The three fields, their defaults and their rules                       | `packages/renderer/src/features/docker/docker-panel.tsx:41, 342-344`, `docker-model.ts:187-220`                       |
+| Why the password is checked before the round trip                      | `packages/renderer/src/features/docker/docker-model.ts:177-186`                                                       |
+| The EULA sentence and the image it pulls                               | `packages/renderer/src/features/docker/docker-panel.tsx:420-424`                                                      |
+| The password is cleared on success and on failure alike                | `packages/renderer/src/features/docker/docker-panel.tsx:363-368`                                                      |
 | The three empty states and their copy                                  | `packages/renderer/src/features/docker/docker-panel.tsx:117-160`                                                      |
 | The New container footer is hidden when Docker is absent or stopped    | `packages/renderer/src/features/docker/docker-panel.tsx:74-103`                                                       |
 
