@@ -12,7 +12,8 @@
  *
  * The override is read in the main process only and never crosses the IPC boundary; the
  * renderer has no business knowing which vault it is talking to. And it is honoured only while
- * the app is UNPACKAGED — see {@link KeychainServiceRuntime.isPackaged}.
+ * the app is UNPACKAGED — see {@link KeychainServiceRuntime.isPackaged} — or while a packaged
+ * bundle carries the build-time test marker, see {@link KeychainServiceRuntime.isTestBuild}.
  *
  * Both inputs are arguments, not ambient reads, so every branch below is provable in the unit
  * tier: a spec cannot make itself a packaged Electron app, and this is the one decision where
@@ -25,8 +26,9 @@ import { APP_ID } from '@joinery/shared';
  * Environment variable that repoints the credential store at a throwaway Keychain service.
  *
  * Set by every launcher in `tests/` (guarded structurally by
- * `keychain-service-isolation.spec.ts`), all of which run the app unpackaged. Nothing sets it
- * in a shipped app, and a packaged app refuses it even if something does, so production
+ * `keychain-service-isolation.spec.ts`) — the Playwright/perf ones run the app unpackaged, and
+ * `scripts/release/smoke-packaged-app.ts` runs a bundle stamped as a test build. Nothing sets it
+ * in a shipped app, and a packaged RELEASE app refuses it even if something does, so production
  * resolves {@link APP_ID} exactly as it always did.
  */
 export const KEYCHAIN_SERVICE_ENV_VAR = 'JOINERY_KEYCHAIN_SERVICE';
@@ -45,6 +47,22 @@ export interface KeychainServiceRuntime {
    * the only way the Electron test tiers can stay out of the developer's real vault.
    */
   isPackaged: boolean;
+  /**
+   * Whether the BUNDLE was built for testing — `isTestCapableBuild()` from
+   * `../../utils/test-build-capability` (J-167).
+   *
+   * The one way back into the override for a packaged app, and it exists because
+   * `scripts/release/smoke-packaged-app.ts` boots a real `Joinery.app` and must not boot it
+   * against the developer's real vault, where this store's legacy migration copies and then
+   * DELETES what it finds. The capability is a file the packaging step writes into a test bundle
+   * (`Contents/Resources/joinery-test-build`) and nothing writes into a release bundle, so it is
+   * not something a process environment can forge — which a second environment variable would
+   * have been, leaving the hole open while the code read as fixed.
+   *
+   * Optional, and absent means `false`: a call site that forgets it refuses the override, which is
+   * the safe direction to fail in.
+   */
+  isTestBuild?: boolean;
   /** The environment to read the override from. Passed in; never read from `process` here. */
   env: NodeJS.ProcessEnv;
 }
@@ -67,7 +85,8 @@ export interface KeychainServiceResolution {
  *
  * Pure: the only inputs are the two fields of {@link KeychainServiceRuntime}.
  *
- * @throws if an UNPACKAGED process sets the override to a blank value — see below.
+ * @throws if a process that is ALLOWED the override (unpackaged, or a packaged test build) sets
+ *   it to a blank value — see below.
  */
 export function resolveKeychainServiceName(
   runtime: KeychainServiceRuntime
@@ -75,7 +94,7 @@ export function resolveKeychainServiceName(
   const raw = runtime.env[KEYCHAIN_SERVICE_ENV_VAR];
   if (raw === undefined) return { serviceName: APP_ID };
 
-  if (runtime.isPackaged) {
+  if (runtime.isPackaged && runtime.isTestBuild !== true) {
     // Refused, not obeyed, and not fatal: a user whose shell exports this variable must still
     // get a working app pointed at their own vault. Blank or not makes no difference here —
     // nothing about the value is used.

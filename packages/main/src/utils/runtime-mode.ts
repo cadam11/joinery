@@ -8,6 +8,11 @@
  * that both branches are provable in the unit tier (a vitest process can never be a packaged
  * Electron app).
  *
+ * The one exception J-167 adds is a property of the ARTIFACT rather than of the environment: a
+ * bundle stamped `Contents/Resources/joinery-test-build` by `pnpm run package:test` gets the test
+ * hatch back, so the packaged smoke run keeps its hidden window and its throwaway keychain
+ * namespace. See `./test-build-capability`, and {@link RuntimeSignals.isTestBuild}.
+ *
  * This module is the one place `app.isPackaged` and these two hatch variables are read.
  * `utils/env-hatch-gating.spec.ts` fails the unit tier if any other file in `packages/main` reads
  * one of them, which is what keeps the rule true through the next refactor.
@@ -15,10 +20,20 @@
 
 import { app, type App } from 'electron';
 
-/** The two facts every hatch decision below is a function of. */
+/** The facts every hatch decision below is a function of. */
 export interface RuntimeSignals {
   /** Electron's `app.isPackaged` — see {@link isPackagedApp}. */
   isPackaged: boolean;
+  /**
+   * Whether the BUNDLE was built for testing — `isTestCapableBuild()` from
+   * `./test-build-capability` (J-167). A property of the artifact, not of the environment: a
+   * second environment variable would have reopened the hole this module closed, since whoever
+   * can set one can set two.
+   *
+   * Optional, and absent means `false`, so a call site that forgets it fails CLOSED — it gets the
+   * release behaviour rather than silently granting a hatch.
+   */
+  isTestBuild?: boolean;
   /** The environment to read. Passed in; never read from `process` by the predicates. */
   env: NodeJS.ProcessEnv;
 }
@@ -51,9 +66,14 @@ export function isPackagedApp(): boolean {
  * Shut in a packaged app. Otherwise anyone who can set the environment of a launch can start the
  * signed, user-trusted Joinery with no visible window — the same confused-deputy shape J-161
  * closed for the credential vault, one rung down.
+ *
+ * Open again for a packaged bundle that carries the J-167 marker, because
+ * `scripts/release/smoke-packaged-app.ts` boots a real bundle and has always relied on the hidden
+ * window. A release bundle cannot reach that branch: nothing in the release path stamps the
+ * marker, and `pnpm run verify:package` fails on an artifact that carries one.
  */
 export function isTestHatchOpen(signals: RuntimeSignals): boolean {
-  if (signals.isPackaged) return false;
+  if (signals.isPackaged && signals.isTestBuild !== true) return false;
   return signals.env.JOINERY_TEST === '1';
 }
 
@@ -65,6 +85,11 @@ export function isTestHatchOpen(signals: RuntimeSignals): boolean {
  * Shut in a packaged app, and this is the sharper of the two: honouring it there would let whoever
  * set the variable serve their own page into the signed app, with its preload bridge attached. A
  * packaged app has no dev server to talk to in the first place, so nothing legitimate is lost.
+ *
+ * Deliberately NOT reopened by the J-167 test-build marker, unlike {@link isTestHatchOpen}. A
+ * stamped bundle has no dev server either, so there is nothing to gain — and the loss is the same
+ * one: someone who can set `NODE_ENV` would be serving their own page into a bundle that already
+ * carries the preload bridge.
  */
 export function isDevelopmentHatchOpen(signals: RuntimeSignals): boolean {
   if (signals.isPackaged) return false;

@@ -13,6 +13,7 @@ import { createLogger } from '../../utils/logger';
 // object, and the spy reaches it either way (measured in the cycle-9 re-review). Prefer this form
 // anyway, so the next reader can see why the call is a call.
 import * as runtimeMode from '../../utils/runtime-mode';
+import { isTestCapableBuild } from '../../utils/test-build-capability';
 import { resolveKeychainServiceName } from './service-name';
 
 const log = createLogger('CredentialStore');
@@ -47,12 +48,13 @@ export class CredentialStore extends BaseSingleton {
 
   constructor() {
     super();
-    // Both ambient reads that decide which vault this process touches are here, at the call
-    // site, and the decision itself is a pure function (J-161) — one is a named accessor
-    // (`utils/runtime-mode.ts`, the one place Electron's `app.isPackaged` is read and gated) and
-    // the other is `process.env`.
+    // Every ambient read that decides which vault this process touches is here, at the call site,
+    // and the decision itself is a pure function (J-161, J-167) — a named accessor
+    // (`utils/runtime-mode.ts`, the one place Electron's `app.isPackaged` is read and gated), a
+    // filesystem probe of this bundle's own Resources directory, and `process.env`.
     const resolution = resolveKeychainServiceName({
       isPackaged: runtimeMode.isPackagedApp(),
+      isTestBuild: isTestCapableBuild(),
       env: process.env,
     });
     if (resolution.warning !== undefined) log.warn(resolution.warning);
