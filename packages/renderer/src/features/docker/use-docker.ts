@@ -18,9 +18,9 @@
 import { useCallback } from 'react';
 import type { DockerStatus, DockerVolume } from '@joinery/shared';
 
-import { ipc, isIpcAvailable, useIpcMutation, useIpcQuery, useInvalidateIpc } from '../../ipc';
+import { isIpcAvailable, useIpcMutation, useIpcQuery, useInvalidateIpc } from '../../ipc';
 import { diagnostics, notify } from '../../state/diagnostics';
-import { settledState, toPip, toRows, type ContainerRow, type DockerPip } from './docker-model';
+import { toPip, toRows, type ContainerRow, type DockerPip } from './docker-model';
 
 /** The Angular poll interval, kept: Docker state changes without the app being told. */
 export const DOCKER_POLL_MS = 30_000;
@@ -114,26 +114,16 @@ export interface DockerActions {
  * Start, stop and create. Separate from `useDocker` because only the panel needs them — the pip and the
  * welcome tab are read-only, and a hook that handed them three mutations they never call would put three
  * more subscriptions in the status bar.
+ *
+ * Start and stop are the same six lines because both handlers now reject with Docker's own message
+ * (`main/src/ipc/docker.ipc.ts`). Stop used to re-read the container list afterwards and report "… is
+ * still running" itself, because its handler dropped the detector's `{ success: false, error }` — J-71
+ * fixed the handler, so the catch arm is the whole report and the extra round trip is gone.
  */
 export function useDockerActions(refresh: () => void): DockerActions {
   const startContainer = useIpcMutation({ namespace: 'docker', operation: 'startContainer' });
   const stopContainer = useIpcMutation({ namespace: 'docker', operation: 'stopContainer' });
   const createContainer = useIpcMutation({ namespace: 'docker', operation: 'createContainer' });
-
-  /**
-   * Re-read the container list and answer with what it now says about ONE container.
-   *
-   * This is `docker-model.ts` finding 4 made operational: `docker.stopContainer`'s handler discards the
-   * `{ success: false, error }` it gets from the detector, so a stop that failed resolves exactly like
-   * one that worked. Confirming by looking is the only honest report available from the renderer.
-   */
-  const confirm = useCallback(async (containerId: string): Promise<boolean | null> => {
-    // Read through the bridge rather than off the cache: `invalidate` marks the key stale and the
-    // refetch is asynchronous, so the cache is the PREVIOUS answer for at least one tick — and the
-    // previous answer is exactly the one that says the container is still running.
-    const containers = await ipc().docker.getContainers();
-    return settledState(containers, containerId);
-  }, []);
 
   const start = useCallback(
     async (container: ContainerRow): Promise<void> => {
@@ -141,7 +131,6 @@ export function useDockerActions(refresh: () => void): DockerActions {
         await startContainer.mutateAsync([container.id]);
         notify.success(`Started ${container.name}`);
       } catch (error) {
-        // The start handler DOES throw on failure, so this arm carries Docker's own message.
         notify.error(`Could not start ${container.name}: ${messageOf(error)}`);
         diagnostics.error('failed to start a Docker container', error);
       } finally {
@@ -155,16 +144,6 @@ export function useDockerActions(refresh: () => void): DockerActions {
     async (container: ContainerRow): Promise<void> => {
       try {
         await stopContainer.mutateAsync([container.id]);
-        const stillRunning = await confirm(container.id);
-        if (stillRunning === true) {
-          // The case main cannot report. Naming the container and the fact is the whole point.
-          notify.error(`${container.name} is still running — Docker refused to stop it`);
-          diagnostics.warn(
-            'a Docker stop resolved but the container is still running',
-            container.id
-          );
-          return;
-        }
         notify.success(`Stopped ${container.name}`);
       } catch (error) {
         notify.error(`Could not stop ${container.name}: ${messageOf(error)}`);
@@ -173,7 +152,7 @@ export function useDockerActions(refresh: () => void): DockerActions {
         refresh();
       }
     },
-    [confirm, refresh, stopContainer]
+    [refresh, stopContainer]
   );
 
   const create = useCallback(

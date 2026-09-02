@@ -76,10 +76,10 @@ interval.
 says so: _This container publishes no port, so nothing can connect to it._ Nothing can reach it
 from your machine, so there is nothing for Joinery to fill the form in with.
 
-**A stop appears to do nothing, then reports a failure.** Docker's stop reports success whether
-or not the container actually stopped, so Joinery re-reads the container afterwards and tells you
-_… is still running — Docker refused to stop it_ when it did not. That message is a real result,
-not a display glitch — the container is still up. This is tracked as J-71.
+**A stop reports a failure.** Joinery passes on the reason Docker gave — _Could not stop
+joinery-postgres: cannot stop container: permission denied_, say. That is a real result, not a
+display glitch: the container is still up. **⌘J** opens the output panel, where the same error is
+logged with its full detail.
 
 **There is no Volumes section.** It is drawn only when at least one of the listed database
 containers mounts a **named** Docker volume, so it is absent when they all use **bind mounts**
@@ -119,8 +119,8 @@ The containers panel is documented in full under
 | Docker is re-read every 30 seconds, from one shared query                            | `packages/renderer/src/features/docker/use-docker.ts:26, 51-78`                                      |
 | Refresh re-reads immediately                                                         | `packages/renderer/src/features/docker/docker-panel.tsx:53-63`, `use-docker.ts:76-78`                |
 | Connect is disabled with that sentence when no port is published                     | `packages/renderer/src/features/docker/docker-panel.tsx:265-284`                                     |
-| The stop handler discards its failure result, so the renderer confirms by re-reading | `packages/main/src/ipc/docker.ipc.ts:52-58`, `docker-model.ts:174-188`, `use-docker.ts:150-166`      |
-| J-71 — the stop-reports-success finding                                              | `packages/renderer/src/features/docker/docker-model.ts:26-29`                                        |
+| The stop handler throws the detector's own error (J-71)                              | `packages/main/src/ipc/docker.ipc.ts:52-61`, `services/docker/detector.ts:PLACEHOLDER_STOP`          |
+| A refused stop reaches the user as Docker's own message                              | `packages/renderer/src/features/docker/use-docker.ts:PLACEHOLDER_STOPFN`                             |
 | Named volumes come from `listVolumes`, filtered to the database containers' mounts   | `packages/main/src/services/docker/detector.ts`, `docker.ipc.ts` (`GET_VOLUMES`)                     |
 | Create is SQL Server only, and why an image picker would be wrong                    | `packages/main/src/services/docker/detector.ts:198-213`, `docker-panel.tsx:90-99`                    |
 | ⌘J toggles the output panel, which can reveal its log file                           | `packages/renderer/src/commands/catalogue.ts:559-566`, `shell/workspace/output-panel.tsx:207-217`    |

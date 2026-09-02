@@ -52,7 +52,10 @@ export function registerDockerHandlers(): void {
   safeHandle(
     IPC_CHANNELS.DOCKER.STOP_CONTAINER,
     async (_event, containerId: string): Promise<void> => {
-      await dockerDetector.stopContainer(containerId);
+      const result = await dockerDetector.stopContainer(containerId);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to stop container');
+      }
     }
   );
 

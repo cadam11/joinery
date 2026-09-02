@@ -2,7 +2,6 @@ export { DockerPanel } from './docker-panel';
 export { DockerPip, type DockerPipProps } from './docker-pip';
 export {
   engineOf,
-  settledState,
   toPip,
   toRow,
   toRows,

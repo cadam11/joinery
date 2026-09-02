@@ -1,6 +1,6 @@
 /**
- * The Docker panel against the bridge double: the states, the two lifecycle actions, the failed-stop
- * report main cannot give, the Connect wire, and the create form's refusals.
+ * The Docker panel against the bridge double: the states, the two lifecycle actions, both of which
+ * now reject with Docker's own message (J-71), the Connect wire, and the create form's refusals.
  */
 
 import { useState } from 'react';
@@ -67,7 +67,7 @@ beforeEach(() => {
       candidate.id === id ? { ...candidate, state: 'running' } : candidate
     );
   });
-  // Stops, and — like main — resolves whether or not the container actually stopped.
+  // Like main's handler: resolves with nothing on success, rejects on failure — see the test below.
   stopContainer = vi.fn(async (id: string) => {
     containers = containers.map(candidate =>
       candidate.id === id ? { ...candidate, state: 'exited' } : candidate
@@ -194,19 +194,17 @@ describe('DockerPanel — start and stop', () => {
     await waitFor(() => expect(toasts).toContain('success:Stopped joinery-test-postgres'));
   });
 
-  it('reports a stop that did not stop — the failure main cannot report', async () => {
-    // `docker.ipc.ts:53-58` discards the detector's `{ success: false, error }`, so this stop resolves
-    // exactly like one that worked. The only honest report is to look afterwards.
-    stopContainer.mockImplementation(async () => undefined);
+  it('passes a failed stop’s own message through', async () => {
+    // J-71: `docker.ipc.ts`'s stop handler now throws the detector's `error`, so the rejection carries
+    // Docker's words and there is no re-read of the container list to work out that it failed.
+    stopContainer.mockRejectedValueOnce(new Error('cannot stop container: permission denied'));
     mount();
 
     await waitFor(() => expect(screen.queryByTestId('docker-stop')).not.toBeNull());
     await userEvent.click(screen.getByTestId('docker-stop'));
 
     await waitFor(() =>
-      expect(toasts).toContain(
-        'error:joinery-test-postgres is still running — Docker refused to stop it'
-      )
+      expect(toasts.some(toast => toast.includes('permission denied'))).toBe(true)
     );
     expect(toasts).not.toContain('success:Stopped joinery-test-postgres');
   });

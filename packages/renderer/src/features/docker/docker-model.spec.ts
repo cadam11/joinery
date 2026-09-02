@@ -1,6 +1,8 @@
 /**
- * The four main-process findings, as tests. Each one is a claim about what the bridge does that would
- * otherwise live only in a comment.
+ * The main-process findings, as tests. Each one is a claim about what the bridge does that would
+ * otherwise live only in a comment. Finding 4 (a failed stop reporting success) moved to
+ * `main/src/ipc/docker.ipc.spec.ts` when J-71 fixed the handler: the renderer no longer confirms a
+ * stop by looking, so there is nothing pure left here to test.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -8,7 +10,6 @@ import type { DockerContainer, DockerStatus } from '@joinery/shared';
 
 import {
   engineOf,
-  settledState,
   toPip,
   toRow,
   toRows,
@@ -160,25 +161,6 @@ describe('toPip', () => {
     });
     expect(pip.state).toBe('idle');
     expect(pip.runningCount).toBe(0);
-  });
-});
-
-describe('settledState — finding 4', () => {
-  it('reports what the container is now doing', () => {
-    // `docker.ipc.ts:53-58` awaits `stopContainer` and throws away its `{ success: false, error }`, so a
-    // stop that failed resolves exactly like one that worked. Looking is the only honest report.
-    const containers = [
-      container({ id: 'a', state: 'running' }),
-      container({ id: 'b', state: 'exited' }),
-    ];
-    expect(settledState(containers, 'a')).toBe(true);
-    expect(settledState(containers, 'b')).toBe(false);
-  });
-
-  it('answers null for a container that is no longer there', () => {
-    // Removed underneath us. Not a failure to report as one.
-    expect(settledState([], 'gone')).toBeNull();
-    expect(settledState(undefined, 'gone')).toBeNull();
   });
 });
 

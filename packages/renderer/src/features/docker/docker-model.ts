@@ -25,10 +25,11 @@
  *    actually **binds** (`DockerContainer.volumeMappings`, which the detector fills in from
  *    `container.Mounts`); the Volumes section is still conditional, because a container that only
  *    bind-mounts contributes no named volume.
- * 4. **A failed stop reports success.** `docker.ipc.ts:53-58` awaits `stopContainer` and throws away its
- *    `{ success: false, error }` result, unlike the start handler beside it. So the renderer cannot tell
- *    a stop that failed from one that worked, and must confirm by re-reading the container's state —
- *    which is what `settledState` is for. J-71.
+ * 4. **A failed stop reported success (fixed, J-71).** `docker.ipc.ts`'s stop handler used to await
+ *    `stopContainer` and throw away its `{ success: false, error }`, unlike the start handler beside it,
+ *    so the renderer could not tell a stop that failed from one that worked and confirmed by re-reading
+ *    the container's state. The handler now rejects with Docker's own message, so `use-docker.ts` just
+ *    catches — do not reintroduce the re-read.
  */
 
 import type { DockerContainer, DockerStatus, DockerVolumeMapping } from '@joinery/shared';
@@ -171,22 +172,6 @@ export function toPip(input: {
     totalCount: rows.length,
     tooltip: `Docker: ${runningCount} of ${rows.length} database containers running`,
   };
-}
-
-/**
- * Did the container end up in the state we asked for?
- *
- * Finding 4's guard. `docker.stopContainer` resolves whether or not the container stopped, so "it
- * worked" is only knowable by looking. Returns `null` when the container is no longer in the list at
- * all, which is a legitimate outcome for a container somebody removed underneath us — and NOT a
- * failure to report as one.
- */
-export function settledState(
-  containers: readonly DockerContainer[] | undefined,
-  containerId: string
-): boolean | null {
-  const found = (containers ?? []).find(container => container.id === containerId);
-  return found === undefined ? null : found.state === 'running';
 }
 
 /**

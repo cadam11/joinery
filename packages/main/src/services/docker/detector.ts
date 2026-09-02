@@ -168,7 +168,10 @@ export class DockerDetector extends BaseSingleton {
   }
 
   /**
-   * Stop a running container
+   * Stop a running container.
+   *
+   * `success: false` is now load-bearing: since J-71 the `docker:stop-container` handler throws it,
+   * so whatever this calls a failure reaches the user as a toast.
    */
   async stopContainer(containerId: string): Promise<StartContainerResult> {
     try {
@@ -180,6 +183,17 @@ export class DockerDetector extends BaseSingleton {
         containerId,
       };
     } catch (error) {
+      // Docker answers 304 to a stop for a container that is already stopped, and dockerode maps
+      // every non-2xx to a rejection. The caller asked for "not running" and that is the state it
+      // is in, so this is a success — reporting it as a failure would put
+      // "(HTTP code 304) container already stopped" in front of the user every time the panel's
+      // 30-second poll is behind the daemon.
+      if (isAlreadyStopped(error)) {
+        return {
+          success: true,
+          containerId,
+        };
+      }
       return {
         success: false,
         containerId,
@@ -324,4 +338,14 @@ function databaseEngineOf(image: string): DatabaseEngine | null {
     return 'mssql';
   }
   return null;
+}
+
+/**
+ * Docker's "already stopped" answer. Shape captured from a live daemon (Docker 29.3.1):
+ * `{ message: '(HTTP code 304) container already stopped -  ', statusCode: 304,
+ *    reason: 'container already stopped' }` — `statusCode` rather than the message, because the
+ * prose is dockerode's and carries the reason twice.
+ */
+function isAlreadyStopped(error: unknown): boolean {
+  return (error as { statusCode?: unknown } | null | undefined)?.statusCode === 304;
 }
