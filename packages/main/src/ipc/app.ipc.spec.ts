@@ -20,6 +20,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@joinery/shared';
 
 import { registerAppHandlers } from './app.ipc';
+import { AppStateStore } from '../services/config/app-state';
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -115,5 +116,54 @@ describe('app:open-external', () => {
     expect(message).toContain('ftp:');
     expect(message).not.toContain('hunter2');
     expect(message).not.toContain('abc123');
+  });
+});
+
+/**
+ * The main-process half of J-74's quit chain, pinned end to end.
+ *
+ * This is a PREMISE, not a fix: `app:set-state` → `AppStateStore` cache → `flush()` → disk already
+ * worked. It is asserted here because `shutdown.ts`'s ordering now depends on it being exactly this
+ * shape, and on one property of it in particular — `electron-store` writes SYNCHRONOUSLY (`conf`
+ * ends in `fs.writeFileSync`), so `flush()` has nothing to await and the values are on disk by the
+ * time it returns. If that ever became asynchronous, `runShutdown` would have to await it and the
+ * `exit()` immediately after would start losing writes again. This test is what would fail.
+ *
+ * The renderer's own half — replying only after its `setState` calls have landed — is asserted in
+ * `packages/renderer/src/persistence/flush-on-exit.spec.ts`.
+ */
+describe('the quit chain: app:set-state, flushed, on disk', () => {
+  beforeEach(() => {
+    registerAppHandlers();
+  });
+
+  it('has the geometry the renderer sent on disk once the store is flushed', async () => {
+    const setState = electron.handlers.get(IPC_CHANNELS.APP.SET_STATE);
+    expect(setState).toBeDefined();
+
+    // Exactly what `state/workbench.ts`'s flush sends, and what the renderer awaits before it
+    // answers main's flush request.
+    await setState?.({}, { sidebarWidth: 420, sidebarCollapsed: true });
+
+    // `runShutdown` calls this — after the renderer has answered — and then exits.
+    AppStateStore.getInstance().flush();
+
+    // A fresh instance reads from disk, which is what the next launch does.
+    AppStateStore.resetInstance();
+    const afterRestart = AppStateStore.getInstance().getState();
+    expect(afterRestart.sidebarWidth).toBe(420);
+    expect(afterRestart.sidebarCollapsed).toBe(true);
+  });
+
+  it('would have lost the same geometry without the flush', async () => {
+    const setState = electron.handlers.get(IPC_CHANNELS.APP.SET_STATE);
+    await setState?.({}, { sidebarWidth: 420 });
+    AppStateStore.getInstance().flush();
+    await setState?.({}, { sidebarWidth: 315 });
+
+    // No flush this time: `app.exit(0)` here loses the 315 and the next launch reads 420. That is
+    // the shape of the whole bug, one layer up from where the renderer's debounce sat.
+    AppStateStore.resetInstance();
+    expect(AppStateStore.getInstance().getState().sidebarWidth).toBe(420);
   });
 });

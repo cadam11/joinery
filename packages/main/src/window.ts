@@ -5,7 +5,7 @@
 import { BrowserWindow, screen, nativeTheme, session } from 'electron';
 import * as path from 'path';
 import Store from 'electron-store';
-import { createTrailingDebounce } from './utils/trailing-debounce';
+import { createTrailingDebounce, type TrailingDebounce } from './utils/trailing-debounce';
 import { buildContentSecurityPolicy } from './security/content-security-policy';
 import { installContentSecurityPolicy } from './security/harden';
 import type { AppEntry } from './security/navigation-guard';
@@ -130,6 +130,8 @@ export function createMainWindow(): BrowserWindow {
   // save turns every drag/resize frame into a blocking disk write. Collapse
   // bursts to a single trailing write, and take the final bounds on close.
   const debouncedSave = createTrailingDebounce(saveState, 500);
+  // Published so the quit sequence can empty it — see `flushWindowState`.
+  pendingBoundsSave = debouncedSave;
   mainWindow.on('resize', () => debouncedSave.call());
   mainWindow.on('move', () => debouncedSave.call());
   mainWindow.on('close', () => {
@@ -171,6 +173,26 @@ export function createMainWindow(): BrowserWindow {
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
+}
+
+/**
+ * The live window's pending bounds write, or `null` before any window exists. Module-scoped for the
+ * one reason below; nothing else may read it.
+ */
+let pendingBoundsSave: TrailingDebounce | null = null;
+
+/**
+ * Writes a pending window position/size now; a no-op when nothing is pending (J-74).
+ *
+ * The bounds debounce above was flushed only from `mainWindow.on('close')`, and that event never
+ * fires on a quit: `index.ts` preventDefaults `before-quit` and ends at `app.exit(0)`, which closes
+ * windows without emitting `close`. So the "take the final bounds on close" comment described dead
+ * code on every quit, and a move or resize inside the 500ms window was dropped — the main-process
+ * sibling of the renderer bug this ticket is about. `shutdown.ts` calls this in the same step that
+ * writes `AppState`, while the window is still alive to be measured.
+ */
+export function flushWindowState(): void {
+  pendingBoundsSave?.flush();
 }
 
 /**

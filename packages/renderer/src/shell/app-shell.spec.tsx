@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DEFAULT_AI_SETTINGS } from '@joinery/shared';
-import { installJoineryMock, removeJoineryMock } from '../test/joinery-mock';
+import { installJoineryMock, recordSubscription, removeJoineryMock } from '../test/joinery-mock';
 import { createAppStateDouble, type AppStateDouble } from '../test/app-state-double';
 import { setDiagnosticsSink, setNotifier } from '../state/diagnostics';
 import { chatPanelStore } from '../state/chat';
@@ -21,11 +21,15 @@ import { logStore } from '../state/logs';
 import { tabStore } from '../state/tab';
 import { workbenchStore } from '../state/workbench';
 import { IpcQueryProvider } from '../ipc';
+import { registeredExitFlushNames } from '../persistence/flush-on-exit';
 import { AppShell } from './app-shell';
 import { bootStore, resetBootLatch, runBoot } from './boot';
 import { MENU_CHANNELS } from './menu-bridge';
 
 let bridge: AppStateDouble;
+/** Main's flush-before-quit request, and the replies the shell sends back (J-74). */
+let flushRequest: ReturnType<typeof recordSubscription<void>>;
+let flushReplies: number;
 const teardowns: (() => void)[] = [];
 
 /** A subscription that records nothing: the shell only has to be able to install it. */
@@ -50,7 +54,14 @@ function installShellBridge(double: AppStateDouble): void {
 
   teardowns.push(
     installJoineryMock({
-      app: { ...double.app, getVersion: () => Promise.resolve('1.2.3') },
+      app: {
+        ...double.app,
+        getVersion: () => Promise.resolve('1.2.3'),
+        onFlushBeforeQuit: flushRequest.subscribe,
+        reportFlushed: () => {
+          flushReplies += 1;
+        },
+      },
       connection: { list: () => Promise.resolve([]) },
       ai: {
         getVendors: () => Promise.resolve([]),
@@ -93,6 +104,8 @@ beforeEach(() => {
   logStore.getState().clear();
   logStore.getState().close();
   bridge = createAppStateDouble();
+  flushRequest = recordSubscription<void>();
+  flushReplies = 0;
   installShellBridge(bridge);
   teardowns.push(setDiagnosticsSink({ error: () => undefined, warn: () => undefined }));
 });
@@ -111,6 +124,7 @@ afterEach(async () => {
   chatPanelStore.getState().closePanel();
   tabStore.getState().closeAllTabs();
   workbenchStore.getState().setSidebarCollapsed(false);
+  workbenchStore.getState().resetSidebarWidth();
 });
 
 describe('the app shell', () => {
@@ -281,6 +295,65 @@ describe('the app shell', () => {
     expect(screen.queryByTestId('restore-dialog')).toBeNull();
     // The placeholder is gone entirely, not merely unreachable.
     expect(screen.queryByTestId('placeholder-dialog-restore')).toBeNull();
+  });
+
+  it('registers every debounced writer with the exit flush while it is mounted (J-74)', async () => {
+    await mountShell();
+
+    // Wiring, asserted rather than reviewed by eye: a writer that forgets to register loses its
+    // pending value on the way out, and nothing else in the app would notice.
+    expect([...registeredExitFlushNames()].sort()).toEqual([
+      'open tabs',
+      'shell geometry',
+      'workspace layout',
+    ]);
+  });
+
+  it('flushes a resize that happened inside the debounce window when the window goes away (J-74)', async () => {
+    await mountShell();
+    const before = bridge.calls.setState;
+
+    // The reported bug: drag the sidebar, quit inside the 250ms debounce window, and the width is
+    // gone — the timer died with the page, so main never even had the value to flush to disk.
+    workbenchStore.getState().setSidebarWidth(420);
+    expect(bridge.calls.setState).toBe(before);
+
+    window.dispatchEvent(new Event('beforeunload'));
+
+    expect(bridge.calls.setState).toBe(before + 1);
+    expect(bridge.snapshot().sidebarWidth).toBe(420);
+  });
+
+  it('flushes a resize on main’s quit request, and answers it (J-74)', async () => {
+    // ⌘Q on macOS: `main/src/index.ts`'s `before-quit` preventDefaults and ends at `app.exit(0)`,
+    // which closes windows without emitting `close` — so no unload event ever fires here. This
+    // request is the only path, and main will not write to disk until it is answered.
+    await mountShell();
+    const before = bridge.calls.setState;
+
+    workbenchStore.getState().setSidebarWidth(420);
+    expect(bridge.calls.setState).toBe(before);
+
+    flushRequest.emit(undefined);
+
+    await waitFor(() => expect(flushReplies).toBe(1));
+    expect(bridge.calls.setState).toBe(before + 1);
+    expect(bridge.snapshot().sidebarWidth).toBe(420);
+  });
+
+  it('writes once when a quit fires both the unload and the request (J-74)', async () => {
+    // A window close on Windows/Linux fires `beforeunload` and then reaches main's `before-quit`,
+    // so both paths can run in one quit. The second must be a no-op against the real writers.
+    await mountShell();
+    const before = bridge.calls.setState;
+    workbenchStore.getState().setSidebarWidth(420);
+
+    window.dispatchEvent(new Event('beforeunload'));
+    flushRequest.emit(undefined);
+    await waitFor(() => expect(flushReplies).toBe(1));
+
+    expect(bridge.calls.setState).toBe(before + 1);
+    expect(bridge.snapshot().sidebarWidth).toBe(420);
   });
 
   it('opens the welcome tab on the View ▸ Welcome command', async () => {

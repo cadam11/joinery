@@ -195,6 +195,18 @@ export const IPC_CHANNELS = {
     GET_LAYOUT: 'app:get-layout',
     // General-purpose file write (for exports — no workspace required)
     SAVE_TO_FILE: 'app:save-to-file',
+    /**
+     * The flush-before-quit handshake (J-74). One exchange, two directions: main asks the renderer
+     * to empty its debounced `AppState` writes, the renderer answers once they have actually landed.
+     *
+     * It exists because a macOS ⌘Q never reaches the renderer's unload events at all — `before-quit`
+     * preventDefaults and ends at `app.exit(0)`, which closes windows without emitting `close` — so
+     * a sidebar drag or a keystroke inside a 250-500ms debounce window died with the page. Main
+     * waits for the answer with an explicit bound and quits either way; see
+     * `main/src/services/config/renderer-flush.ts`.
+     */
+    FLUSH_BEFORE_QUIT: 'app:flush-before-quit',
+    FLUSH_BEFORE_QUIT_DONE: 'app:flush-before-quit-done',
   },
 
   // Workspace (for file/folder support)

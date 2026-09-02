@@ -27,8 +27,10 @@
  * `try/finally` so a throw inside the reconciliation cannot leave it stuck on.
  *
  * `onDidLayoutChange` is deliberately NOT guarded: a panel this app added is a layout change worth
- * persisting. It is debounced, and the leaf gate (`layoutPersistence`) refuses every write until
- * the restore has finished.
+ * persisting. `layoutPersistence` owns both the debounce and the leaf gate that refuses every write
+ * until the restore has finished — this component only hands over a way to read the arrangement.
+ * The debounce lives there rather than here so that the pending write can be FLUSHED when the
+ * window goes away instead of dying with the component (J-74).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -62,9 +64,6 @@ import { ErdPanel } from '../../features/erd';
 import { ObjectPanel } from '../../features/object-detail';
 import { WelcomePanel } from '../../features/welcome';
 import { WorkspaceWatermark } from './tab-panels';
-
-/** Matches the Angular layout save debounce (`golden-layout-container.component.ts:645`). */
-const LAYOUT_SAVE_DEBOUNCE_MS = 500;
 
 /**
  * The five surfaces the dock mounts, plus the one reserved panel. Keys match `panelComponentFor`.
@@ -111,7 +110,6 @@ export function Workspace() {
    * Dockview callbacks and must never cause a render.
    */
   const applying = useRef(false);
-  const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Panel id → the `paramsSignature` last written, so params are refreshed only when they change. */
   const paramsWritten = useRef(new Map<string, string>());
   const [ready, setReady] = useState(false);
@@ -122,45 +120,24 @@ export function Workspace() {
   const restore = useBootStore(state => state.workspaceRestore);
   const theme = useSettingsStore(selectEffectiveTheme);
 
-  /** Reads the current arrangement out of Dockview and persists it. Debounced by its caller. */
-  const saveLayout = useCallback((dock: DockviewApi): void => {
-    void layoutPersistence
-      .save({
-        version: REACT_LAYOUT_VERSION,
-        dockview: dock.toJSON() as unknown as Record<string, unknown>,
-        activeTabId: dock.activePanel?.id ?? null,
-      })
-      .then(result => {
-        // `locked` is the restore-before-save gate doing its job, and `unavailable` is browser
-        // mode. Neither is a failure; `failed` already logged its own cause.
-        if (result === 'locked') {
-          diagnostics.warn('layout change discarded: the workspace has not finished restoring', {
-            activeTabId: dock.activePanel?.id ?? null,
-          });
-        }
-      });
+  /**
+   * Hands the arrangement to `layoutPersistence`, which owns the debounce and its flush (J-74).
+   * The reader is a closure so `toJSON()` runs once, when the write goes out, rather than on every
+   * `onDidLayoutChange` — see `ReadLayoutPayload`.
+   */
+  const scheduleSave = useCallback((dock: DockviewApi): void => {
+    layoutPersistence.scheduleSave(() => ({
+      version: REACT_LAYOUT_VERSION,
+      dockview: dock.toJSON() as unknown as Record<string, unknown>,
+      activeTabId: dock.activePanel?.id ?? null,
+    }));
   }, []);
 
-  const scheduleSave = useCallback(
-    (dock: DockviewApi): void => {
-      if (saveTimeout.current) clearTimeout(saveTimeout.current);
-      saveTimeout.current = setTimeout(() => {
-        saveTimeout.current = null;
-        saveLayout(dock);
-      }, LAYOUT_SAVE_DEBOUNCE_MS);
-    },
-    [saveLayout]
-  );
-
-  // A pending debounce is a resource this component owns, and a window close or a hot reload must
-  // not leave a timer holding the last arrangement.
-  useEffect(
-    () => () => {
-      if (saveTimeout.current) clearTimeout(saveTimeout.current);
-      saveTimeout.current = null;
-    },
-    []
-  );
+  // A pending debounce is a resource, and the dock handle the pending reader closed over is going
+  // away with this component — so a hot reload or a remount drops it rather than writing it. The
+  // window going away is the other case and is NOT this one: `flush-on-exit.ts` fires on
+  // `beforeunload`, which is before any of this unmounts.
+  useEffect(() => () => layoutPersistence.cancelPendingSave(), []);
 
   const onReady = useCallback<IDockviewReactProps['onReady']>(
     event => {

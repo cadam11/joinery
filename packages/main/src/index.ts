@@ -2,8 +2,13 @@
  * Joinery - Main Process Entry Point
  */
 
-import { app, shell, BrowserWindow } from 'electron';
-import { createMainWindow, installRendererSecurityPolicy, resolveAppEntry } from './window';
+import { app, ipcMain, shell, BrowserWindow } from 'electron';
+import {
+  createMainWindow,
+  flushWindowState,
+  installRendererSecurityPolicy,
+  resolveAppEntry,
+} from './window';
 import { installNavigationGuardsForEveryWindow } from './security/harden';
 import { openExternalSafely } from './security/open-external';
 import { createMenu } from './menu';
@@ -22,6 +27,8 @@ import { QueryHistoryStore } from './services/config/query-history';
 import { AppStateStore } from './services/config/app-state';
 import { QueryResultsStore } from './services/config/query-results-store';
 import { cleanupWorkspaceWatchers } from './ipc/workspace.ipc';
+import { requestRendererFlush } from './services/config/renderer-flush';
+import { runShutdown } from './shutdown';
 import {
   LEGACY_USER_DATA_DIR_NAME,
   USER_DATA_DIR_NAME,
@@ -147,114 +154,137 @@ if (!gotTheLock) {
     }
   });
 
-  // Cleanup before quit — Electron does NOT await async before-quit handlers,
-  // so we prevent the default quit, run cleanup ourselves, then force exit.
+  // Cleanup before quit. Electron does NOT await async before-quit handlers, so we prevent the
+  // default quit, run the sequence ourselves, then exit. The sequence — and above all its ORDERING
+  // — lives in `shutdown.ts` so that it can be asserted: the renderer is asked to empty its
+  // debounced `AppState` writes BEFORE main writes its own stores to disk, and nothing exits before
+  // that write (J-74). Inline, that ordering was unassertable, and getting it backwards persists
+  // the state main held a moment before the renderer sent the new values.
   let isQuitting = false;
   app.on('before-quit', event => {
     if (isQuitting) return; // Already running shutdown sequence
     isQuitting = true;
     event.preventDefault(); // Hold quit until cleanup finishes (or times out)
 
-    const shutdownStart = Date.now();
-    log.info('Shutdown: starting graceful cleanup...');
-
-    // Force-exit safety net — if cleanup hangs, exit anyway
-    const SHUTDOWN_TIMEOUT_MS = 3000;
-    const forceExitTimer = setTimeout(() => {
-      log.warn(`Shutdown: timed out after ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`);
-      app.exit(0);
-    }, SHUTDOWN_TIMEOUT_MS);
-
-    // --- Synchronous cleanup (timers, watchers, in-flight work) ---
-    const poolManager = ConnectionPoolManager.getInstance();
-    poolManager.stopCleanupTimer();
-    log.info('Shutdown: stopped pool cleanup timer');
-
-    cleanupWorkspaceWatchers();
-    log.info('Shutdown: closed workspace file watchers');
-
-    try {
-      QueryExecutor.getInstance().cancelAll();
-    } catch {
-      /* singleton may not exist */
-    }
-    log.info('Shutdown: cancelled active queries');
-
-    try {
-      BackupRestoreService.getInstance().stopAllOperations();
-    } catch {
-      /* singleton may not exist */
-    }
-    try {
-      PgBackupService.getInstance().stopAllOperations();
-    } catch {
-      /* singleton may not exist */
-    }
-    log.info('Shutdown: stopped backup/restore operations');
-
-    try {
-      ChatService.getInstance().abortAll();
-    } catch {
-      /* singleton may not exist */
-    }
-    try {
-      AIService.getInstance().abortAll();
-    } catch {
-      /* singleton may not exist */
-    }
-    log.info('Shutdown: aborted active AI streams');
-
-    // Fire-and-forget: this handler is synchronous by design (see above), so the
-    // stop cannot be awaited. The client also SIGTERMs the child on process
-    // 'exit', so a slow stop here cannot orphan the Python process.
-    try {
-      SQLConverterService.getInstance()
-        .stop()
-        .catch(err =>
-          log.warn(
-            `Shutdown: sqlglot microservice stop failed: ${err instanceof Error ? err.message : String(err)}`
-          )
-        );
-    } catch {
-      /* singleton may not exist */
-    }
-    log.info('Shutdown: requested sqlglot microservice stop');
-
-    // Flush debounced store writes so nothing persisted-in-memory is lost.
-    try {
-      QueryHistoryStore.getInstance().flush();
-    } catch {
-      /* singleton may not exist */
-    }
-    try {
-      AppStateStore.getInstance().flush();
-    } catch {
-      /* singleton may not exist */
-    }
-    try {
-      // hasInstance guard: constructing the lazy store at quit would run
-      // its first-use legacy migration inside the shutdown window.
-      if (QueryResultsStore.hasInstance()) {
-        QueryResultsStore.getInstance().flush();
-      }
-    } catch (err) {
-      log.warn('Shutdown: snapshot index flush failed:', err);
-    }
-    log.info('Shutdown: flushed pending store writes');
-
-    // --- Async cleanup (close SQL pools + SSH tunnels) ---
-    poolManager
-      .closeAll()
-      .then(() => log.info(`Shutdown: closed all SQL pools in ${Date.now() - shutdownStart}ms`))
-      .then(() => SshTunnelManager.getInstance().closeAll())
-      .then(() => log.info('Shutdown: closed all SSH tunnels'))
-      .catch(err => log.error('Shutdown: error closing SQL pools/SSH tunnels:', err))
-      .finally(() => {
-        clearTimeout(forceExitTimer);
-        log.info(`Shutdown: complete in ${Date.now() - shutdownStart}ms`);
-        app.exit(0);
-      });
+    void runShutdown({
+      // Every live window, asked while its window and every IPC handler are still up. Bounded by
+      // `RENDERER_FLUSH_TIMEOUT_MS`; resolves rather than rejecting.
+      requestRendererFlush: () => requestRendererFlush(BrowserWindow.getAllWindows(), ipcMain),
+      cancelInFlightWork,
+      flushStoreWrites,
+      closeConnections,
+      exit: () => app.exit(0),
+      forceExitTimeoutMs: SHUTDOWN_TIMEOUT_MS,
+    });
   });
+}
+
+/** Force-exit safety net — if cleanup hangs, flush what we have and exit anyway. */
+const SHUTDOWN_TIMEOUT_MS = 3000;
+
+/** Timers, watchers and in-flight work. Each singleton may not exist; none of them may throw. */
+function cancelInFlightWork(): void {
+  const poolManager = ConnectionPoolManager.getInstance();
+  poolManager.stopCleanupTimer();
+  log.info('Shutdown: stopped pool cleanup timer');
+
+  cleanupWorkspaceWatchers();
+  log.info('Shutdown: closed workspace file watchers');
+
+  try {
+    QueryExecutor.getInstance().cancelAll();
+  } catch {
+    /* singleton may not exist */
+  }
+  log.info('Shutdown: cancelled active queries');
+
+  try {
+    BackupRestoreService.getInstance().stopAllOperations();
+  } catch {
+    /* singleton may not exist */
+  }
+  try {
+    PgBackupService.getInstance().stopAllOperations();
+  } catch {
+    /* singleton may not exist */
+  }
+  log.info('Shutdown: stopped backup/restore operations');
+
+  try {
+    ChatService.getInstance().abortAll();
+  } catch {
+    /* singleton may not exist */
+  }
+  try {
+    AIService.getInstance().abortAll();
+  } catch {
+    /* singleton may not exist */
+  }
+  log.info('Shutdown: aborted active AI streams');
+
+  // Fire-and-forget: this step is synchronous by design, so the stop cannot be
+  // awaited. The client also SIGTERMs the child on process 'exit', so a slow
+  // stop here cannot orphan the Python process.
+  try {
+    SQLConverterService.getInstance()
+      .stop()
+      .catch(err =>
+        log.warn(
+          `Shutdown: sqlglot microservice stop failed: ${err instanceof Error ? err.message : String(err)}`
+        )
+      );
+  } catch {
+    /* singleton may not exist */
+  }
+  log.info('Shutdown: requested sqlglot microservice stop');
+}
+
+/**
+ * Writes the four debounced main-process stores to disk: the query history, `AppState`, the query
+ * results snapshot index, and the OS window's position and size. Those four are the whole of what
+ * main defers — a fifth would have to be added here by hand, which is why they are named rather
+ * than described.
+ *
+ * Runs AFTER the renderer has flushed, so the values it just sent are in `AppStateStore`'s cache by
+ * now. `electron-store` writes synchronously, so there is nothing to await: when this returns, it
+ * is on disk. Idempotent — `TrailingDebounce.flush()` is a no-op with nothing pending — which is
+ * what makes the force-exit net safe to flush from too.
+ */
+function flushStoreWrites(): void {
+  try {
+    QueryHistoryStore.getInstance().flush();
+  } catch {
+    /* singleton may not exist */
+  }
+  try {
+    AppStateStore.getInstance().flush();
+  } catch {
+    /* singleton may not exist */
+  }
+  try {
+    // hasInstance guard: constructing the lazy store at quit would run
+    // its first-use legacy migration inside the shutdown window.
+    if (QueryResultsStore.hasInstance()) {
+      QueryResultsStore.getInstance().flush();
+    }
+  } catch (err) {
+    log.warn('Shutdown: snapshot index flush failed:', err);
+  }
+  try {
+    // The window's own position and size. Its debounce was flushed only from the window's `close`
+    // event, which a quit never emits — see `flushWindowState`.
+    flushWindowState();
+  } catch (err) {
+    log.warn('Shutdown: window bounds flush failed:', err);
+  }
+  log.info('Shutdown: flushed pending store writes');
+}
+
+/** SQL pools, then the SSH tunnels they ride on. */
+async function closeConnections(): Promise<void> {
+  await ConnectionPoolManager.getInstance().closeAll();
+  log.info('Shutdown: closed all SQL pools');
+  await SshTunnelManager.getInstance().closeAll();
 }
 
 // Handle uncaught exceptions

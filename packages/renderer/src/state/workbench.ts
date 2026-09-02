@@ -80,6 +80,17 @@ export interface WorkbenchState {
   /** Reads the four fields out of `AppState`. Called once, from the boot sequence. */
   readonly hydrate: () => Promise<void>;
 
+  /**
+   * Sends the pending debounced write now and resolves once it has landed; a no-op when nothing is
+   * pending. Registered with `persistence/flush-on-exit.ts` by the shell, which is its only caller
+   * — J-74 was a drag inside the 250ms window followed by the window going away, which dropped the
+   * value entirely because the timer died with the page before the IPC call was ever made.
+   *
+   * The promise matters on the quit path: main does not write `AppState` to disk until the renderer
+   * says it is done, so "done" has to mean the `setState` call has been processed, not merely sent.
+   */
+  readonly flushPendingWrites: () => Promise<void>;
+
   readonly setSidebarWidth: (width: number) => void;
   readonly resetSidebarWidth: () => void;
   readonly toggleSidebar: () => void;
@@ -96,31 +107,39 @@ export function createWorkbenchStore() {
   let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
   return create<WorkbenchState>()((set, get) => {
+    /**
+     * The write itself. Re-checks the bridge, because every caller reaches it later than its own
+     * availability check: the debounce is 250ms late and the flush runs while the window is being
+     * torn down. `ipc()` throws when the bridge has gone — which a partial bridge does
+     * synchronously rather than as a rejection — and a throw from a timer or an unload listener has
+     * no caller to catch it, so it surfaces as an uncaught error rather than a log line. Found by
+     * Task 16's object-search suite, which toggles the sidebar and then unmounts inside the
+     * debounce window.
+     */
+    const writeNow = (): Promise<void> => {
+      if (!isIpcAvailable()) return Promise.resolve();
+      try {
+        return ipc()
+          .app.setState({
+            sidebarWidth: get().sidebarWidth,
+            sidebarCollapsed: get().sidebarCollapsed,
+            chatPanelWidth: get().chatPanelWidth,
+            editorHeightPercent: get().editorHeightPercent,
+          })
+          .catch((error: unknown) => diagnostics.error('failed to persist shell geometry', error));
+      } catch (error) {
+        diagnostics.error('failed to persist shell geometry', error);
+        return Promise.resolve();
+      }
+    };
+
     const persist = (): void => {
       if (!isIpcAvailable()) return;
       if (saveTimeout) clearTimeout(saveTimeout);
       saveTimeout = setTimeout(() => {
         saveTimeout = null;
-        // The `try` is not decoration and the `catch` above is not enough: the availability check at the
-        // top of `persist` happened 300ms ago, and `ipc()` throws when the bridge has gone since — which
-        // it has during a window teardown, and which a partial bridge does synchronously rather than as a
-        // rejection. An exception thrown from a timer callback has no caller to catch it, so it surfaces
-        // as an uncaught error rather than a log line. Found by Task 16's object-search suite, which
-        // toggles the sidebar and then unmounts inside the debounce window.
-        try {
-          void ipc()
-            .app.setState({
-              sidebarWidth: get().sidebarWidth,
-              sidebarCollapsed: get().sidebarCollapsed,
-              chatPanelWidth: get().chatPanelWidth,
-              editorHeightPercent: get().editorHeightPercent,
-            })
-            .catch((error: unknown) =>
-              diagnostics.error('failed to persist shell geometry', error)
-            );
-        } catch (error) {
-          diagnostics.error('failed to persist shell geometry', error);
-        }
+        // Nothing to await on the timer path: `writeNow` reports its own failures.
+        void writeNow();
       }, SAVE_DEBOUNCE_MS);
     };
 
@@ -158,6 +177,15 @@ export function createWorkbenchStore() {
         } catch (error) {
           diagnostics.error('failed to read shell geometry; using defaults', error);
         }
+      },
+
+      flushPendingWrites: () => {
+        // The pending-timer check is what makes this safe to call on every exit: with nothing
+        // pending there is nothing to write, so an exit cannot turn into a write of its own.
+        if (!saveTimeout) return Promise.resolve();
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+        return writeNow();
       },
 
       setSidebarWidth: width => {

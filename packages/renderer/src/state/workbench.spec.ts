@@ -156,6 +156,52 @@ describe('the workbench store', () => {
     expect(workbench.getState().sidebarCollapsed).toBe(true);
   });
 
+  describe('flushing the pending write on the way out (J-74)', () => {
+    it('persists a resize that happened inside the debounce window', () => {
+      const workbench = createWorkbenchStore();
+
+      // The bug: the user drags the sidebar and quits before the 250ms window closes.
+      workbench.getState().setSidebarWidth(420);
+      vi.advanceTimersByTime(100);
+      expect(bridge.calls.setState).toBe(0);
+
+      workbench.getState().flushPendingWrites();
+
+      expect(bridge.calls.setState).toBe(1);
+      expect(bridge.snapshot().sidebarWidth).toBe(420);
+    });
+
+    it('does not write a second time when the debounce would have fired', () => {
+      const workbench = createWorkbenchStore();
+      workbench.getState().setSidebarWidth(420);
+
+      workbench.getState().flushPendingWrites();
+      vi.advanceTimersByTime(250);
+
+      expect(bridge.calls.setState).toBe(1);
+    });
+
+    it('writes nothing when no write is pending', () => {
+      const workbench = createWorkbenchStore();
+
+      workbench.getState().flushPendingWrites();
+
+      expect(bridge.calls.setState).toBe(0);
+    });
+
+    it('does not fire an IPC call after the bridge has gone', () => {
+      // The teardown race: the geometry was scheduled while the bridge was live and the flush runs
+      // after it went away. `ipc()` throws synchronously there, and a throw inside an unload
+      // listener has no caller to catch it.
+      const workbench = createWorkbenchStore();
+      workbench.getState().setSidebarWidth(420);
+      removeJoineryMock();
+
+      expect(() => workbench.getState().flushPendingWrites()).not.toThrow();
+      expect(bridge.calls.setState).toBe(0);
+    });
+  });
+
   describe('the query tab’s editor/results split (Task 10)', () => {
     // This field has existed in `AppState` — with a getter and a setter in main — since before the
     // rewrite, while the Angular query component kept the split in a component signal and never read or
