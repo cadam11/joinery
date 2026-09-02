@@ -97,8 +97,16 @@ from it. Nothing sets the variable in a shipped app, so an installed Joinery sti
   `tests/scripts/perf-baseline.mjs`.
 - Applied AFTER a spec's own `envOverrides`, on purpose: which vault the app under test writes to is
   a property of the tier, not a per-spec knob.
+- **Honoured only while the app is unpackaged** (J-161). Both launchers boot
+  `packages/main/dist/index.js` through `node_modules/electron`, so `app.isPackaged` is false and
+  the override applies. A packaged `Joinery.app` refuses the variable, keeps its own service, and
+  logs a `CredentialStore` warning — a shipped, signed app is the one binary the user has already
+  trusted with their keychain, and the environment does not get to aim it elsewhere.
+  **So a launcher must never point Electron at a packaged bundle**: the pin would still be set,
+  the app would ignore it, and the tier would read and rewrite the developer's real vault.
 - Guarded by `packages/main/src/services/keychain/keychain-service-isolation.spec.ts`, which fails
-  the **unit** tier if a launcher stops setting the variable or names the production service.
+  the **unit** tier if a launcher stops setting the variable, names the production service, or
+  starts launching a packaged bundle.
 
 A test run therefore leaves exactly one stray keychain item, `ca.adam11.joinery.tests`. Delete it in
 Keychain Access (or `security delete-generic-password -s ca.adam11.joinery.tests`) whenever you like;
