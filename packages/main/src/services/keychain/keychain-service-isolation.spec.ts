@@ -77,13 +77,34 @@ function readLaunchSite(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
 }
 
-/** The env-key occurrences of the override, ignoring prose in comments. */
-function envAssignments(source: string): string[] {
+/** A file's lines with prose stripped, so a promise in a comment cannot satisfy any rule below. */
+function codeLines(source: string): string[] {
   return source
     .split('\n')
     .map(line => line.trim())
-    .filter(line => !line.startsWith('*') && !line.startsWith('//'))
-    .filter(line => new RegExp(`\\[?${KEYCHAIN_SERVICE_ENV_VAR}\\]?\\s*:`).test(line));
+    .filter(line => !line.startsWith('*') && !line.startsWith('//'));
+}
+
+/** The env-key occurrences of the override, ignoring prose in comments. */
+function envAssignments(source: string): string[] {
+  return codeLines(source).filter(line =>
+    new RegExp(`\\[?${KEYCHAIN_SERVICE_ENV_VAR}\\]?\\s*:`).test(line)
+  );
+}
+
+/**
+ * Lines that CALL the refusal, which is not the same as lines that mention it (J-167 review, B1).
+ *
+ * The first version of this matched `/assertBundleIsTestCapable\(/` anywhere in the file, and the
+ * function's own `export function assertBundleIsTestCapable(` satisfied it — so the call could be
+ * deleted and the guard stayed green, which is precisely the tree that boots a release-shaped bundle
+ * against the developer's production vault. Declarations are excluded, and comments are already
+ * gone, so what is left is a call.
+ */
+function refusalCalls(source: string): string[] {
+  return codeLines(source)
+    .filter(line => !/^(export\s+)?(async\s+)?function\s/.test(line))
+    .filter(line => /assertBundleIsTestCapable\s*\(/.test(line));
 }
 
 describe.each(LAUNCH_SITES)('%s launches Electron with an isolated keychain', relativePath => {
@@ -102,12 +123,12 @@ describe.each(PACKAGED_LAUNCH_SITES)('%s refuses a bundle it must not boot', rel
   const source = readLaunchSite(relativePath);
 
   /**
-   * Named as a call rather than as prose: the refusal has to run before `electron.launch`, and a
-   * comment promising it is exactly what this guard exists not to trust. `assertBundleIsTestCapable`
-   * itself is unit-tested against real stamped and unstamped bundles in
+   * A call, not a mention: the refusal has to run before `electron.launch`, and a comment — or the
+   * function's own declaration — promising it is exactly what this guard exists not to trust.
+   * `assertBundleIsTestCapable` itself is unit-tested against real stamped and unstamped bundles in
    * `scripts/release/test-build-marker.spec.ts` and `scripts/release/smoke-packaged-app.spec.ts`.
    */
   it('asserts the bundle carries the build-time test capability before launching', () => {
-    expect(source).toMatch(/assertBundleIsTestCapable\(/);
+    expect(refusalCalls(source)).not.toHaveLength(0);
   });
 });

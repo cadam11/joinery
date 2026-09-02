@@ -181,8 +181,12 @@ with a stub archive it exits 1.
 > re-opens what J-161 closed would be set by the same attacker who set the first one. And the release
 > path proves its own artifact lacks it — `pnpm run verify:package` chains
 > `node scripts/release/test-build-marker.ts --check`, which exits 1 on a bundle that carries the
-> marker. Proven non-vacuous in the unit tier: `test-build-marker.spec.ts` stamps a real bundle-shaped
-> directory and asserts the check goes red on it.
+> marker. What the unit tier proves is the predicate the check is built on:
+> `test-build-marker.spec.ts` stamps a real bundle-shaped directory and asserts
+> `bundleCarriesTestCapability` flips to true on it, and that an absent bundle throws rather than
+> reporting clean. The exit code itself is not asserted — `run()` is unexported, the same gap
+> `asar-inventory.ts`'s `runCheck` has — so it was proven by hand against the real artifact:
+> `verify:package` exits 1 on a stamped bundle and 0 once the marker is removed (J-167 review, N1).
 >
 > The env pin stays in the launcher regardless — it is what J-96's structural guard checks for, and
 > what makes a test build's vault a throwaway one. That guard now splits its launch sites into
