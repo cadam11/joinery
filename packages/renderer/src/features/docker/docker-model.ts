@@ -18,11 +18,13 @@
  *    reported as listening on 1433 internally. The detector's `port` field IS right — it is the public
  *    binding of whichever default port that engine uses — so `containerPort` reads `port` and the
  *    internal number is derived from the engine rather than believed.
- * 3. **`docker.getVolumes()` always returns `[]`** (`docker.ipc.ts:36-39`, "could be expanded later").
- *    A Volumes list would therefore be a permanently empty section — a decorative control, which J-44
- *    forbids. The panel renders the volumes each container actually **binds**
- *    (`DockerContainer.volumeMappings`, which the detector fills in from `container.Mounts`), and asks
- *    the bridge for named volumes as well so the section appears the moment main can answer. J-70.
+ * 3. **`docker.getVolumes()` used to always return `[]`** (`docker.ipc.ts:36-39`, "could be expanded
+ *    later"), which would have made a Volumes list a permanently empty section — a decorative control,
+ *    which J-44 forbids. J-70 fixed main: it now answers with the named volumes the database containers
+ *    mount, via dockerode's `listVolumes`. The panel renders those AND the volumes each container
+ *    actually **binds** (`DockerContainer.volumeMappings`, which the detector fills in from
+ *    `container.Mounts`); the Volumes section is still conditional, because a container that only
+ *    bind-mounts contributes no named volume.
  * 4. **A failed stop reports success.** `docker.ipc.ts:53-58` awaits `stopContainer` and throws away its
  *    `{ success: false, error }` result, unlike the start handler beside it. So the renderer cannot tell
  *    a stop that failed from one that worked, and must confirm by re-reading the container's state —

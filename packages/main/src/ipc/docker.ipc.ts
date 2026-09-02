@@ -32,10 +32,9 @@ export function registerDockerHandlers(): void {
     }));
   });
 
-  // Get Docker volumes
+  // Get the named volumes the database containers mount
   safeHandle(IPC_CHANNELS.DOCKER.GET_VOLUMES, async (): Promise<DockerVolume[]> => {
-    // For now, return empty array - could be expanded later
-    return [];
+    return dockerDetector.listVolumes();
   });
 
   // Start a container
