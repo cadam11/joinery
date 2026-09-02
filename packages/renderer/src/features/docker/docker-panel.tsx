@@ -182,7 +182,13 @@ function DockerBody({
           <h3 className="font-mono text-2xs tracking-eyebrow uppercase text-fg-subtle">Volumes</h3>
           <ul className="flex flex-col gap-0.5 pt-1">
             {docker.volumes.map(volume => (
-              <li key={volume.name} className="truncate font-mono text-xs text-fg-muted">
+              // `title` because an anonymous volume's name is a 64-character hash, and `truncate`
+              // leaves the reader no other way to see the rest of it.
+              <li
+                key={volume.name}
+                title={volume.name}
+                className="truncate font-mono text-xs text-fg-muted"
+              >
                 {volume.name}
               </li>
             ))}

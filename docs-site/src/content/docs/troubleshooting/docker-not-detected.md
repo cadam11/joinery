@@ -81,10 +81,11 @@ or not the container actually stopped, so Joinery re-reads the container afterwa
 _… is still running — Docker refused to stop it_ when it did not. That message is a real result,
 not a display glitch — the container is still up. This is tracked as J-71.
 
-**There is no Volumes section.** The panel lists the **bind mounts** each container declares
-(`host path → container path`), because that is what Joinery can actually see. Named Docker
-volumes are not listed: the bridge that would answer for them returns an empty list today. Tracked
-as J-70.
+**There is no Volumes section.** It is drawn only when at least one of the listed database
+containers mounts a **named** Docker volume, so it is absent when they all use **bind mounts**
+only — those are listed per container instead, as `host path → container path`. A named volume
+that some other container mounts, or that nothing mounts at all, is not listed either: the section
+is scoped to the database containers the panel is already showing.
 
 **New container only offers SQL Server.** That is deliberate, and the panel says so above the
 button. The create path sets `ACCEPT_EULA` and `MSSQL_SA_PASSWORD` and publishes container port

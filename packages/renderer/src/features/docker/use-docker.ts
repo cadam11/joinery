@@ -71,8 +71,12 @@ export function useDocker(): DockerView {
   });
 
   const invalidate = useInvalidateIpc();
-  // The whole namespace: `detect`, `getContainers` and `getVolumes` all read the same container list,
-  // so there is no case where one of them is stale and the others are not.
+  // The whole namespace, because the three read the same container list and must not disagree about
+  // which containers count. They do NOT go stale together: only `detect` and `getContainers` carry
+  // `refetchInterval`, so a named volume that appears between refreshes waits for an invalidate
+  // while its container row shows up within 30s. Deliberate — the volumes are visible only in the
+  // panel, and polling them would cost every running app an extra `listVolumes` + `docker ps` every
+  // 30 seconds for a list nobody is looking at. Refresh and every mutation invalidate.
   const refresh = useCallback(() => {
     void invalidate.namespace('docker');
   }, [invalidate]);
