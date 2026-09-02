@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { KeychainStatus } from '@joinery/shared';
+import { APP_ID, type KeychainStatus } from '@joinery/shared';
 // Resolved to packages/main/src/__mocks__/keytar.ts via the vitest alias.
 import * as keytar from 'keytar';
 import { CredentialStore } from './credential-store';
+import { KEYCHAIN_SERVICE_ENV_VAR } from './service-name';
 
 describe('CredentialStore cache loading', () => {
   let getPasswordSpy: ReturnType<typeof vi.spyOn>;
@@ -164,5 +165,61 @@ describe('CredentialStore keychain degradation', () => {
 
     expect(store.isKeychainAvailable()).toBe(false);
     expect(seen).toEqual([{ available: false }]);
+  });
+});
+
+/**
+ * Which Keychain service the vault actually lands in (J-96).
+ *
+ * The resolver is unit-tested next door; these two assert the WIRING — that the store reads it
+ * once per instance and hands the result to every keytar call — because a resolver nothing calls
+ * would leave the E2E tiers writing to the developer's real vault while looking fixed.
+ */
+describe('CredentialStore keychain service name', () => {
+  const spies: ReturnType<typeof vi.spyOn>[] = [];
+  let previousOverride: string | undefined;
+
+  beforeEach(() => {
+    previousOverride = process.env[KEYCHAIN_SERVICE_ENV_VAR];
+    delete process.env[KEYCHAIN_SERVICE_ENV_VAR];
+    CredentialStore.resetInstance();
+  });
+
+  afterEach(() => {
+    while (spies.length > 0) spies.pop()?.mockRestore();
+    if (previousOverride === undefined) delete process.env[KEYCHAIN_SERVICE_ENV_VAR];
+    else process.env[KEYCHAIN_SERVICE_ENV_VAR] = previousOverride;
+  });
+
+  /** The service name every keytar call in one `set()` round trip was given. */
+  async function servicesTouchedByASet(): Promise<string[]> {
+    const getPassword = vi.spyOn(keytar, 'getPassword').mockResolvedValue(null);
+    const findCredentials = vi.spyOn(keytar, 'findCredentials').mockResolvedValue([]);
+    const setPassword = vi.spyOn(keytar, 'setPassword').mockResolvedValue(undefined);
+    spies.push(getPassword, findCredentials, setPassword);
+
+    await CredentialStore.getInstance().set('conn-1', 'secret');
+
+    return [
+      ...getPassword.mock.calls.map(call => call[0] as string),
+      ...findCredentials.mock.calls.map(call => call[0] as string),
+      ...setPassword.mock.calls.map(call => call[0] as string),
+    ];
+  }
+
+  it('uses the application id when nothing overrides it', async () => {
+    const services = await servicesTouchedByASet();
+
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set([APP_ID]));
+  });
+
+  it('uses the override when JOINERY_KEYCHAIN_SERVICE is set', async () => {
+    process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+
+    const services = await servicesTouchedByASet();
+
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set(['ca.adam11.joinery.tests']));
   });
 });

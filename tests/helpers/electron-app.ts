@@ -85,6 +85,36 @@ const RENDERER_FONTS: readonly string[] = [
   '500 1em "IBM Plex Mono"',
 ];
 
+/**
+ * The Keychain service every Electron launch in this repo stores credentials under.
+ *
+ * ── Why a launch needs to say anything about the keychain at all (J-96) ────────────────────
+ *
+ * The per-launch `--user-data-dir` in `launchJoinery` isolates everything the app writes to DISK,
+ * and it is easy to read that as isolating the app. It does not: `CredentialStore` keeps its vault in the macOS login
+ * keychain, which is scoped to the logged-in USER and namespaced only by a service name. So
+ * before this constant every test launch read, rewrote and left entries in the same item the
+ * INSTALLED Joinery uses — a developer's real connection passwords and AI provider keys.
+ *
+ * That is not a theoretical leak. `seedAiProvider` (tests/helpers/react/chat.ts) flips
+ * `apiKeyConfigured`, which is all the renderer gates the chat UI on; the key itself comes from
+ * the vault. On a machine where a real key had ever been saved, a spec that sent a message would
+ * have made a real, billed LLM call and stayed green.
+ *
+ * ── Why one stable name rather than one per launch ─────────────────────────────────────────
+ *
+ * A per-launch name would be marginally more hermetic and would leave a new orphan keychain item
+ * behind on every run, forever — nothing in a Playwright teardown can delete a keychain entry
+ * without loading keytar into the test process. Each launch already gets fresh profile UUIDs from
+ * its fresh user-data dir, so there is nothing for two runs to collide over inside the vault. One
+ * obviously-named item a developer can find and delete is the better trade.
+ *
+ * Read by `packages/main/src/services/keychain/service-name.ts`, whose
+ * `keychain-service-isolation.spec.ts` fails the unit tier if a launcher here ever stops setting
+ * it.
+ */
+export const TEST_KEYCHAIN_SERVICE = 'ca.adam11.joinery.tests';
+
 export interface LaunchedApp {
   app: ElectronApplication;
   window: Page;
@@ -97,6 +127,10 @@ export interface LaunchOptions {
    * Extra env vars to merge over the default Joinery launch env. Useful
    * for tests that need to perturb the host (e.g. restricting PATH so
    * the CLI dep probe fails and the missing-tools view renders).
+   *
+   * Wins over every default except the keychain service pin, which is applied after these for
+   * the reason given on {@link TEST_KEYCHAIN_SERVICE}: which vault the app under test writes to
+   * is a safety property of the tier, not a per-spec knob.
    */
   envOverrides?: Record<string, string>;
   /**
@@ -238,8 +272,10 @@ export async function launchJoinery(options: LaunchOptions = {}): Promise<Launch
   // Isolated user-data dir per launch so any profiles / settings created
   // during a test never leak into the next launch (which would shift the
   // welcome screen baseline once a saved profile starts showing up there).
-  // The --user-data-dir flag is honored by Electron and routes both
-  // electron-store and the keychain credential namespace into the temp dir.
+  // The --user-data-dir flag is honored by Electron and routes electron-store
+  // into the temp dir. It does NOT touch the keychain: the login keychain is a
+  // per-USER store with no per-profile namespace, which is what
+  // TEST_KEYCHAIN_SERVICE below exists to handle (J-96).
   const userDataDir = mkdtempSync(join(tmpdir(), 'joinery-test-userdata-'));
 
   // Before the app exists, because the state this writes is read at startup. A throw here leaves a
@@ -273,8 +309,11 @@ export async function launchJoinery(options: LaunchOptions = {}): Promise<Launch
       // Surface main-process console output so test failures around IPC /
       // connection / keytar are diagnosable.
       ELECTRON_ENABLE_LOGGING: '1',
-      // Per-test overrides land last so they win over the defaults.
+      // Per-test overrides land here so they win over the defaults above.
       ...(options.envOverrides ?? {}),
+      // Last, and deliberately past the overrides: no spec may aim the credential store at the
+      // real vault. See TEST_KEYCHAIN_SERVICE for what that would cost.
+      JOINERY_KEYCHAIN_SERVICE: TEST_KEYCHAIN_SERVICE,
     },
   });
 

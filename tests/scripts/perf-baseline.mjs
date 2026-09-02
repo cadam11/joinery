@@ -44,6 +44,10 @@ async function measureOnce({ hidden }) {
       ...process.env,
       NODE_ENV: 'production',
       ...(hidden ? { JOINERY_TEST: '1' } : {}),
+      // Same throwaway keychain namespace the Playwright launcher uses. A fresh user-data dir
+      // isolates disk, not the login keychain, so without this a benchmark run would read and
+      // rewrite the developer's real credential vault (J-96).
+      JOINERY_KEYCHAIN_SERVICE: 'ca.adam11.joinery.tests',
     },
   });
   try {
