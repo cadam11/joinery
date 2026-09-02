@@ -30,6 +30,14 @@ is a few hundred KB larger than their sum (its own header).
 The packaged `Joinery.app` is 340.7 MB after the change; the Electron runtime, not the asar, is now
 the bulk of it.
 
+Those two columns are the same tree with one line of `files` different, measured at `58b204b`. The
+**dependency** half of the archive is what this page is about and is stable; the _app-code_ half
+moves with every renderer commit, so the absolute totals drift. Re-measured after rebasing onto
+`577d8f2` (which brought in J-72's renderer fix): 79,378,286 B, still 9,032 files and 206
+dependencies, with the whole 1,411-byte difference in Joinery's own output and **not one dependency
+added, removed, or changed in size**. `pnpm run inventory:asar` re-derives the current numbers in
+under a second, which is why they are not pinned in a test.
+
 **Exactly three packages left, and nothing else moved.** Diffing the two `--json` runs
 package-by-package: 3 removed, 0 added, and **0 packages whose byte count or file count changed**.
 That is the property that made this safe to ship — it is not "the archive got smaller", it is "the
