@@ -202,38 +202,49 @@ async function scrollBarGutterPx(window: Page): Promise<number> {
  * resolved the other way. `-AppleShowScrollBars Always` pins it per process through Cocoa's argument
  * domain, and the gutter is re-measured here so an Electron that stopped honouring the argument
  * domain fails with a name on it rather than re-arming the trap.
+ *
+ * `options.envOverrides` is the one launch knob a spec here may reach, and it is spelled out rather
+ * than taking the launcher's whole `LaunchOptions`: the DPR and the scroller style are properties of
+ * the TIER, so a spec that could pass them would be able to capture a baseline the rest of the tier
+ * cannot compare against. The Docker panel is what needs it — `JOINERY_DOCKER_FIXTURE` pins what
+ * `docker.detect` answers (J-76, `packages/main/src/services/docker/docker-fixture.ts`), which is
+ * what makes that surface a picture of Joinery rather than of the host's `docker ps`.
  */
 export async function withVisualApp(
   theme: VisualTheme,
-  body: (launched: LaunchedApp) => Promise<void>
+  body: (launched: LaunchedApp) => Promise<void>,
+  options: { readonly envOverrides?: Record<string, string> } = {}
 ): Promise<void> {
   const deviceScaleFactor = pinnedDeviceScaleFactor();
   const macScrollBarStyle = pinnedScrollBarStyle();
 
-  await withJoineryReact({ deviceScaleFactor, macScrollBarStyle }, async launched => {
-    const actual = await launched.window.evaluate('window.devicePixelRatio');
-    expect(
-      actual,
-      '--force-device-scale-factor was not honoured — every baseline in this tier would be captured ' +
-        'at the display DPR, which is the J-21 geometry trap'
-    ).toBe(deviceScaleFactor);
+  await withJoineryReact(
+    { deviceScaleFactor, macScrollBarStyle, envOverrides: options.envOverrides },
+    async launched => {
+      const actual = await launched.window.evaluate('window.devicePixelRatio');
+      expect(
+        actual,
+        '--force-device-scale-factor was not honoured — every baseline in this tier would be captured ' +
+          'at the display DPR, which is the J-21 geometry trap'
+      ).toBe(deviceScaleFactor);
 
-    // Greater-than-zero rather than exactly 15: the two modes are 15 and 0, so "takes layout space"
-    // is the whole distinction, and pinning the metric as well would turn a Chromium change in
-    // scrollbar WIDTH into a guard failure — when the honest place for that is the baselines, which
-    // would show it as the pixel difference it is.
-    const gutter = await scrollBarGutterPx(launched.window);
-    expect(
-      gutter,
-      `-AppleShowScrollBars ${macScrollBarStyle} was not honoured: a scrolling container lost ` +
-        `${gutter}px to its scrollbar, i.e. this launch has macOS OVERLAY scrollbars. Every ` +
-        `baseline in this tier was captured with LEGACY scrollbars, which take 15px of layout ` +
-        `width out of every scrolling panel — comparing across the two is a reflow, not a UI change`
-    ).toBeGreaterThan(0);
+      // Greater-than-zero rather than exactly 15: the two modes are 15 and 0, so "takes layout space"
+      // is the whole distinction, and pinning the metric as well would turn a Chromium change in
+      // scrollbar WIDTH into a guard failure — when the honest place for that is the baselines, which
+      // would show it as the pixel difference it is.
+      const gutter = await scrollBarGutterPx(launched.window);
+      expect(
+        gutter,
+        `-AppleShowScrollBars ${macScrollBarStyle} was not honoured: a scrolling container lost ` +
+          `${gutter}px to its scrollbar, i.e. this launch has macOS OVERLAY scrollbars. Every ` +
+          `baseline in this tier was captured with LEGACY scrollbars, which take 15px of layout ` +
+          `width out of every scrolling panel — comparing across the two is a reflow, not a UI change`
+      ).toBeGreaterThan(0);
 
-    await pinTheme(launched.window, theme);
-    await body(launched);
-  });
+      await pinTheme(launched.window, theme);
+      await body(launched);
+    }
+  );
 }
 
 /**
