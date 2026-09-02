@@ -33,7 +33,9 @@ const TAB_FOCUS_KEY = (IS_MAC ? KEY_MOD.WinCtrl : KEY_MOD.CtrlCmd) | 43;
 // Monaco's real values (`monaco-editor/esm/vs/editor/editor.api.d.ts`). `KeyM` was missing until
 // J-83, so the component's new binding resolved to `modifier | undefined` and the guard below read
 // a bare modifier — an incomplete double reporting a keystroke nobody bound.
-const KEY_CODE = { Enter: 3, F5: 65, KeyE: 35, KeyM: 43 };
+const KEY_CODE = { Enter: 3, F5: 65, KeyD: 34, KeyE: 35, KeyK: 41, KeyM: 43 };
+/** ⌘K — the palette's own shortcut, and the keystroke J-73 is about. */
+const PALETTE_KEY = KEY_MOD.CtrlCmd | KEY_CODE.KeyK;
 
 interface FakeEditor {
   /**
@@ -71,9 +73,25 @@ interface FakeEditor {
  * the same one, which is the whole subject of J-132.
  */
 interface KeybindingRule {
+  /**
+   * The FIRST chord of the binding, as a `KeyMod | KeyCode` number.
+   *
+   * First chord and not the whole binding, because that is what the resolver keys its map on
+   * (`keybindingResolver.js:236` looks up `pressedChords[0]`) — and it is why a two-chord binding
+   * eats a single keypress. `chords` below says how many the rule actually needs.
+   */
   keybinding: number;
-  command: string;
+  /**
+   * `null` REMOVES the keystroke instead of claiming it. Monaco's `IKeybindingRule.command` is
+   * `string | null` (`editor.api.d.ts:1011-1016`), a null one survives `handleRemovals`
+   * (`keybindingResolver.js:100-103`), and `_doDispatch` runs nothing and — outside chord mode —
+   * does NOT prevent the default (`abstractKeybindingService.js:213-222`). That last clause is the
+   * whole of J-73's fix: the keydown goes on to `document`.
+   */
+  command: string | null;
   when: string | null;
+  /** How many keystrokes the binding needs. Absent means one. */
+  chords?: number;
 }
 
 const state = {
@@ -94,6 +112,18 @@ const state = {
   commandRegistry: new Map<string, () => void>(),
   /** The global dynamic keybinding list, in registration order. */
   rules: [] as KeybindingRule[],
+  /**
+   * Monaco's OWN defaults, kept apart from the list above so that every assertion about
+   * `state.rules` still means "what this component registered".
+   *
+   * They resolve BEFORE the dynamic rules, which is where Monaco puts them:
+   * `new KeybindingResolver(defaults, overrides)` concatenates in that order
+   * (`standaloneServices.js:349-356`, `keybindingResolver.js:34`), and the resolver then walks the
+   * combined list BACKWARDS — so a dynamic rule outranks a default on the same keystroke.
+   */
+  defaultRules: [] as KeybindingRule[],
+  /** `CommandsRegistry` entries for the defaults above — Monaco's, not the component's. */
+  defaultCommands: new Map<string, () => void>(),
   /**
    * Monaco numbers editors from a module-global `++EDITOR_ID` (`codeEditorWidget.js:194`); so does
    * the double, so ids are unique per mount here as they are there.
@@ -171,18 +201,119 @@ function whenMatches(when: string | null, focused: FakeEditor): boolean {
  * happened" are different failures and the tests distinguish them.
  */
 function press(keybinding: number, focused: FakeEditor): boolean {
-  for (let i = state.rules.length - 1; i >= 0; i--) {
-    const rule = state.rules[i] as KeybindingRule;
+  return dispatch(keybinding, focused).ranCommand !== null;
+}
+
+/** What one keydown did, in the three terms `_doDispatch` decides between. */
+interface Dispatched {
+  /** The command id that ran, or `null` if none did. */
+  readonly ranCommand: string | null;
+  /**
+   * Whether Monaco called `preventDefault()` AND `stopPropagation()` on the keydown
+   * (`standaloneServices.js:260-269` does both, together, off one boolean). `false` means the event
+   * carried on up to `document` — which is the only way a renderer-owned shortcut such as the
+   * palette's ⌘K can ever run while the caret is in an editor.
+   */
+  readonly consumed: boolean;
+  /** Monaco is waiting for the second keystroke of a chord — `ResultKind.MoreChordsNeeded`. */
+  readonly awaitingChord: boolean;
+}
+
+/**
+ * One keydown, resolved and dispatched the way Monaco does it.
+ *
+ * The four outcomes, each traced to the branch of `_doDispatch`
+ * (`abstractKeybindingService.js:186-247`) it stands for:
+ *
+ *  - **no rule matches** → `NoMatchingKb`, and outside chord mode `shouldPreventDefault` stays
+ *    `false`, so the keydown propagates;
+ *  - **the winning rule needs another chord** → `MoreChordsNeeded`, which sets
+ *    `shouldPreventDefault = true` — the editor eats a keystroke it will not act on. This is J-73;
+ *  - **the winning rule has a null command** → `KbFound(null)`, nothing runs, and outside chord
+ *    mode nothing is prevented either. This is J-73's fix;
+ *  - **the winning rule names a command** → it runs, and the keydown is consumed.
+ *
+ * "Winning" is `_findCommand`'s rule and not this file's: the LAST rule in `defaults ++ dynamic`
+ * whose first chord matches and whose when-clause matches the focused editor's context
+ * (`keybindingResolver.js:281-290`). Deliberately not "prefer the rule that is a complete binding" —
+ * a later two-chord rule beats an earlier one-chord rule, and that asymmetry is exactly what makes
+ * the fix work in the other direction.
+ */
+function dispatch(keybinding: number, focused: FakeEditor): Dispatched {
+  const resolvable = [...state.defaultRules, ...state.rules];
+  for (let i = resolvable.length - 1; i >= 0; i--) {
+    const rule = resolvable[i] as KeybindingRule;
     if (rule.keybinding !== keybinding) continue;
     if (!whenMatches(rule.when, focused)) continue;
-    const handler = state.commandRegistry.get(rule.command);
+    if ((rule.chords ?? 1) > 1) {
+      return { ranCommand: null, consumed: true, awaitingChord: true };
+    }
+    if (rule.command === null) {
+      return { ranCommand: null, consumed: false, awaitingChord: false };
+    }
+    const handler =
+      state.commandRegistry.get(rule.command) ?? state.defaultCommands.get(rule.command);
     if (handler === undefined) {
       throw new Error(`[double] rule for "${rule.command}", but no such command is registered`);
     }
     handler();
-    return true;
+    return { ranCommand: rule.command, consumed: true, awaitingChord: false };
   }
-  return false;
+  return { ranCommand: null, consumed: false, awaitingChord: false };
+}
+
+/**
+ * The Monaco defaults these tests need, seeded into the resolver ahead of anything the component
+ * registers.
+ *
+ * **Every fact in this table is asserted against the real registry** by
+ * `monaco-default-keybindings.spec.ts`, which imports `editor.main.js` and reads
+ * `KeybindingsRegistry.getDefaultKeybindings()`. That is deliberate and it is the point: a double
+ * that invented "⌘K is a chord prefix" would be a double encoding the bug under test, and this repo
+ * has shipped three green-but-broken changes exactly that way. Here the shape of the resolution is
+ * modelled; over there the facts are checked.
+ *
+ * Two representatives of ⌘K rather than all thirty-one: the resolver's answer to a first chord does
+ * not depend on how many rules share it, and the count is asserted where it can be — against
+ * Monaco itself.
+ *
+ * `when: null` stands in for the real clauses (`editorTextFocus` and friends). Every dispatch in
+ * this file happens with an editor focused, which is the only context Monaco's standalone service
+ * dispatches in at all, so the two agree wherever it matters.
+ */
+const MONACO_DEFAULT_RULES: readonly KeybindingRule[] = [
+  // ⌘K ⌘C / ⌘K ⌘0 — two of the thirty-one two-chord bindings that make ⌘K a chord prefix
+  // (`comment.js:85`, `folding.js:744`).
+  { keybinding: PALETTE_KEY, command: 'editor.action.addCommentLine', when: null, chords: 2 },
+  { keybinding: PALETTE_KEY, command: 'editor.foldAll', when: null, chords: 2 },
+  // The neighbours a ⌘K release must NOT disturb, both single-chord: ⇧⌘K deletes the line
+  // (`linesOperations.js:414`) and ⌘D extends the selection to the next match
+  // (`multicursor.js` / `addSelectionToNextFindMatch`).
+  {
+    keybinding: KEY_MOD.CtrlCmd | KEY_MOD.Shift | KEY_CODE.KeyK,
+    command: 'editor.action.deleteLines',
+    when: null,
+  },
+  {
+    keybinding: KEY_MOD.CtrlCmd | KEY_CODE.KeyD,
+    command: 'editor.action.addSelectionToNextFindMatch',
+    when: null,
+  },
+];
+
+/**
+ * Puts Monaco's own bindings in place, commands included — `CommandsRegistry` holds those too.
+ *
+ * Its own map rather than `state.commandRegistry`: that one means "commands this component
+ * registered", and several tests count its entries to prove the component cleaned up after itself.
+ */
+function seedMonacoDefaults(): void {
+  state.defaultRules = MONACO_DEFAULT_RULES.map(rule => ({ ...rule }));
+  state.defaultCommands = new Map(
+    state.defaultRules
+      .filter((rule): rule is KeybindingRule & { command: string } => rule.command !== null)
+      .map(rule => [rule.command, () => undefined])
+  );
 }
 
 function makeEditor(): FakeEditor {
@@ -343,6 +474,7 @@ beforeEach(() => {
   state.cursorListeners = [];
   state.commandRegistry = new Map();
   state.rules = [];
+  seedMonacoDefaults();
   state.disposedSubscriptions = 0;
   state.actionExists = true;
   state.triggered = [];
@@ -550,13 +682,80 @@ describe('keybindings', () => {
     expect(onExecute).toHaveBeenCalledTimes(2);
   });
 
-  it('binds exactly four keystrokes and nothing else', () => {
-    // The fourth is J-83's Control-M, `editor.action.toggleTabFocusMode` — the editor's only way
-    // out for a keyboard user. Which modifier constant carries Control depends on the platform:
+  it('releases ⌘K, so the palette’s own shortcut reaches the window (J-73)', () => {
+    // The bug: Monaco claims ⌘K as the first chord of thirty-one two-chord bindings, so with the
+    // caret in a SQL editor the resolver answers `MoreChordsNeeded`, `_doDispatch` prevents the
+    // default, and the container listener calls `stopPropagation()`. The palette advertises ⌘K and
+    // listens on `document` (`command-palette.tsx:79-92`), so it never saw the keystroke — a user
+    // typing SQL could not open the palette with the key the palette tells them to press.
+    //
+    // The fix is a scoped keybinding rule with a NULL command, which is Monaco's own way of
+    // removing a binding: the rule wins (it is newest), nothing runs, and nothing is prevented.
+    mount();
+    const result = dispatch(PALETTE_KEY, lastEditor());
+
+    expect(result.consumed).toBe(false);
+    expect(result.awaitingChord).toBe(false);
+    expect(result.ranCommand).toBeNull();
+  });
+
+  it('releases ⌘K without registering a command for it', () => {
+    // Not merely tidiness: `monaco.editor.addCommand` + a rule is what `bindKey` does, and doing
+    // that here would mean ⌘K ran an empty handler AND was consumed — the palette would still never
+    // see it. The absence of a command is the mechanism.
+    mount();
+    const released = state.rules.filter(rule => rule.command === null);
+
+    expect(released).toHaveLength(1);
+    expect(released[0]?.keybinding).toBe(PALETTE_KEY);
+    expect(released[0]?.when).toBe(`editorId == '${lastEditor().id}'`);
+  });
+
+  it('leaves ⇧⌘K and ⌘D — Monaco’s neighbouring bindings — alone', () => {
+    // The release has to be exactly one keystroke wide. ⇧⌘K (delete line) and ⌘D (add selection to
+    // next find match) are different dispatch chords, and both are single-chord bindings Monaco
+    // acts on immediately; `monaco-default-keybindings.spec.ts` asserts that against the real
+    // registry, which is what makes these two seeded rules a fact rather than a convenience.
+    mount();
+
+    expect(dispatch(KEY_MOD.CtrlCmd | KEY_MOD.Shift | KEY_CODE.KeyK, lastEditor())).toEqual({
+      ranCommand: 'editor.action.deleteLines',
+      consumed: true,
+      awaitingChord: false,
+    });
+    expect(dispatch(KEY_MOD.CtrlCmd | KEY_CODE.KeyD, lastEditor())).toEqual({
+      ranCommand: 'editor.action.addSelectionToNextFindMatch',
+      consumed: true,
+      awaitingChord: false,
+    });
+  });
+
+  it('proves the double would have caught the bug: ⌘K is eaten without the release', () => {
+    // A release that could not fail is a release that proves nothing. With no editor mounted there
+    // is no dynamic rule, so what is left is Monaco's own chord prefix — and it consumes the
+    // keystroke. Which is precisely the state a user was in before this fix.
+    const unmounted = mount();
+    const editor = lastEditor();
+    unmounted.view.unmount();
+
+    expect(dispatch(PALETTE_KEY, editor)).toEqual({
+      ranCommand: null,
+      consumed: true,
+      awaitingChord: true,
+    });
+  });
+
+  it('touches exactly five keystrokes: four bound, one released', () => {
+    // The fourth binding is J-83's Control-M, `editor.action.toggleTabFocusMode` — the editor's only
+    // way out for a keyboard user. Which modifier constant carries Control depends on the platform:
     // `WinCtrl` is Control on macOS and the WINDOWS key on Windows, while `CtrlCmd` is ⌘ on macOS
     // and Control elsewhere. jsdom reports no macOS, so `IS_MAC` is false here and the component
     // binds `CtrlCmd` — the expectation is computed the same way rather than hardcoded, because
     // hardcoding either constant would pass on one platform and lie on the other.
+    //
+    // The fifth is J-73's ⌘K, which is a rule with no command: the component claims four keystrokes
+    // and hands one back. Counted together because both halves go through the same disposal, and a
+    // release that leaked would be as bad as a binding that did.
     mount();
     expect(state.rules.map(rule => rule.keybinding).sort((a, b) => a - b)).toEqual(
       [
@@ -564,8 +763,10 @@ describe('keybindings', () => {
         KEY_MOD.CtrlCmd | KEY_CODE.Enter,
         KEY_MOD.CtrlCmd | KEY_CODE.KeyE,
         TAB_FOCUS_KEY,
+        PALETTE_KEY,
       ].sort((a, b) => a - b)
     );
+    expect(state.rules.filter(rule => rule.command !== null)).toHaveLength(4);
   });
 
   it('the fourth one toggles tab-focus mode, which is the whole point of it', () => {
@@ -631,8 +832,11 @@ describe('keybinding lifetime', () => {
 
   it('takes its rules out of the global list on unmount', () => {
     const { view } = mount();
-    expect(state.rules).toHaveLength(4);
-    const commandIds = state.rules.map(rule => rule.command);
+    // Five: four bindings and J-73's ⌘K release, which is a rule with no command to remove.
+    expect(state.rules).toHaveLength(5);
+    const commandIds = state.rules
+      .map(rule => rule.command)
+      .filter((id): id is string => id !== null);
 
     view.unmount();
 
