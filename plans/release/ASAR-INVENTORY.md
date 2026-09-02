@@ -32,10 +32,20 @@ the bulk of it.
 
 Those two columns are the same tree with one line of `files` different, measured at `58b204b`. The
 **dependency** half of the archive is what this page is about and is stable; the _app-code_ half
-moves with every renderer commit, so the absolute totals drift. Re-measured after rebasing onto
-`577d8f2` (which brought in J-72's renderer fix): 79,378,286 B, still 9,032 files and 206
-dependencies, with the whole 1,411-byte difference in Joinery's own output and **not one dependency
-added, removed, or changed in size**. `pnpm run inventory:asar` re-derives the current numbers in
+moves with every renderer commit, so the absolute totals drift. Re-measured twice while this change
+waited on review, each time from a forced clean rebuild:
+
+| rebase base            | `app.asar`   | files | deps | third-party deps added / removed / changed |
+| ---------------------- | ------------ | ----- | ---- | ------------------------------------------ |
+| `58b204b` (original)   | 79,376,875 B | 9,032 | 206  | —                                          |
+| `577d8f2` (J-72)       | 79,378,286 B | 9,032 | 206  | **0 / 0 / 0**                              |
+| `4fc76ca` (J-73, J-74) | 79,427,397 B | 9,044 | 206  | **0 / 0 / 0**                              |
+
+Every byte of both increases is Joinery's own output — the renderer bundle plus `@joinery/shared`,
+which the `files` mapping copies into `node_modules/@joinery/shared` and which the inventory
+therefore counts among the "dependencies" even though it is first-party code.
+
+`pnpm run inventory:asar` re-derives the current numbers in
 under a second, which is why they are not pinned in a test.
 
 **Exactly three packages left, and nothing else moved.** Diffing the two `--json` runs
