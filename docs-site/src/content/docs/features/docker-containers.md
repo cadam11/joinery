@@ -118,7 +118,7 @@ Docker and why the answer can differ from your terminal's.
 | The colour per state, with no brand colours                            | `packages/renderer/src/features/docker/docker-pip.tsx:34-41`                                                          |
 | The count renders only above zero                                      | `packages/renderer/src/features/docker/docker-pip.tsx:67-73`                                                          |
 | ⌘K ▸ "Docker containers" opens rather than toggles                     | `packages/renderer/src/commands/catalogue.ts:657-665`, `docker-pip.tsx:53-55`                                         |
-| Escape closes the popover                                              | `packages/renderer/src/features/docker/docker-pip.tsx:84-98`                                                          |
+| Escape closes the popover                                              | `packages/renderer/src/ui/popover.tsx:12-50, 127-134`                                                                 |
 | Docker is polled every 30 seconds                                      | `packages/renderer/src/features/docker/use-docker.ts:26, 50-72`                                                       |
 | The pip, panel and welcome tab share one query                         | `packages/renderer/src/features/docker/use-docker.ts:1-16`, `features/welcome/welcome-panel.tsx:282-295`              |
 | The engine is derived from the image name, per engine                  | `packages/renderer/src/features/docker/docker-model.ts:56-65`                                                         |
