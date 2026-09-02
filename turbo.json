@@ -27,7 +27,15 @@
     },
     "lint": {
       "outputs": [],
-      "cache": true
+      "cache": true,
+      // `$TURBO_DEFAULT$` plus the repo-root ESLint config, because the default input set is
+      // the package's OWN files and `.eslintrc.json` lives two directories above
+      // `packages/main`, `packages/preload` and `packages/shared`. Without it named here, adding
+      // a rule to that file and re-running `pnpm run lint` reported "4 successful, 4 cached …
+      // FULL TURBO" — a green gate that executed no ESLint at all (measured, J-34).
+      // `packages/renderer` needs no entry: its flat config is inside the package, so
+      // `$TURBO_DEFAULT$` already covers it. `scripts/lint-gate.spec.ts` asserts all four.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.eslintrc.json"]
     },
     "lint:fix": {
       "outputs": [],
