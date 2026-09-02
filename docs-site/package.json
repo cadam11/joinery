@@ -11,12 +11,14 @@
   "packageManager": "pnpm@11.21.0",
   "scripts": {
     "dev": "astro dev",
-    "build": "node scripts/generate-reference.mjs --check && node scripts/check-markdown-directives.mjs && astro build && node scripts/check-markdown-directives.mjs --dist",
+    "build": "node scripts/generate-reference.mjs --check && node scripts/check-markdown-directives.mjs && astro build && node scripts/check-markdown-directives.mjs --dist && node scripts/verify-dist.mjs",
     "preview": "astro preview",
     "check": "node scripts/generate-reference.mjs --check && node scripts/check-markdown-directives.mjs && astro check",
     "check:reference": "node scripts/generate-reference.mjs --check",
     "check:directives": "node scripts/check-markdown-directives.mjs",
-    "generate:reference": "node scripts/generate-reference.mjs"
+    "generate:reference": "node scripts/generate-reference.mjs",
+    "test": "node --test scripts/verify-dist.test.mjs",
+    "verify:dist": "node scripts/verify-dist.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",
