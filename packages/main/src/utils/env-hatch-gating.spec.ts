@@ -12,9 +12,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
  * does not survive the next refactor, and the thing at stake — a shipped, signed app doing what
  * the environment tells it — is worth a failing test rather than a convention.
  *
- * So: the hatch variables below may be read from `process.env` in `utils/runtime-mode.ts` and
- * nowhere else. `runtime-mode.ts` is where the `app.isPackaged` gate is applied, so a read
- * anywhere else is by definition an ungated one.
+ * So: each hatch variable below may be NAMED only in the file that gates it — that is where the
+ * `app.isPackaged` check is applied, so a read anywhere else is by definition an ungated one. The
+ * check is on the bare name rather than on `process.env.X`, because the prefix form is trivial to
+ * slip past; see {@link namesVariable}.
  */
 
 /**
@@ -31,16 +32,25 @@ const MAX_TREE_DEPTH = 12;
 
 /**
  * Environment variables that change what the app DOES and exist for development or testing, each
- * with the exhaustive list of files allowed to read it.
+ * with the exhaustive list of files allowed to name it.
  *
  * `logger.ts` is a deliberate exception for `NODE_ENV`: it picks the default log level from it,
  * which changes only how much the app says, never what it does — and that file's header commits
  * to importing no electron so it stays safe to import from unit-tested code, which a gate here
  * would break. A louder log in a packaged app is not a security boundary.
+ *
+ * `JOINERY_KEYCHAIN_SERVICE` is the variable this ticket is about, so it is listed even though its
+ * gate is structurally different: `service-name.ts` is the only file that names it (as the
+ * `KEYCHAIN_SERVICE_ENV_VAR` constant), and the gate is applied in the same file. The store reads
+ * `process.env` wholesale and hands it to that resolver, so it never names the variable at all.
  */
 const GATED_HATCHES = [
   { variable: 'JOINERY_TEST', allowedIn: ['utils/runtime-mode.ts'] },
   { variable: 'NODE_ENV', allowedIn: ['utils/runtime-mode.ts', 'utils/logger.ts'] },
+  {
+    variable: 'JOINERY_KEYCHAIN_SERVICE',
+    allowedIn: ['services/keychain/service-name.ts'],
+  },
 ] as const;
 
 beforeAll(() => {
@@ -68,24 +78,38 @@ function collectSources(dir: string, depth = 0): string[] {
 }
 
 /**
- * Lines that actually read the variable, ignoring prose. Comments are stripped first because the
- * files that no longer read a hatch are exactly the files most likely to explain why in a comment
- * — a guard that failed on its own documentation would be worse than no guard.
+ * The file's lines with prose dropped. Comments are stripped because the files that no longer read
+ * a hatch are exactly the files most likely to explain why in a comment — a guard that failed on
+ * its own documentation would be worse than no guard.
  */
-function readsVariable(source: string, variable: string): boolean {
+function codeLines(source: string): string[] {
   return source
     .split('\n')
     .map(line => line.trim())
-    .filter(line => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'))
-    .some(line => line.includes(`process.env.${variable}`) || line.includes(`env.${variable}`));
+    .filter(line => !line.startsWith('*') && !line.startsWith('//') && !line.startsWith('/*'));
+}
+
+/**
+ * Whether a file's code so much as names the variable.
+ *
+ * The bare name, deliberately, rather than a `process.env.X` prefix: the review of this guard's
+ * first version showed the prefix form is trivial to slip past — `process.env['JOINERY_TEST']` and
+ * `const { JOINERY_TEST } = process.env` both added an ungated read and left the guard green, and
+ * ESLint catches neither (`dot-notation` is off). Matching the name itself has no such gaps, and
+ * over-matching is the safe direction: the false positive is a file that mentions a hatch without
+ * reading it, which is a five-second read to confirm, while the false negative is a shipped app
+ * doing what the environment tells it.
+ */
+function namesVariable(source: string, variable: string): boolean {
+  return codeLines(source).some(line => line.includes(variable));
 }
 
 describe.each(GATED_HATCHES)(
   '$variable is read only where it is gated',
   ({ variable, allowedIn }) => {
-    it(`is read in exactly ${allowedIn.join(', ')}`, () => {
+    it(`is named in exactly ${allowedIn.join(', ')}`, () => {
       const readers = collectSources(MAIN_SRC)
-        .filter(file => readsVariable(readFileSync(file, 'utf8'), variable))
+        .filter(file => namesVariable(readFileSync(file, 'utf8'), variable))
         .map(file => relative(MAIN_SRC, file))
         .sort();
 
