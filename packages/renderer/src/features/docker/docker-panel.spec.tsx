@@ -3,6 +3,7 @@
  * report main cannot give, the Connect wire, and the create form's refusals.
  */
 
+import { useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,7 @@ import { setDiagnosticsSink, setNotifier } from '../../state/diagnostics';
 import { installJoineryMock, removeJoineryMock } from '../../test/joinery-mock';
 import { TooltipProvider } from '../../ui';
 import { DockerPanel } from './docker-panel';
+import { DockerPip } from './docker-pip';
 
 const teardowns: (() => void)[] = [];
 const noop = (): void => undefined;
@@ -344,5 +346,48 @@ describe('DockerPanel — the create form', () => {
     expect(screen.getByTestId('docker-create-form').textContent).toContain(
       'mssql/server:2022-latest'
     );
+  });
+});
+
+/**
+ * The pip and its popover, mounted together, because the Escape path is a property of the PAIR and
+ * J-72's regression lived exactly in the seam: `docker-pip.tsx` carried a local `onKeyDown` for it,
+ * `ui/popover.tsx` now carries the real fix, and the only coverage was an e2e test that needs a
+ * running Docker daemon. This runs against the bridge double instead.
+ */
+describe('DockerPip — the keyboard path out of the panel (J-72)', () => {
+  function PipHarness({ onOpenChange }: { readonly onOpenChange: (open: boolean) => void }) {
+    const [open, setOpen] = useState(true);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    return (
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <DockerPip
+            controlClassName="h-6 px-1.5"
+            open={open}
+            onOpenChange={next => {
+              setOpen(next);
+              onOpenChange(next);
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  it('closes on Escape with focus on the panel’s own tooltipped Refresh button', async () => {
+    const onOpenChange = vi.fn();
+    render(<PipHarness onOpenChange={onOpenChange} />);
+    await waitFor(() => expect(screen.queryByTestId('docker-refresh')).not.toBeNull());
+
+    screen.getByTestId('docker-refresh').focus();
+    // The tip is up, which is what used to swallow the key — asserted so this cannot pass without
+    // having reproduced the condition.
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeNull());
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(screen.queryByTestId('docker-popover')).toBeNull());
   });
 });
