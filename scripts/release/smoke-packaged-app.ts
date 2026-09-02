@@ -3,7 +3,7 @@
  *
  *   node scripts/release/smoke-packaged-app.ts [path/to/Joinery.app] [--show]
  *
- * Launches the bundle `pnpm run package:dir` produced, waits for the main window to load the
+ * Launches the bundle `pnpm run package:test` produced, waits for the main window to load the
  * renderer and mount the shell, then quits it. No database, no query, no connection — this answers
  * exactly one question, and it is the question an asar exclusion can break: does the archive still
  * contain enough to start.
@@ -20,7 +20,7 @@
  * CI on a Linux runner as happily as on a Mac, while this one needs a real macOS app bundle and a
  * window server. Run it by hand after packaging.
  *
- * ── The two things it refuses to touch ────────────────────────────────────────────────────────
+ * ── What it refuses to touch, and what makes the refusal real ─────────────────────────────────
  *
  *  - a fresh `mkdtemp` user-data directory per run, passed as Chromium's `--user-data-dir`, so
  *    window state, profiles and app state go somewhere thrown away in the `finally`;
@@ -29,49 +29,32 @@
  *    service name, so without this the boot would read and rewrite the vault the INSTALLED Joinery
  *    keeps a developer's real connection passwords and AI keys in. See J-96.
  *
- * By default the window stays hidden (`JOINERY_TEST=1`, honoured by `window.ts`'s `ready-to-show`
- * handler) so a run does not steal focus; the renderer still paints into Chromium's off-screen
- * surface, which is what every assertion below reads. Pass `--show` to watch a real window appear.
+ * That pin is not sufficient on its own, and this is the part worth reading before running it.
+ * J-161 (PR #113) makes a PACKAGED Joinery refuse the override — correctly: the packaged binary is
+ * the one the user trusted with their Keychain. This script launches exactly that, so an unmarked
+ * bundle would boot against the production namespace, and the boot is not read-only:
  *
- * ── READ THIS BEFORE RUNNING IT ONCE J-161 (PR #113) HAS LANDED ────────────────────────────────
+ *  - `packages/main/src/index.ts` fires `CredentialStore.getInstance().loadAllIntoCache()` on every
+ *    `whenReady`, unconditionally and un-awaited;
+ *  - `credential-store.ts` — when the vault key is absent but other accounts exist under the same
+ *    service — takes the legacy-migration branch: `saveVault()` writes a vault entry, then
+ *    `keytar.deletePassword` removes EVERY legacy item it found.
  *
- * **While `JOINERY_KEYCHAIN_SERVICE` is honoured — i.e. before PR #113 (J-161) lands — this smoke
- * run uses the hermetic test namespace and is safe. Once a packaged app ignores the override, this
- * script must NOT be run against a packaged build until a build-time test-capability flag exists,
- * because the boot path can MIGRATE — write and delete — production Keychain entries.**
+ * So one run against a bundle that ignored the pin could rewrite and then destroy a developer's
+ * real Keychain items with nobody touching the UI. `assertBundleIsTestCapable` below is what stops
+ * it: the bundle must carry the build-time test-capability marker
+ * (`scripts/release/test-build-marker.ts`, J-167), which only `pnpm run package:test` writes and no
+ * environment can forge. It replaced a hand-maintained constant that had to be flipped by whoever
+ * merged #113 — a fact about the bundle in front of us, rather than one somebody had to remember.
  *
- * That is the correction to an earlier, weaker claim in this comment that the run was "read-only,
- * as long as you do not save a profile or run a query". Those are operator actions, and this script
- * performs none of them — but the boot does its own writing, before any assertion here runs:
+ * Build what this script will accept with:
  *
- *  - `packages/main/src/index.ts:137-139` fires `CredentialStore.getInstance().loadAllIntoCache()`
- *    on every `whenReady`, unconditionally and un-awaited;
- *  - `credential-store.ts:73-88` — when the vault key is absent but other accounts exist under the
- *    same service, that load takes the legacy-migration branch: `saveVault()` writes a vault entry,
- *    then `keytar.deletePassword` removes EVERY legacy item it found.
+ *   pnpm run package:test        # package:dir, then stamp the bundle as a test build
  *
- * So on a machine whose production vault is still in the pre-migration shape, one run of this
- * script against a packaged build that ignored the override would rewrite and then destroy those
- * items with nobody touching the UI. `PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE` below is the gate:
- * flip it when #113 lands and this script refuses to launch until the capability flag replaces it.
- *
- * Two further reasons the same run is not as inert as it looks: the smoke bundle is unsigned
- * (`mac.identity: null`), so it is a different Keychain client than the installed app and reading a
- * production item raises macOS's "allow access?" prompt — and an operator who answers *Always
- * Allow* grants a throwaway binary standing access to that item.
- *
- * The env pin below stays regardless — it is what protects the run today, and it is what the J-96
- * structural guard checks for. J-161 refuses it only in a packaged app, and deliberately: the
- * shipped binary is the one the user trusted with their Keychain, so letting the environment aim it
- * elsewhere borrows that trust. Its own reasoning names this very case — "if a future tier ever has
- * to launch a packaged bundle, that wants an explicit, signed-build-only mechanism, not an env var"
- * — and this script is that case.
- *
- * J-161 also adds a third rule to `keychain-service-isolation.spec.ts`: a registered launch site
- * must not name a packaged-bundle path. This file names three of them by necessity, so on the
- * merged tree that rule fails here. Sequencing the two changes is the coordinator's call and is
- * deliberately not papered over here with an exemption — the reviewer recommends landing the
- * capability flag first rather than exempting this launcher from the rule.
+ * One thing the marker does NOT fix: the bundle is unsigned (`mac.identity: null`), so it is a
+ * different Keychain client than the installed app. It only ever asks for the test namespace now,
+ * so there is nothing of the developer's for macOS to prompt about — but an operator who does see a
+ * prompt and answers *Always Allow* is granting a throwaway binary standing access, so do not.
  *
  * Runs under Node's type stripping (>= 22.18), like every other `.ts` in this directory.
  */
@@ -84,6 +67,8 @@ import { fileURLToPath } from 'node:url';
 
 import { _electron as electron } from '@playwright/test';
 import { parse } from 'yaml';
+
+import { bundleCarriesTestCapability } from './test-build-marker.ts';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
 const CONFIG_PATH = join(REPO_ROOT, 'electron-builder.yml');
@@ -106,30 +91,6 @@ const DEFAULT_APP = join(REPO_ROOT, 'release/mac-arm64/Joinery.app');
  * blocker B1).
  */
 const TEST_KEYCHAIN_SERVICE = 'ca.adam11.joinery.tests';
-
-/**
- * Whether a PACKAGED Joinery still honours `JOINERY_KEYCHAIN_SERVICE`.
- *
- * `true` today, and that is a fact about `packages/main/src/services/keychain/service-name.ts`
- * rather than a preference: it reads the override with no reference to `app.isPackaged`. PR #113
- * (J-161) changes that on purpose, and when it lands **this constant must be set to `false` in the
- * same change**, at which point `assertKeychainIsolationHolds` below refuses to launch instead of
- * booting the packaged bundle against the developer's production Keychain namespace — where the
- * credential store's legacy-credential migration writes a vault entry and deletes every legacy item
- * it finds (`credential-store.ts:73-88`), with no operator action at all.
- *
- * A hand-maintained constant rather than a probe, deliberately. What would have to be detected is
- * the behaviour of a DIFFERENT process's resolver, and the only honest way to observe it is to boot
- * the app and read its log — which is the very thing that must not happen. A build-time
- * test-capability flag baked into the bundle is the real fix (ticket to be filed; relates J-88); at
- * that point this constant is replaced by reading the flag out of the bundle's own metadata, and
- * the refusal below becomes "this bundle was not built with the test capability".
- *
- * The failure mode of getting it wrong is one-directional and that is why it is safe as a constant:
- * stale-`true` after #113 is the dangerous state, and it is the state the reviewer, the PR body and
- * `plans/release/ASAR-INVENTORY.md` all name as the precondition for merging #113.
- */
-const PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE = true;
 
 /** The shell's root element. `startup-screen` is what renders while it is still resolving state. */
 const SHELL_SELECTORS = ['[data-testid="app-shell"]', '[data-testid="startup-screen"]'].join(', ');
@@ -190,30 +151,29 @@ function launchEnv(show: boolean): Record<string, string> {
 }
 
 /**
- * Refuse to launch when the bundle would ignore the keychain pin.
+ * Refuse to launch a bundle that was not built with the test capability.
  *
  * Before the launch, not after: the damage this prevents happens during `whenReady`, so an
  * assertion that ran once a window existed would be too late.
  */
-export function assertKeychainIsolationHolds(
-  packagedAppHonoursOverride = PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE
-): void {
-  if (packagedAppHonoursOverride) return;
+export function assertBundleIsTestCapable(appPath: string): void {
+  if (bundleCarriesTestCapability(appPath)) return;
   throw new Error(
-    'a packaged Joinery ignores JOINERY_KEYCHAIN_SERVICE (J-161), so this smoke run would boot ' +
-      "against the developer's production Keychain namespace, where the credential store's " +
-      'legacy-credential migration writes and then deletes real entries. Refusing to launch until ' +
-      'a build-time test-capability flag exists — see this file’s header.'
+    `${appPath} was not built with the J-167 test capability, so a packaged Joinery would ` +
+      'ignore the JOINERY_KEYCHAIN_SERVICE pin this launcher sets (J-161) and boot against the ' +
+      "developer's production Keychain namespace, where the credential store's legacy-credential " +
+      'migration writes and then deletes real entries. Build a bundle this can launch with ' +
+      '"pnpm run package:test".'
   );
 }
 
 async function smoke(args: Args): Promise<void> {
-  assertKeychainIsolationHolds();
   const productName = productNameFromConfig(readFileSync(CONFIG_PATH, 'utf8'));
   const executable = executableInBundle(args.appPath, productName);
   if (!existsSync(executable)) {
-    throw new Error(`no packaged app at ${executable} — run "pnpm run package:dir" first`);
+    throw new Error(`no packaged app at ${executable} — run "pnpm run package:test" first`);
   }
+  assertBundleIsTestCapable(args.appPath);
 
   const userDataDir = mkdtempSync(join(tmpdir(), 'joinery-smoke-userdata-'));
   stdout.write(`  launching ${executable}\n`);
