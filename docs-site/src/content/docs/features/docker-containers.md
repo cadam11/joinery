@@ -68,11 +68,11 @@ filled in — you still choose the engine, the credentials and the name. It is d
 that publishes no port, and says so: _This container publishes no port, so nothing can connect to
 it._
 
-If Docker refuses either action, Joinery reports **Docker's own reason** — _Could not stop
-joinery-postgres: cannot stop container: permission denied_, for example — rather than a generic
-failure. A container that had already stopped by the time you pressed **Stop** is not a failure and
-is not reported as one. Either way the container list is re-read afterwards, so the row shows what
-actually happened.
+If Docker refuses either action, the toast names the container and carries **Docker's own reason**
+rather than a generic failure. A container that had already stopped by the time you pressed **Stop**
+is not a failure and is not reported as one. Either way the container list is re-read afterwards, so
+the row shows what actually happened, and **⌘J** opens the output panel where the same error is
+logged with its full detail.
 
 ### Creating one
 
@@ -125,7 +125,7 @@ Docker and why the answer can differ from your terminal's.
 | The count renders only above zero                                      | `packages/renderer/src/features/docker/docker-pip.tsx:67-73`                                                          |
 | ⌘K ▸ "Docker containers" opens rather than toggles                     | `packages/renderer/src/commands/catalogue.ts:657-665`, `docker-pip.tsx:53-55`                                         |
 | Escape closes the popover                                              | `packages/renderer/src/ui/popover.tsx:12-50, 127-134`                                                                 |
-| Docker is polled every 30 seconds                                      | `packages/renderer/src/features/docker/use-docker.ts:26, 51-71`                                                       |
+| Docker is polled every 30 seconds                                      | `packages/renderer/src/features/docker/use-docker.ts:26, 51-78`                                                       |
 | The pip, panel and welcome tab share one query                         | `packages/renderer/src/features/docker/use-docker.ts:1-16`, `features/welcome/welcome-panel.tsx:282-295`              |
 | The engine is derived from the image name, per engine                  | `packages/renderer/src/features/docker/docker-model.ts:57-66`                                                         |
 | The port inside the container is derived from the engine, not believed | `packages/renderer/src/features/docker/docker-model.ts:16-20, 38-44`                                                  |
@@ -142,7 +142,7 @@ Docker and why the answer can differ from your terminal's.
 | A refused start or stop carries Docker's own reason                    | `packages/main/src/ipc/docker.ipc.ts:41-61`, `packages/renderer/src/features/docker/use-docker.ts:124-152`            |
 | A container that had already stopped is not reported as a failure      | `packages/main/src/services/docker/detector.ts:155-182, 294-302`                                                      |
 | The container list is re-read after either action                      | `packages/renderer/src/features/docker/use-docker.ts:132-134, 147-149`                                                |
-| The create call sets ACCEPT_EULA, MSSQL_SA_PASSWORD and binds 1433     | `packages/main/src/services/docker/detector.ts:213-227`                                                               |
+| The create call sets ACCEPT_EULA, MSSQL_SA_PASSWORD and binds 1433     | `packages/main/src/services/docker/detector.ts:212-227`                                                               |
 | The create form is SQL Server only, and the panel says so              | `packages/renderer/src/features/docker/docker-panel.tsx:90-99, 311-318`                                               |
 | The three fields, their defaults and their rules                       | `packages/renderer/src/features/docker/docker-panel.tsx:41, 335-337`, `docker-model.ts:185-218`                       |
 | Why the password is checked before the round trip                      | `packages/renderer/src/features/docker/docker-model.ts:175-184`                                                       |

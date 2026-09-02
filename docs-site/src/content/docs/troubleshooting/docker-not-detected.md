@@ -76,10 +76,13 @@ interval.
 says so: _This container publishes no port, so nothing can connect to it._ Nothing can reach it
 from your machine, so there is nothing for Joinery to fill the form in with.
 
-**A stop reports a failure.** Joinery passes on the reason Docker gave — _Could not stop
-joinery-postgres: cannot stop container: permission denied_, say. That is a real result, not a
-display glitch: the container is still up. **⌘J** opens the output panel, where the same error is
-logged with its full detail.
+**A stop reports a failure.** Joinery passes on the reason Docker gave, whatever it was, instead of
+claiming the stop worked. It is a real result, not a display glitch, but read the reason before
+assuming the container is still up — the commonest one is _no such container_, which means the
+container was **removed** between Joinery's last read and your click, not that it refused to stop.
+The row disappears on the refresh that follows. A container that had merely stopped already is not
+reported as a failure at all. **⌘J** opens the output panel, where the same error is logged with its
+full detail.
 
 **There is no Volumes section.** It is drawn only when at least one of the listed database
 containers mounts a **named** Docker volume, so it is absent when they all use **bind mounts**
