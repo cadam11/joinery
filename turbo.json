@@ -28,14 +28,22 @@
     "lint": {
       "outputs": [],
       "cache": true,
-      // `$TURBO_DEFAULT$` plus the repo-root ESLint config, because the default input set is
-      // the package's OWN files and `.eslintrc.json` lives two directories above
-      // `packages/main`, `packages/preload` and `packages/shared`. Without it named here, adding
-      // a rule to that file and re-running `pnpm run lint` reported "4 successful, 4 cached …
-      // FULL TURBO" — a green gate that executed no ESLint at all (measured, J-34).
-      // `packages/renderer` needs no entry: its flat config is inside the package, so
-      // `$TURBO_DEFAULT$` already covers it. `scripts/lint-gate.spec.ts` asserts all four.
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.eslintrc.json"]
+      // `$TURBO_DEFAULT$` plus BOTH repo-root configs that decide what lint means, because the
+      // default input set is the package's OWN files and these live two directories above
+      // `packages/main`, `packages/preload` and `packages/shared`. Each was measured to produce
+      // a false green: mutate it, re-run `pnpm run lint`, get "4 successful, 4 cached … FULL
+      // TURBO" and exit 0 while the same ESLint run uncached exits 1 (J-34).
+      //
+      // `.prettierrc.json` is not an oversight to be trimmed: `.eslintrc.json` sets
+      // `"prettier/prettier": "error"`, so Prettier's options ARE lint rules for those three
+      // packages — flipping `singleQuote` there produced 36 ESLint errors in `packages/preload`
+      // behind a FULL TURBO green (PR #125 review, B1). `.prettierignore` is deliberately absent:
+      // measured, `eslint-plugin-prettier` does not read it.
+      //
+      // `packages/renderer` needs no entry of its own: its flat config is inside the package, so
+      // `$TURBO_DEFAULT$` already covers it, and it uses `eslint-config-prettier` (rule-disabling
+      // only) rather than the plugin. `scripts/lint-gate.spec.ts` asserts all four.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.eslintrc.json", "$TURBO_ROOT$/.prettierrc.json"]
     },
     "lint:fix": {
       "outputs": [],
@@ -44,7 +52,14 @@
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": [],
-      "cache": true
+      "cache": true,
+      // Same shape as `lint` above, one config over: `packages/main` and `packages/preload`
+      // extend the repo-root `tsconfig.json`, which the default input set does not reach.
+      // Measured — adding `exactOptionalPropertyTypes` to it left `pnpm run typecheck` at
+      // "6 successful, 6 cached … FULL TURBO" while `turbo run typecheck --force` failed
+      // `@joinery/main#typecheck`. `tsconfig.tests.json` needs no entry: the root `typecheck`
+      // script runs it through plain `tsc`, outside turbo's cache.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tsconfig.json"]
     },
     "clean": {
       "cache": false

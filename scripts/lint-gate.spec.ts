@@ -1,22 +1,45 @@
 /**
- * Guards the repo's lint gate against reporting green without running.
+ * Guards the repo's cached gates against reporting green without running.
  *
- * `pnpm run lint` is `turbo run lint`, a cached task per package. Turbo's default input set
- * is the package's own files, so the ESLint config that decides what "lint" MEANS for
- * `@joinery/main`, `@joinery/preload` and `@joinery/shared` — the repo-root `.eslintrc.json`,
- * two directories above them — was not part of their cache key. Measured on J-34: adding a
- * rule to that file and re-running the gate produced `4 successful, 4 cached … FULL TURBO`,
- * so the run reported green having executed no ESLint at all.
+ * `pnpm run lint` and `pnpm run typecheck` are cached turbo tasks, one per package. Turbo's
+ * default input set is the package's OWN files, so a config that lives at the repo root — two
+ * directories above `packages/*` — is not part of any task's cache key unless it is named. Every
+ * such config was measured to produce a false green before being listed in `ROOT_CONFIGS` below:
+ * mutate it, re-run the gate, get `N successful, N cached … FULL TURBO` and exit 0 while the same
+ * tool run uncached exits 1.
  *
- * The invariant, stated once for all four packages: a lint task's cache key must contain the
- * config that governs it. The renderer satisfies it through its in-package flat config; the
- * other three need the root file declared explicitly.
+ * The invariant, stated once: a cached task's cache key must contain every config that decides
+ * what that task MEANS. Assertions name the exact files rather than pattern-matching the input
+ * keys — a substring match was the first spelling here, and it is what let `.prettierrc.json`
+ * through (PR #125 review, B1).
  */
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const REPO_ROOT = new URL('..', import.meta.url).pathname;
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TURBO = `${REPO_ROOT}node_modules/.bin/turbo`;
+
+/**
+ * Repo-root config files each task must hash, as turbo reports them: `$TURBO_ROOT$/x` resolves
+ * to a package-relative path in the input map, which from `packages/*` is `../../x`.
+ *
+ *  - `lint`: `.eslintrc.json` is the config for main/preload/shared, and it sets
+ *    `"prettier/prettier": "error"`, so `.prettierrc.json` governs those three too — flipping
+ *    `singleQuote` there produced 36 ESLint errors in `packages/preload` behind a FULL TURBO
+ *    green. `.prettierignore` is deliberately NOT here: measured, `eslint-plugin-prettier`
+ *    ignores it (adding `packages/preload/src/**` to it changed nothing).
+ *  - `typecheck`: `packages/main` and `packages/preload` extend the root `tsconfig.json`.
+ *    Adding `exactOptionalPropertyTypes` to it left the gate FULL TURBO green while
+ *    `turbo run typecheck --force` failed `@joinery/main#typecheck`.
+ *
+ * The renderer and shared do not read every file listed for their task; an input they ignore
+ * only widens their cache key, which is harmless.
+ */
+const ROOT_CONFIGS: Record<string, readonly string[]> = {
+  lint: ['../../.eslintrc.json', '../../.prettierrc.json'],
+  typecheck: ['../../tsconfig.json'],
+};
 
 interface DryRunTask {
   taskId: string;
@@ -24,8 +47,8 @@ interface DryRunTask {
   inputs: Record<string, string>;
 }
 
-function lintTasks(): DryRunTask[] {
-  const stdout = execFileSync(TURBO, ['run', 'lint', '--dry=json'], {
+function tasksFor(task: string): DryRunTask[] {
+  const stdout = execFileSync(TURBO, ['run', task, '--dry=json'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -35,13 +58,14 @@ function lintTasks(): DryRunTask[] {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const plan = JSON.parse(stdout) as { tasks: DryRunTask[] };
-  return plan.tasks.filter(task => task.task === 'lint');
+  // `typecheck` dependsOn `^build`, so its plan carries build tasks too.
+  return plan.tasks.filter(candidate => candidate.task === task);
 }
 
-describe('the root lint gate', () => {
+describe('the repo-root gates', () => {
   it('runs a lint task for every package in the workspace', () => {
     expect(
-      lintTasks()
+      tasksFor('lint')
         .map(task => task.taskId)
         .sort()
     ).toEqual([
@@ -52,11 +76,19 @@ describe('the root lint gate', () => {
     ]);
   });
 
-  it('hashes the governing ESLint config into every lint task', () => {
-    const withoutConfig = lintTasks()
-      .filter(task => !Object.keys(task.inputs).some(path => /eslint/i.test(path)))
-      .map(task => task.taskId);
+  for (const [task, configs] of Object.entries(ROOT_CONFIGS)) {
+    it(`hashes every governing repo-root config into each ${task} task`, () => {
+      const tasks = tasksFor(task);
+      expect(tasks.length).toBeGreaterThan(0);
 
-    expect(withoutConfig).toEqual([]);
-  });
+      const missing = tasks
+        .map(candidate => ({
+          taskId: candidate.taskId,
+          absent: configs.filter(config => !(config in candidate.inputs)),
+        }))
+        .filter(entry => entry.absent.length > 0);
+
+      expect(missing).toEqual([]);
+    });
+  }
 });
