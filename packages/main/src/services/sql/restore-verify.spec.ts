@@ -38,11 +38,13 @@
  * answer with a fixed row, so wrong options cannot look right. Behaviour
  * against a live server is the integration tier's job.
  */
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mysql from 'mysql2/promise';
 import type { Connection, ConnectionOptions } from 'mysql2/promise';
 import pg from 'pg';
 import type { ConnectionProfile } from '@joinery/shared';
+import { onLogEntry } from '../../utils/logger';
 import { mysqlVerifyConnectionOptions } from './mysql-pool-options';
 import { mysqlDatabaseExists, pgDatabaseExists } from './restore-verify';
 
@@ -61,6 +63,37 @@ const profile = (over: Partial<ConnectionProfile> = {}): ConnectionProfile => ({
   ...over,
 });
 
+/**
+ * A pg `Client`, in the shape `restore-verify.ts` uses it — and a real
+ * `EventEmitter`, deliberately (J-183). The failure mode under test is Node's
+ * own `emit('error')` rethrow on an emitter with no `'error'` listener, so the
+ * double cannot encode it: an unguarded instance throws for exactly the same
+ * reason the real client does (`pg/lib/client.js:416-423`, `_handleErrorEvent`
+ * → `this.emit('error', err)` once connected).
+ */
+class FakePgClient extends EventEmitter {
+  /** `'error'` listeners present at the moment `connect()` was called. */
+  errorListenersAtConnect = -1;
+
+  constructor(private readonly calls: Recorded) {
+    super();
+  }
+
+  async connect(): Promise<void> {
+    this.errorListenersAtConnect = this.listenerCount('error');
+  }
+
+  async query(sql: string, values: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+    this.calls.queries.push({ sql, values });
+    if (pgRows instanceof Error) throw pgRows;
+    return { rows: pgRows, rowCount: pgRows.length };
+  }
+
+  async end(): Promise<void> {
+    this.calls.ended += 1;
+  }
+}
+
 /** What a driver was asked for, and what it was asked. */
 interface Recorded {
   readonly configs: unknown[];
@@ -75,12 +108,15 @@ let pgCalls: Recorded;
 /** Rows the next query resolves with; a rejection is expressed as an Error. */
 let mysqlRows: unknown[] | Error;
 let pgRows: unknown[] | Error;
+/** Every client `pgDatabaseExists` built, newest last. */
+let pgClients: FakePgClient[];
 
 beforeEach(() => {
   mysqlCalls = recorded();
   pgCalls = recorded();
   mysqlRows = [];
   pgRows = [];
+  pgClients = [];
 
   vi.spyOn(mysql, 'createConnection').mockImplementation(async (options): Promise<Connection> => {
     mysqlCalls.configs.push(options);
@@ -98,17 +134,9 @@ beforeEach(() => {
 
   vi.spyOn(pg, 'Client').mockImplementation(function (this: unknown, config: unknown) {
     pgCalls.configs.push(config);
-    return {
-      connect: async () => undefined,
-      query: async (sql: string, values: unknown[]) => {
-        pgCalls.queries.push({ sql, values });
-        if (pgRows instanceof Error) throw pgRows;
-        return { rows: pgRows, rowCount: (pgRows as unknown[]).length };
-      },
-      end: async () => {
-        pgCalls.ended += 1;
-      },
-    } as unknown as pg.Client;
+    const client = new FakePgClient(pgCalls);
+    pgClients.push(client);
+    return client as unknown as pg.Client;
   } as unknown as typeof pg.Client);
 });
 
@@ -249,5 +277,37 @@ describe('pgDatabaseExists', () => {
       'terminating connection'
     );
     expect(pgCalls.ended).toBe(2);
+  });
+
+  // J-183. A pg `Client` is an `EventEmitter`, and an `EventEmitter` with no
+  // `'error'` listener *rethrows* from inside `emit()`. Once connected,
+  // `_handleErrorEvent` emits unconditionally (`pg/lib/client.js:416-423`), and
+  // a backend error arriving with no query in flight routes there too
+  // (`_handleErrorMessage`, `:425-434`). That emit is on a socket callback, not
+  // on the awaited promise, so with no listener it lands in the event loop as
+  // an uncaught exception — in the main process, a crash of the whole app.
+  it('carries a logging error listener from before it connects (J-183)', async () => {
+    await pgDatabaseExists('restored_db', profile({ engine: 'postgresql' }), 'pw');
+
+    const [client] = pgClients;
+    expect(client.errorListenersAtConnect).toBe(1);
+
+    const logged: string[] = [];
+    const stopLogging = onLogEntry(entry => {
+      if (entry.level === 'error') logged.push(entry.message);
+    });
+    const fatal = Object.assign(new Error('terminating connection due to administrator command'), {
+      code: '57P01',
+    });
+    try {
+      expect(() => client.emit('error', fatal)).not.toThrow();
+    } finally {
+      stopLogging();
+    }
+
+    expect(logged).toEqual([
+      expect.stringContaining('terminating connection due to administrator command'),
+    ]);
+    expect(logged[0]).toContain('57P01');
   });
 });
