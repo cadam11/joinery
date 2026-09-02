@@ -81,6 +81,29 @@ pnpm run test:harness:down     # tear down when done
 - `--no-perf` skip the slow performance tier only
 - `--teardown` tear the harness down at the end
 
+## Keychain isolation in the Electron tiers
+
+Every Playwright tier launches the real Joinery app, and the real app keeps saved passwords —
+connection credentials and AI provider keys — in the macOS **login keychain**. That store is scoped
+to the logged-in user and namespaced only by a service name, so `--user-data-dir` (which isolates
+everything the app writes to disk) does nothing for it.
+
+So each launcher exports `JOINERY_KEYCHAIN_SERVICE=ca.adam11.joinery.tests`, and
+`packages/main/src/services/keychain/service-name.ts` resolves the credential store's service name
+from it. Nothing sets the variable in a shipped app, so an installed Joinery still uses
+`ca.adam11.joinery` exactly as before.
+
+- Set in `tests/helpers/electron-app.ts` (behind all five Playwright projects) and in
+  `tests/scripts/perf-baseline.mjs`.
+- Applied AFTER a spec's own `envOverrides`, on purpose: which vault the app under test writes to is
+  a property of the tier, not a per-spec knob.
+- Guarded by `packages/main/src/services/keychain/keychain-service-isolation.spec.ts`, which fails
+  the **unit** tier if a launcher stops setting the variable or names the production service.
+
+A test run therefore leaves exactly one stray keychain item, `ca.adam11.joinery.tests`. Delete it in
+Keychain Access (or `security delete-generic-password -s ca.adam11.joinery.tests`) whenever you like;
+the next run recreates it.
+
 ## What's running in the test network
 
 Defined in [`docker-compose.test.yml`](./docker-compose.test.yml). Host ports are deliberately non-standard so they don't clash with anything you already have running.
@@ -149,3 +172,6 @@ Helper for this is coming in Phase 2.
 **SSH key generation fails** — `ssh-keygen` is required (ships with macOS). If missing, install OpenSSH via Homebrew.
 
 **Port already in use** — Edit `docker-compose.test.yml` and `tests/helpers/db-fixtures.ts` together to change the port mapping.
+
+**A `ca.adam11.joinery.tests` entry appeared in Keychain Access** — expected: it is the throwaway
+credential vault the Electron tiers use instead of your real one. Safe to delete at any time.
