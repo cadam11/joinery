@@ -9,6 +9,7 @@
  *   migration.ts            the one-shot lift-then-remove, idempotent via a marker in AppState
  *   theme-mirror.ts         the one localStorage key React writes, for the pre-mount FOUC script
  *   layout.ts               the `LayoutConfig` shape the React app writes to `workspaceLayout`
+ *   flush-on-exit.ts        the registry that empties every debounced write before the window goes
  *   hydrate.ts              the startup path that ties the above to the Task 4 stores
  *
  * `state/settings.ts` and `state/tab.ts` import the leaf modules DIRECTLY, never this barrel:
@@ -27,6 +28,14 @@ export {
 // call, its safety is a property of having exactly one caller (`migration.ts`), and a barrel export
 // would offer it to every future feature with none of the preconditions attached.
 export {
+  flushPendingWritesOnExit,
+  installExitFlush,
+  registerExitFlush,
+  registeredExitFlushNames,
+  type PendingWriteFlush,
+} from './flush-on-exit';
+
+export {
   LEGACY_KEYS,
   readLegacyLocalStorage,
   type LegacyLocalStorageReading,
@@ -36,12 +45,14 @@ export {
   createLayoutPersistence,
   decodeReactLayout,
   encodeReactLayout,
+  LAYOUT_SAVE_DEBOUNCE_MS,
   layoutPersistence,
   REACT_LAYOUT_COMPONENT_TYPE,
   REACT_LAYOUT_VERSION,
   type LayoutPersistence,
   type LayoutWriteResult,
   type ReactLayoutPayload,
+  type ReadLayoutPayload,
 } from './layout';
 
 export {

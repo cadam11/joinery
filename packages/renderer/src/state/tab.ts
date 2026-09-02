@@ -180,6 +180,15 @@ export interface TabStoreState {
    * that action, and the `writesUnlocked` closure in `createTabStore`.
    */
   readonly saveTabs: () => Promise<void>;
+  /**
+   * Sends the pending debounced save now; a no-op when nothing is pending. Registered with
+   * `persistence/flush-on-exit.ts` by the shell, which is its only caller.
+   *
+   * The same gap J-74 reported for shell geometry, and the more expensive one: `setTabContent`
+   * schedules this save on every keystroke, so the window going away inside the 500ms window used
+   * to lose the last SQL the user typed rather than a sidebar width.
+   */
+  readonly flushPendingSave: () => void;
   readonly restoreTabs: (connectionId: string) => Promise<void>;
 
   /**
@@ -571,6 +580,16 @@ export function createTabStore(persistence: RendererStatePersistence = rendererS
       },
 
       isPersistenceUnlocked: () => writesUnlocked,
+
+      flushPendingSave: () => {
+        // The pending-timer check is what makes this safe to call on every exit: with nothing
+        // pending there is nothing to write, so an exit cannot turn into a write of its own.
+        // `saveTabs` re-checks the gate and the bridge for itself.
+        if (!saveTimeout) return;
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+        void get().saveTabs();
+      },
 
       saveTabs: async () => {
         // The gate. Silent on purpose: every startup action that opens the Welcome tab or

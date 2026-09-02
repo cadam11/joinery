@@ -28,7 +28,8 @@
  *  - the global mounts nothing else may install — the toast sink and the log sink (the native-theme
  *    listener sits one level up, at the app root, because the dev pages need it too);
  *  - the shell's own keyboard shortcut, ⌘J, which has no menu item to come through;
- *  - the dirty-tab `beforeunload` guard (`app.component.ts:93-101`).
+ *  - the dirty-tab `beforeunload` guard (`app.component.ts:93-101`);
+ *  - the flush-on-exit registration for every debounced persistence write (J-74).
  */
 
 import { useEffect, useLayoutEffect, type CSSProperties } from 'react';
@@ -50,9 +51,10 @@ import { SchemaDiffHost } from '../features/schema-diff';
 import { SettingsDialog } from '../features/settings';
 import { ShortcutsDialog } from '../features/shortcuts-dialog';
 import { SnippetLibrary } from '../features/snippet-library';
+import { installExitFlush, layoutPersistence, registerExitFlush } from '../persistence';
 import { diagnostics } from '../state/diagnostics';
 import { installLogDiagnosticsSink, useLogStream } from '../state/logs';
-import { useTabStore } from '../state/tab';
+import { tabStore, useTabStore } from '../state/tab';
 import { selectEffectiveTheme, useSettingsStore } from '../state/settings';
 import { useChatPanelStore } from '../state/chat';
 import {
@@ -61,6 +63,7 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   useWorkbenchStore,
+  workbenchStore,
 } from '../state/workbench';
 import { runBoot, useBootStore } from './boot';
 import { ChatSidePanel } from './chat-side-panel';
@@ -103,7 +106,17 @@ export function AppShell() {
   // Output panel and in the log file rather than in a devtools console nobody has open. A layout
   // effect for the ordering: it runs before the passive effect below, on the same commit.
   useLayoutEffect(() => {
-    const teardowns = [installToastNotifier(), installLogDiagnosticsSink()];
+    const teardowns = [
+      installToastNotifier(),
+      installLogDiagnosticsSink(),
+      // Every debounced persistence write in the renderer, named at the one call site that
+      // installs the unload listeners (J-74). A writer missing from this list keeps its 250-500ms
+      // hole: the timer dies with the page and main never sees the value at all.
+      installExitFlush(),
+      registerExitFlush('shell geometry', () => workbenchStore.getState().flushPendingWrites()),
+      registerExitFlush('open tabs', () => tabStore.getState().flushPendingSave()),
+      registerExitFlush('workspace layout', () => layoutPersistence.flushPendingSave()),
+    ];
     return () => {
       for (const teardown of teardowns) teardown();
     };
