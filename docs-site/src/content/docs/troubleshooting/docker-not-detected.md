@@ -76,10 +76,13 @@ interval.
 says so: _This container publishes no port, so nothing can connect to it._ Nothing can reach it
 from your machine, so there is nothing for Joinery to fill the form in with.
 
-**A stop appears to do nothing, then reports a failure.** Docker's stop reports success whether
-or not the container actually stopped, so Joinery re-reads the container afterwards and tells you
-_… is still running — Docker refused to stop it_ when it did not. That message is a real result,
-not a display glitch — the container is still up. This is tracked as J-71.
+**A stop reports a failure.** Joinery passes on the reason Docker gave, whatever it was, instead of
+claiming the stop worked. It is a real result, not a display glitch, but read the reason before
+assuming the container is still up — the commonest one is _no such container_, which means the
+container was **removed** between Joinery's last read and your click, not that it refused to stop.
+The row disappears on the refresh that follows. A container that had merely stopped already is not
+reported as a failure at all. **⌘J** opens the output panel, where the same error is logged with its
+full detail.
 
 **There is no Volumes section.** It is drawn only when at least one of the listed database
 containers mounts a **named** Docker volume, so it is absent when they all use **bind mounts**
@@ -105,24 +108,24 @@ The containers panel is documented in full under
 <details>
 <summary>Where this page's facts come from</summary>
 
-| Claim                                                                                | Source                                                                                               |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Docker is reached at the hard-coded socket path `/var/run/docker.sock`               | `packages/main/src/services/docker/detector.ts:22`                                                   |
-| Nothing reads `DOCKER_HOST` or configures the socket path                            | `packages/main/src/services/docker/detector.ts:20-23` (the only `Dockerode` construction in the app) |
-| "Running" is decided by `docker.ping()`                                              | `packages/main/src/services/docker/detector.ts:28-35, 42-50`                                         |
-| Docker's own sentence when the daemon is down                                        | `packages/main/src/services/docker/detector.ts:45-49`                                                |
-| The five pip states and their exact tooltips                                         | `packages/renderer/src/features/docker/docker-model.ts:132-172`                                      |
-| `absent` is a rejected call; `stopped` is a successful "no"                          | `packages/renderer/src/features/docker/docker-model.ts:123-154`, `use-docker.ts:81-92`               |
-| The panel's four states and their copy                                               | `packages/renderer/src/features/docker/docker-panel.tsx:119-165`                                     |
-| The engine is decided from the image name, per engine                                | `packages/main/src/services/docker/detector.ts:56-67`, `docker-model.ts:57-65`                       |
-| Stopped containers are listed too (`listContainers({ all: true })`)                  | `packages/main/src/services/docker/detector.ts:52`                                                   |
-| Docker is re-read every 30 seconds, from one shared query                            | `packages/renderer/src/features/docker/use-docker.ts:26, 51-78`                                      |
-| Refresh re-reads immediately                                                         | `packages/renderer/src/features/docker/docker-panel.tsx:53-63`, `use-docker.ts:76-78`                |
-| Connect is disabled with that sentence when no port is published                     | `packages/renderer/src/features/docker/docker-panel.tsx:265-284`                                     |
-| The stop handler discards its failure result, so the renderer confirms by re-reading | `packages/main/src/ipc/docker.ipc.ts:52-58`, `docker-model.ts:174-188`, `use-docker.ts:150-166`      |
-| J-71 — the stop-reports-success finding                                              | `packages/renderer/src/features/docker/docker-model.ts:26-29`                                        |
-| Named volumes come from `listVolumes`, filtered to the database containers' mounts   | `packages/main/src/services/docker/detector.ts`, `docker.ipc.ts` (`GET_VOLUMES`)                     |
-| Create is SQL Server only, and why an image picker would be wrong                    | `packages/main/src/services/docker/detector.ts:198-213`, `docker-panel.tsx:90-99`                    |
-| ⌘J toggles the output panel, which can reveal its log file                           | `packages/renderer/src/commands/catalogue.ts:559-566`, `shell/workspace/output-panel.tsx:207-217`    |
+| Claim                                                                              | Source                                                                                               |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Docker is reached at the hard-coded socket path `/var/run/docker.sock`             | `packages/main/src/services/docker/detector.ts:23`                                                   |
+| Nothing reads `DOCKER_HOST` or configures the socket path                          | `packages/main/src/services/docker/detector.ts:21-24` (the only `Dockerode` construction in the app) |
+| "Running" is decided by `docker.ping()`                                            | `packages/main/src/services/docker/detector.ts:29-36, 43-51`                                         |
+| Docker's own sentence when the daemon is down                                      | `packages/main/src/services/docker/detector.ts:46-50`                                                |
+| The five pip states and their exact tooltips                                       | `packages/renderer/src/features/docker/docker-model.ts:114-175`                                      |
+| `absent` is a rejected call; `stopped` is a successful "no"                        | `packages/renderer/src/features/docker/docker-model.ts:126-157`, `use-docker.ts:84-97`               |
+| The panel's four states and their copy                                             | `packages/renderer/src/features/docker/docker-panel.tsx:119-165`                                     |
+| The engine is decided from the image name, per engine                              | `packages/main/src/services/docker/detector.ts:324-341`, `docker-model.ts:60-68`                     |
+| Stopped containers are listed too (`listContainers({ all: true })`)                | `packages/main/src/services/docker/detector.ts:53`                                                   |
+| Docker is re-read every 30 seconds, from one shared query                          | `packages/renderer/src/features/docker/use-docker.ts:26, 51-82`                                      |
+| Refresh re-reads immediately                                                       | `packages/renderer/src/features/docker/docker-panel.tsx:53-63`, `use-docker.ts:80-82`                |
+| Connect is disabled with that sentence when no port is published                   | `packages/renderer/src/features/docker/docker-panel.tsx:272-291`                                     |
+| The stop handler throws the detector's own error (J-71)                            | `packages/main/src/ipc/docker.ipc.ts:51-60`, `services/docker/detector.ts:170-203`                   |
+| A refused stop reaches the user as Docker's own message                            | `packages/renderer/src/features/docker/use-docker.ts:143-156`                                        |
+| Named volumes come from `listVolumes`, filtered to the database containers' mounts | `packages/main/src/services/docker/detector.ts`, `docker.ipc.ts` (`GET_VOLUMES`)                     |
+| Create is SQL Server only, and why an image picker would be wrong                  | `packages/main/src/services/docker/detector.ts:233-248`, `docker-panel.tsx:90-99`                    |
+| ⌘J toggles the output panel, which can reveal its log file                         | `packages/renderer/src/commands/catalogue.ts:559-566`, `shell/workspace/output-panel.tsx:207-217`    |
 
 </details>

@@ -1,6 +1,6 @@
 /**
- * The Docker panel against the bridge double: the states, the two lifecycle actions, the failed-stop
- * report main cannot give, the Connect wire, and the create form's refusals.
+ * The Docker panel against the bridge double: the states, the two lifecycle actions, both of which
+ * now reject with Docker's own message (J-71), the Connect wire, and the create form's refusals.
  */
 
 import { useState } from 'react';
@@ -16,6 +16,15 @@ import { installJoineryMock, removeJoineryMock } from '../../test/joinery-mock';
 import { TooltipProvider } from '../../ui';
 import { DockerPanel } from './docker-panel';
 import { DockerPip } from './docker-pip';
+
+/**
+ * What a rejected `ipcMain.handle` actually looks like by the time the renderer sees it: Electron
+ * wraps the main-process error, and `use-docker.ts`'s `messageOf` is `error.message` verbatim. Copied
+ * from a live probe rather than invented, so the double is no kinder than the bridge.
+ */
+const REMOTE_REJECTION =
+  "Error invoking remote method 'docker:stop-container': Error: " +
+  '(HTTP code 404) no such container - No such container: c1 ';
 
 const teardowns: (() => void)[] = [];
 const noop = (): void => undefined;
@@ -67,7 +76,7 @@ beforeEach(() => {
       candidate.id === id ? { ...candidate, state: 'running' } : candidate
     );
   });
-  // Stops, and — like main — resolves whether or not the container actually stopped.
+  // Like main's handler: resolves with nothing on success, rejects on failure — see the test below.
   stopContainer = vi.fn(async (id: string) => {
     containers = containers.map(candidate =>
       candidate.id === id ? { ...candidate, state: 'exited' } : candidate
@@ -194,26 +203,44 @@ describe('DockerPanel — start and stop', () => {
     await waitFor(() => expect(toasts).toContain('success:Stopped joinery-test-postgres'));
   });
 
-  it('reports a stop that did not stop — the failure main cannot report', async () => {
-    // `docker.ipc.ts:53-58` discards the detector's `{ success: false, error }`, so this stop resolves
-    // exactly like one that worked. The only honest report is to look afterwards.
+  it('trusts a resolved stop instead of re-reading the container list', async () => {
+    // The renderer half of J-71. `stop` used to call `docker.getContainers()` afterwards and report
+    // "… is still running — Docker refused to stop it" when the state had not changed, because the
+    // handler swallowed the failure. The handler now rejects, so a stop that RESOLVED is a stop that
+    // worked — even here, where the list is deliberately left saying the container is still up.
     stopContainer.mockImplementation(async () => undefined);
     mount();
 
     await waitFor(() => expect(screen.queryByTestId('docker-stop')).not.toBeNull());
     await userEvent.click(screen.getByTestId('docker-stop'));
 
+    await waitFor(() => expect(toasts).toContain('success:Stopped joinery-test-postgres'));
+    expect(toasts.some(toast => toast.includes('still running'))).toBe(false);
+  });
+
+  it('passes a failed stop’s own message through', async () => {
+    // J-71: `docker.ipc.ts`'s stop handler now throws the detector's `error`, so the rejection carries
+    // Docker's words and there is no re-read of the container list to work out that it failed.
+    stopContainer.mockRejectedValueOnce(new Error(REMOTE_REJECTION));
+    mount();
+
+    await waitFor(() => expect(screen.queryByTestId('docker-stop')).not.toBeNull());
+    await userEvent.click(screen.getByTestId('docker-stop'));
+
     await waitFor(() =>
-      expect(toasts).toContain(
-        'error:joinery-test-postgres is still running — Docker refused to stop it'
-      )
+      expect(toasts.some(toast => toast.includes('no such container'))).toBe(true)
     );
     expect(toasts).not.toContain('success:Stopped joinery-test-postgres');
   });
 
   it('passes a failed start’s own message through', async () => {
     containers = [container({ state: 'exited' })];
-    startContainer.mockRejectedValueOnce(new Error('port is already allocated'));
+    startContainer.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'docker:start-container': Error: " +
+          '(HTTP code 500) server error - port is already allocated '
+      )
+    );
     mount();
 
     await waitFor(() => expect(screen.queryByTestId('docker-start')).not.toBeNull());
