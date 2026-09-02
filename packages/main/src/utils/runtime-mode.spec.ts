@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { isDevelopmentHatchOpen, isTestHatchOpen } from './runtime-mode';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isDevelopmentHatchOpen, isTestHatchOpen, runtimeSignals } from './runtime-mode';
+// Namespace import for the spy seam, exactly as `credential-store.spec.ts` does it: the module
+// under test reads `isTestCapableBuild` off this same object, so replacing the property drives the
+// stamped-bundle branch without a real marker file.
+import * as testBuildCapability from './test-build-capability';
 
 /**
  * The two environment hatches a shipped Joinery must not honour (J-161).
@@ -106,5 +110,45 @@ describe('isDevelopmentHatchOpen', () => {
 
   it('is shut when NODE_ENV is absent', () => {
     expect(isDevelopmentHatchOpen({ isPackaged: false, env: {} })).toBe(false);
+  });
+});
+
+/**
+ * The gathering step itself (J-181, folded in by J-180).
+ *
+ * `runtimeSignals()` used to be a private function in `window.ts`, and nothing pinned the fact
+ * that it filled in `isTestBuild` at all: the cycle-10 review found that deleting the field left
+ * all 3688 unit tests green, with only the now-unused import to give it away — and that import
+ * evaporates the moment a refactor tidies it. The consequence is not cosmetic now that three call
+ * sites share this one gatherer: drop the field and the packaged smoke run shows a window AND
+ * `CredentialStore` boots a real bundle against the developer's production vault.
+ *
+ * The seam is the same one `credential-store.spec.ts` uses — a spy on the marker probe — because
+ * this package compiles as CommonJS, where a named import is a property read on the module object
+ * the spy replaces.
+ */
+describe('runtimeSignals', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('carries the build-time test capability, so the hatch predicates can see it', () => {
+    vi.spyOn(testBuildCapability, 'isTestCapableBuild').mockReturnValue(true);
+    expect(runtimeSignals().isTestBuild).toBe(true);
+  });
+
+  it('carries its absence too, rather than leaving the field undecided', () => {
+    vi.spyOn(testBuildCapability, 'isTestCapableBuild').mockReturnValue(false);
+    expect(runtimeSignals().isTestBuild).toBe(false);
+  });
+
+  /**
+   * A vitest process is not a packaged Electron app — `electron` resolves to the npm shim, whose
+   * export is the binary's path — so this is the honest in-process answer, and it is the one the
+   * Playwright and visual tiers get too.
+   */
+  it('reports an unpackaged process and the live environment', () => {
+    expect(runtimeSignals().isPackaged).toBe(false);
+    expect(runtimeSignals().env).toBe(process.env);
   });
 });

@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DockerDetectionResult, DockerVolume } from '@joinery/shared';
 
 import { DOCKER_FIXTURE_ENV_VAR, resolveDockerFixture, type DockerFixture } from './docker-fixture';
+import type { RuntimeSignals } from '../../utils/runtime-mode';
 import { DockerDetector } from './detector';
 
 vi.mock('dockerode', () => ({
@@ -72,21 +73,32 @@ const FIXTURE: DockerFixture = {
   volumes: [VOLUME],
 };
 
-function env(value?: string): NodeJS.ProcessEnv {
-  return value === undefined ? {} : { [DOCKER_FIXTURE_ENV_VAR]: value };
+/**
+ * An unpackaged launch — a developer, or a Playwright/visual tier — with the hatch set to `value`.
+ *
+ * Unpackaged because that is the build the hatch exists for; the packaged cases live in
+ * `utils/env-hatch-gating.spec.ts`, which drives every hatch through all four combinations of
+ * `isPackaged` x `isTestBuild` against the one shared predicate (J-180).
+ */
+function launch(value?: string): RuntimeSignals {
+  return {
+    isPackaged: false,
+    isTestBuild: false,
+    env: value === undefined ? {} : { [DOCKER_FIXTURE_ENV_VAR]: value },
+  };
 }
 
 describe('resolveDockerFixture', () => {
   it('answers null when nothing pinned it — the daemon is the source', () => {
-    expect(resolveDockerFixture(env())).toBeNull();
+    expect(resolveDockerFixture(launch())).toBeNull();
   });
 
   it('parses a pinned fixture', () => {
-    expect(resolveDockerFixture(env(JSON.stringify(FIXTURE)))).toEqual(FIXTURE);
+    expect(resolveDockerFixture(launch(JSON.stringify(FIXTURE)))).toEqual(FIXTURE);
   });
 
   it('defaults the volumes to none, so a fixture may omit them', () => {
-    const pinned = resolveDockerFixture(env(JSON.stringify({ detect: FIXTURE.detect })));
+    const pinned = resolveDockerFixture(launch(JSON.stringify({ detect: FIXTURE.detect })));
     expect(pinned?.volumes).toEqual([]);
   });
 
@@ -94,11 +106,11 @@ describe('resolveDockerFixture', () => {
   // keychain override: a caller that set the variable believes the answer is pinned, and quietly
   // handing it the host's real container inventory is the accident this module exists to prevent.
   it('refuses a blank value rather than falling back to the daemon', () => {
-    expect(() => resolveDockerFixture(env('   '))).toThrow(DOCKER_FIXTURE_ENV_VAR);
+    expect(() => resolveDockerFixture(launch('   '))).toThrow(DOCKER_FIXTURE_ENV_VAR);
   });
 
   it('refuses a value that is not JSON, naming the variable', () => {
-    expect(() => resolveDockerFixture(env('{ not json'))).toThrow(DOCKER_FIXTURE_ENV_VAR);
+    expect(() => resolveDockerFixture(launch('{ not json'))).toThrow(DOCKER_FIXTURE_ENV_VAR);
   });
 
   it.each([
@@ -112,7 +124,7 @@ describe('resolveDockerFixture', () => {
       '{"detect":{"dockerRunning":true,"containers":[]},"volumes":"none"}',
     ],
   ])('refuses %s', (_case, raw) => {
-    expect(() => resolveDockerFixture(env(raw))).toThrow(DOCKER_FIXTURE_ENV_VAR);
+    expect(() => resolveDockerFixture(launch(raw))).toThrow(DOCKER_FIXTURE_ENV_VAR);
   });
 });
 

@@ -6,13 +6,7 @@ import { BrowserWindow, screen, nativeTheme, session } from 'electron';
 import * as path from 'path';
 import Store from 'electron-store';
 import { createTrailingDebounce, type TrailingDebounce } from './utils/trailing-debounce';
-import {
-  isDevelopmentHatchOpen,
-  isPackagedApp,
-  isTestHatchOpen,
-  type RuntimeSignals,
-} from './utils/runtime-mode';
-import { isTestCapableBuild } from './utils/test-build-capability';
+import { isDevelopmentHatchOpen, isTestHatchOpen, runtimeSignals } from './utils/runtime-mode';
 import { buildContentSecurityPolicy } from './security/content-security-policy';
 import { installContentSecurityPolicy } from './security/harden';
 import type { AppEntry } from './security/navigation-guard';
@@ -27,18 +21,6 @@ import type { AppEntry } from './security/navigation-guard';
  */
 const DEV_SERVER_URL = 'http://localhost:4200';
 const RENDERER_INDEX = path.join(__dirname, '../../renderer/dist/browser/index.html');
-
-/**
- * This process's mode signals: the ambient reads behind every hatch decision in this file, taken
- * here so the predicates they feed stay pure and testable (J-161, J-167).
- *
- * `isTestBuild` is not optional in practice: without it the packaged smoke run
- * (`scripts/release/smoke-packaged-app.ts`) stops honouring its `JOINERY_TEST=1` and starts
- * SHOWING a window on a bundle whose whole job is to boot headlessly and quit.
- */
-function runtimeSignals(): RuntimeSignals {
-  return { isPackaged: isPackagedApp(), isTestBuild: isTestCapableBuild(), env: process.env };
-}
 
 /**
  * Dev-server mode. Gated on the app being unpackaged (J-161): this decides whether the window

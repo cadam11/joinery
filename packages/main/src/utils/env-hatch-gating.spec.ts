@@ -2,6 +2,13 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { DOCKER_FIXTURE_ENV_VAR, resolveDockerFixture } from '../services/docker/docker-fixture';
+import {
+  KEYCHAIN_SERVICE_ENV_VAR,
+  resolveKeychainServiceName,
+} from '../services/keychain/service-name';
+import { isDevelopmentHatchOpen, isTestHatchOpen } from './runtime-mode';
+
 /**
  * The structural half of J-161: an environment hatch may only be read where it is gated.
  *
@@ -51,6 +58,11 @@ const GATED_HATCHES = [
     variable: 'JOINERY_KEYCHAIN_SERVICE',
     allowedIn: ['services/keychain/service-name.ts'],
   },
+  {
+    variable: 'JOINERY_DOCKER_FIXTURE',
+    allowedIn: ['services/docker/docker-fixture.ts'],
+  },
+  { variable: 'JOINERY_PYTHON', allowedIn: ['services/sql/python-deps.ts'] },
 ] as const;
 
 beforeAll(() => {
@@ -117,3 +129,99 @@ describe.each(GATED_HATCHES)(
     });
   }
 );
+
+/**
+ * The behavioural half of J-180: every gated hatch obeys ONE predicate.
+ *
+ * The guard above proves a hatch is named only in the file that gates it. It cannot prove that
+ * file gates it — `JOINERY_DOCKER_FIXTURE` shipped in J-76 read from exactly one place and
+ * honoured by a shipped app, which is the shape this table exists to catch. Each entry names a
+ * hatch and says how to ask whether a given build honours it; the cases below then drive all four
+ * combinations of `isPackaged` × `isTestBuild` through it.
+ *
+ * `reopenedByTestBuild` is the only per-hatch difference. A J-167 test bundle
+ * (`Contents/Resources/joinery-test-build`) gets the test-only hatches back, because the packaged
+ * smoke run boots a real bundle and needs them; `NODE_ENV=development` is deliberately NOT
+ * reopened — a stamped bundle has no dev server to reach either, so honouring it would only let
+ * whoever set the variable serve their own page into a bundle that carries the preload bridge.
+ * See `runtime-mode.ts`'s {@link isDevelopmentHatchOpen}.
+ */
+const HATCH_BEHAVIOUR = [
+  {
+    variable: 'JOINERY_TEST',
+    reopenedByTestBuild: true,
+    isHonoured: (build: BuildUnderTest) =>
+      isTestHatchOpen({ ...build, env: { JOINERY_TEST: '1' } }),
+  },
+  {
+    variable: 'NODE_ENV',
+    reopenedByTestBuild: false,
+    isHonoured: (build: BuildUnderTest) =>
+      isDevelopmentHatchOpen({ ...build, env: { NODE_ENV: 'development' } }),
+  },
+  {
+    variable: 'JOINERY_KEYCHAIN_SERVICE',
+    reopenedByTestBuild: true,
+    isHonoured: (build: BuildUnderTest) =>
+      resolveKeychainServiceName({
+        ...build,
+        env: { [KEYCHAIN_SERVICE_ENV_VAR]: 'joinery-spec-vault' },
+      }).serviceName === 'joinery-spec-vault',
+  },
+  {
+    variable: 'JOINERY_DOCKER_FIXTURE',
+    reopenedByTestBuild: true,
+    isHonoured: (build: BuildUnderTest) =>
+      resolveDockerFixture({
+        ...build,
+        env: {
+          [DOCKER_FIXTURE_ENV_VAR]: JSON.stringify({
+            detect: { dockerRunning: true, containers: [] },
+          }),
+        },
+      }) !== null,
+  },
+] as const;
+
+/** The two artifact facts every hatch decision is a function of (J-161, J-167). */
+type BuildUnderTest = { isPackaged: boolean; isTestBuild: boolean };
+
+/**
+ * Hatches that {@link GATED_HATCHES} pins the reader of but that are deliberately NOT gated on the
+ * build marker, each with the ticket that owns the real fix. Listed rather than omitted so the
+ * cross-check below stays exhaustive: a new hatch has to be classified, not forgotten.
+ *
+ * `JOINERY_PYTHON` is J-171's. It selects a real, documented user-facing setting (three docs-site
+ * pages), so build-marker gating would be the wrong mitigation — the fix is to stop reading it
+ * from the ambient environment at spawn time and persist the interpreter path via Settings.
+ */
+const KNOWN_UNGATED = [{ variable: 'JOINERY_PYTHON', ticket: 'J-171' }] as const;
+
+const BUILDS: ReadonlyArray<BuildUnderTest & { label: string }> = [
+  { label: 'a development / Playwright launch', isPackaged: false, isTestBuild: false },
+  { label: 'an unpackaged launch of a stamped tree', isPackaged: false, isTestBuild: true },
+  { label: 'a packaged bundle stamped as a test build', isPackaged: true, isTestBuild: true },
+  { label: 'a packaged RELEASE bundle', isPackaged: true, isTestBuild: false },
+];
+
+describe.each(HATCH_BEHAVIOUR)('$variable obeys the shared build predicate', hatch => {
+  it.each(BUILDS)('$label', build => {
+    const expected = !build.isPackaged || (hatch.reopenedByTestBuild && build.isTestBuild);
+    expect(hatch.isHonoured({ isPackaged: build.isPackaged, isTestBuild: build.isTestBuild })).toBe(
+      expected
+    );
+  });
+});
+
+/**
+ * Ties the two tables together, so adding a hatch cannot stop at the structural guard: the new
+ * reader file fails {@link GATED_HATCHES} first, and adding it there then fails here until it is
+ * either given a behaviour case above or written down as a known exemption with a ticket.
+ */
+it('classifies every structurally gated hatch as gated or known-ungated', () => {
+  const classified = [
+    ...HATCH_BEHAVIOUR.map(h => h.variable),
+    ...KNOWN_UNGATED.map(h => h.variable),
+  ].sort();
+  expect(classified).toEqual([...GATED_HATCHES.map(h => h.variable)].sort());
+});

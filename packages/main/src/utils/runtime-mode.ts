@@ -20,6 +20,8 @@
 
 import { app, type App } from 'electron';
 
+import { isTestCapableBuild } from './test-build-capability';
+
 /** The facts every hatch decision below is a function of. */
 export interface RuntimeSignals {
   /** Electron's `app.isPackaged` — see {@link isPackagedApp}. */
@@ -59,6 +61,54 @@ export function isPackagedApp(): boolean {
 }
 
 /**
+ * This process's mode signals: the one place the ambient reads behind every hatch decision happen
+ * (J-161, J-167, J-180).
+ *
+ * Three reads, all of them about the ARTIFACT rather than about what a caller believes: Electron's
+ * `app.isPackaged`, a filesystem probe of this bundle's own `Contents/Resources` for the J-167
+ * marker, and the process environment the hatches are read from. Every predicate below and every
+ * hatch site elsewhere takes the result as an argument, so the decisions stay pure and both
+ * branches stay provable in the unit tier — a vitest process can never be a packaged Electron app.
+ *
+ * `isTestBuild` is not optional in practice: without it the packaged smoke run
+ * (`scripts/release/smoke-packaged-app.ts`) stops honouring its `JOINERY_TEST=1` and starts SHOWING
+ * a window on a bundle whose whole job is to boot headlessly and quit. It used to be gathered
+ * privately inside `window.ts`, where nothing pinned it (J-181); hoisting it here is what lets one
+ * spec assert the field is filled in at all.
+ *
+ * `CredentialStore` deliberately still assembles the same three reads inline rather than calling
+ * this. Its spec drives the packaged branch with `vi.spyOn(runtimeMode, 'isPackagedApp')` at that
+ * call site, and a call through this function would put the read inside this module where the spy
+ * cannot reach it — trading a proven packaged branch for one less duplicated line.
+ */
+export function runtimeSignals(): RuntimeSignals {
+  return { isPackaged: isPackagedApp(), isTestBuild: isTestCapableBuild(), env: process.env };
+}
+
+/**
+ * May this build honour a test-only environment hatch at all? The shared predicate every hatch
+ * site composes with its own variable (J-180).
+ *
+ * Unpackaged, or packaged and stamped with the J-167 marker. Written once because it had already
+ * been written twice by hand — `isTestHatchOpen` and `service-name.ts` — and a third hatch
+ * (`JOINERY_DOCKER_FIXTURE`, J-76) shipped with the check simply missing. The composition is the
+ * awkward part to re-derive: `isTestCapableBuild()` alone is `false` for the UNPACKAGED Electron
+ * the Playwright and visual tiers launch, so gating on it would break both tiers, and
+ * `!isPackaged` alone locks the packaged smoke tier out.
+ *
+ * `isTestBuild` absent means `false`, so a call site that forgets the field gets the release
+ * behaviour — the safe direction to fail in.
+ *
+ * NOT for `NODE_ENV=development`, which is deliberately stricter: see
+ * {@link isDevelopmentHatchOpen}.
+ */
+export function areTestHatchesHonoured(
+  signals: Pick<RuntimeSignals, 'isPackaged' | 'isTestBuild'>
+): boolean {
+  return !signals.isPackaged || signals.isTestBuild === true;
+}
+
+/**
  * The Playwright / perf-benchmark hatch: `JOINERY_TEST=1` tells the main process to skip
  * non-essential startup, currently keeping the main window hidden so it does not flash in and out
  * on every spec.
@@ -73,7 +123,7 @@ export function isPackagedApp(): boolean {
  * marker, and `pnpm run verify:package` fails on an artifact that carries one.
  */
 export function isTestHatchOpen(signals: RuntimeSignals): boolean {
-  if (signals.isPackaged && signals.isTestBuild !== true) return false;
+  if (!areTestHatchesHonoured(signals)) return false;
   return signals.env.JOINERY_TEST === '1';
 }
 
