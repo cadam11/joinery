@@ -2,32 +2,32 @@
  * One chat store per chat TAB, and the `destroy()` that goes with the tab closing.
  *
  * `state/chat.ts` names this file's job in its own header: "Task 17 owns the tab-id → store map and
- * the `destroy()` on close." The map exists because the two lifetimes involved are not the same one:
- *
- *  - a chat tab lives until the user closes it;
- *  - the React component that renders it is **unmounted whenever Dockview deactivates the panel**
- *    (PLAN.md R5 finding 4 — an inactive panel's subtree is detached, and Dockview may drop it).
- *
- * So the store cannot be component state. If it were, switching to another tab and back would build a
- * second instance with a second bridge subscription, lose the transcript, and — because
- * `ChatStoreState.destroy` is the only thing that unsubscribes — leak the first one's listener for the
- * rest of the session. Holding it here means a tab keeps its conversation, its in-flight stream and
- * its ONE subscription across every activation, and the teardown happens on the event that actually
- * ends the tab.
+ * the `destroy()` on close." The map exists because the store has to outlive any single mount of the
+ * component that renders it: `ChatStoreState.destroy` is the only thing that unsubscribes the store
+ * from the stream bridge, so a store held as component state would lose the transcript and leak a
+ * listener every time the component was rebuilt. Keyed by tab id here, a tab keeps its conversation,
+ * its in-flight stream and its ONE subscription across every re-mount — which is what
+ * `chat-tab-panel.spec.tsx` pins.
  *
  * ── Why the release is watched here rather than done on unmount ────────────────────────────
  *
- * The obvious cleanup — release in the panel's unmount effect when the tab is gone — cannot see the
- * case that matters. Closing a tab that is NOT the active one removes a panel whose React component
- * was already unmounted at deactivation, so no unmount runs at the moment the tab dies and the store,
- * its transcript and its bridge subscription stay live for the rest of the session. (The query panel's
- * `forgetTab` cleanup has the same shape and the same hole, for query results rather than a listener.)
+ * Because `chat-tab-panel.tsx` has no unmount cleanup at all. This watcher is the ONLY thing that ever
+ * calls `destroy()`, so without it a closed tab's store would keep its bridge subscription for the
+ * rest of the session. That is the entire argument, and it is a fact about this package rather than a
+ * claim about Dockview.
  *
- * So the map watches the thing that actually ends a tab: `tabStore.tabs`. One subscription, started
- * with the first tab store rather than at import so a renderer that never opens a chat tab pays
- * nothing, and stopped when the last store goes.
+ * **This block used to say that Dockview unmounts a deactivated panel, and that was false** (J-62).
+ * PLAN.md R5 finding 4 measured the opposite: with the default `onlyWhenVisible` renderer the panel's
+ * React component **stays mounted** and only its DOM subtree is detached from the document. The J-62
+ * review then showed, with a real `DockviewReact`, that closing an INACTIVE panel fires
+ * `onDidRemovePanel` **before** the React unmount — so `workspace.tsx`'s `closeTab` always lands
+ * first, and an unmount cleanup guarded by "the tab is gone" would in fact run. The correction is
+ * recorded rather than merely deleted because the false sentence had already been copied once, into a
+ * query-panel "fix" for a leak that did not exist (PR #123, closed). Do not reintroduce it.
+ *
+ * One subscription, started with the first tab store rather than at import so a renderer that never
+ * opens a chat tab pays nothing, and stopped when the last store goes.
  */
-
 import { createChatTabStore, type ChatStore } from '../../state/chat';
 import { tabStore } from '../../state/tab';
 

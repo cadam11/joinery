@@ -65,11 +65,9 @@ export function ChatTabPanel(props: IDockviewPanelProps) {
    * **No release effect here, deliberately** — `chat-store-host.ts` watches `tabStore.tabs` and
    * releases the store when the tab dies.
    *
-   * An unmount cleanup guarded by "the tab is gone" (the query panel's `forgetTab` shape) reads as the
-   * obvious answer and misses the case that leaks: closing a tab that is not the active one removes a
-   * panel whose component Dockview already unmounted at deactivation, so no cleanup runs at the moment
-   * the tab ends and the store keeps its bridge subscription for the rest of the session. The host's
-   * comment carries the argument.
+   * Because this component has no cleanup of its own, that watcher is the only path that ever calls
+   * `destroy()`. The host's comment carries the argument — including the correction (J-62) to what
+   * this comment used to claim about Dockview unmounting a deactivated panel, which it does not do.
    */
 
   return <ChatSurface store={store} mode="tab" />;
