@@ -52,7 +52,9 @@
     "package:mac": "pnpm run build && node scripts/package.js --mac",
     "package:dmg": "pnpm run build && node scripts/package.js --mac dmg:arm64 dmg:x64",
     "package:dir": "pnpm run build && node scripts/package.js --dir",
-    "verify:package": "node scripts/verify-package.js",
+    "verify:package": "node scripts/verify-package.js && node scripts/release/asar-inventory.ts --check",
+    "inventory:asar": "node scripts/release/asar-inventory.ts",
+    "smoke:package": "node scripts/release/smoke-packaged-app.ts",
     "prepare": "husky",
     "clean:dist": "turbo run clean && rm -rf packages/*/dist"
   },

@@ -179,8 +179,11 @@ jobs:
         shell: bash
         run: node scripts/package.js ${{ matrix.args }}
 
-      # Extracts the asar and require()s each module the main process depends on. Catches the
-      # class of bug where packaging exits 0 and the shipped app crashes on first connect.
+      # Two checks, chained inside the script. `verify-package.js` extracts the asar and
+      # require()s each module the main process depends on — the class of bug where packaging exits
+      # 0 and the shipped app crashes on first connect. `asar-inventory.ts --check` then fails if a
+      # build-time or known-dead package is inside the archive (J-90): the built archive is the
+      # only place that can be seen, so it is checked here rather than asserted in config.
       - name: Acceptance-check the packaged app
         if: matrix.platform == 'mac'
         run: pnpm run verify:package
