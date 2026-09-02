@@ -18,7 +18,6 @@ export type ExecuteScope = 'all' | 'currentStatement';
 export interface QuerySettings {
   defaultTimeout: number; // milliseconds
   maxRowsToDisplay: number;
-  autoExecuteOnOpen: boolean;
   showExecutionTime: boolean;
   confirmBeforeExecute: boolean;
   executeScope: ExecuteScope;
@@ -79,7 +78,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   query: {
     defaultTimeout: 30000,
     maxRowsToDisplay: 10000,
-    autoExecuteOnOpen: false,
     showExecutionTime: true,
     confirmBeforeExecute: false,
     executeScope: 'all',

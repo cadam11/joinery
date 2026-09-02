@@ -26,10 +26,10 @@
  * | Query     | `defaultTimeout`       | `features/query/use-run-query.ts` → the executor's deadline     |
  * | Grid      | all six                | `features/query/results-grid.tsx`                               |
  *
- * `QuerySettings.autoExecuteOnOpen` has **no row at all**: auto-execute is a per-tab fact
- * (`tabStore.openQueryTab(…, autoExecute)`), nothing reads the global flag, and there is no agreed
- * meaning for it. A control for it would be decorative by construction, so it is absent rather than
- * disabled, and the decision is a follow-up ticket.
+ * There is no auto-execute row because there is no such setting: `QuerySettings.autoExecuteOnOpen`
+ * was deleted in J-56 rather than given a surface, since auto-execute is a per-tab fact
+ * (`tabStore.openQueryTab(…, autoExecute)`) and a global flag would have had to mean "also run a
+ * .sql file the moment it opens" — a new and dangerous behaviour nobody asked for.
  *
  * ── Layout ──────────────────────────────────────────────────────────────────────────────────
  *

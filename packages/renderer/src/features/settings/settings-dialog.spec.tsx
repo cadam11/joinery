@@ -348,16 +348,6 @@ describe('no decorative controls (J-44)', () => {
       settingsStore.setState({ isOpen: false });
     }
   });
-
-  it('offers no control at all for a setting nothing could consume', async () => {
-    const user = await openPanel('query');
-    await collectControls(user);
-
-    // `QuerySettings.autoExecuteOnOpen` is read by nothing and means nothing: auto-execute is per-tab
-    // (`tabStore.openQueryTab(…, autoExecute)`). A disabled control would imply a surface is coming; the
-    // honest answer is absence, and a follow-up ticket deciding whether the field survives at all.
-    expect(screen.queryByTestId('settings-query-auto-execute')).toBeNull();
-  });
 });
 
 // ── Appearance ─────────────────────────────────────────────────────────────────────────────
