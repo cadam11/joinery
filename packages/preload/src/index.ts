@@ -3,6 +3,7 @@ import { IPC_CHANNELS, CHAT_IPC_CHANNELS } from '@joinery/shared';
 import type {
   PythonDepsResult,
   ConnectionProfile,
+  DatabaseEngine,
   TestConnectionResult,
   DatabaseInfo,
   SchemaInfo,
@@ -250,10 +251,15 @@ export interface JoineryAPI {
     deleteHistoryEntry: (id: string) => Promise<boolean>;
     exportResults: (resultSet: ResultSet, options: ExportOptions) => Promise<ExportResult>;
     fetchFkRecord: (request: FkRecordRequest) => Promise<FkRecordResult>;
+    /**
+     * The engines are `DatabaseEngine` and not bare strings: two adjacent parameters of the same
+     * type transpose silently, and until J-66 the only thing standing between a typo and a
+     * backwards conversion was `features/query/sql-convert.ts`'s named-object adapter.
+     */
     convertSql: (
       sql: string,
-      fromEngine: string,
-      toEngine: string
+      fromEngine: DatabaseEngine,
+      toEngine: DatabaseEngine
     ) => Promise<{
       success: boolean;
       sql: string;
@@ -713,7 +719,7 @@ const joineryAPI: JoineryAPI = {
     exportResults: (resultSet, options) =>
       ipcRenderer.invoke(IPC_CHANNELS.QUERY.EXPORT_RESULTS, resultSet, options),
     fetchFkRecord: request => ipcRenderer.invoke(IPC_CHANNELS.QUERY.FETCH_FK_RECORD, request),
-    convertSql: (sql: string, fromEngine: string, toEngine: string) =>
+    convertSql: (sql: string, fromEngine: DatabaseEngine, toEngine: DatabaseEngine) =>
       ipcRenderer.invoke(IPC_CHANNELS.QUERY.CONVERT_SQL, sql, fromEngine, toEngine),
   },
 

@@ -371,7 +371,7 @@ export const COMMAND_CONSUMERS: Record<CommandId, string> = {
   'toggle-comment': 'Task 10 query editor.',
 
   // The converter's three. One consumer, one handler, three ids — `features/query/sql-convert.ts` is the
-  // adapter over `query.convertSql` and the only place PLAN.md §7.3's two bare-string engines are passed.
+  // adapter over `query.convertSql` and the only place its two adjacent engine arguments are passed.
   'convert-sql-to-mssql':
     'Task 19a features/query/QueryCommands (the active query tab converts its own editor). Producers: ' +
     'the Task 16 palette and the query toolbar’s convert menu.',

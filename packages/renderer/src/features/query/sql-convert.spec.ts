@@ -1,14 +1,15 @@
 /**
  * The converter adapter: the four refusals, the one success, and the argument order.
  *
- * The last is the whole reason this module exists. `query.convertSql(sql, fromEngine: string, toEngine:
- * string)` takes two adjacent bare strings (PLAN.md §7.3), so a transposition compiles and converts
- * backwards. The named-object signature makes that unrepresentable here, and this file pins the mapping
- * so nobody "tidies" the two arguments into the wrong order later.
+ * The last is the whole reason this module exists. `query.convertSql`'s two engine parameters are
+ * adjacent and now both `DatabaseEngine` (J-66, PLAN.md §7.3), so a transposition still compiles and
+ * converts backwards. The named-object signature makes that unrepresentable here, and this file pins
+ * the mapping so nobody "tidies" the two arguments into the wrong order later.
  */
 
+import type { JoineryAPI } from '@joinery/preload';
 import type { PythonDepsResult } from '@joinery/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 
 import { setDiagnosticsSink } from '../../state/diagnostics';
 import { installJoineryMock, removeJoineryMock } from '../../test/joinery-mock';
@@ -174,5 +175,21 @@ describe('the engine table', () => {
     for (const engine of CONVERTIBLE_ENGINES) {
       expect(ENGINE_LABELS[engine].length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('the bridge signature (J-66)', () => {
+  it('types both engine parameters as DatabaseEngine, so a bare string is refused', () => {
+    type ConvertSql = JoineryAPI['query']['convertSql'];
+
+    // @ts-expect-error — `fromEngine` is `DatabaseEngine`; an arbitrary string no longer compiles.
+    const from: Parameters<ConvertSql>[1] = 'postgres' as string;
+    // @ts-expect-error — and `toEngine` with it, so a typo cannot reach the transpiler.
+    const to: Parameters<ConvertSql>[2] = 'postgres' as string;
+
+    // The runtime assertion is not the point of this test — the two directives above are, and an
+    // unused `@ts-expect-error` is itself a compile error. `sql` stays a string.
+    expectTypeOf<Parameters<ConvertSql>[0]>().toEqualTypeOf<string>();
+    expect([from, to]).toEqual(['postgres', 'postgres']);
   });
 });

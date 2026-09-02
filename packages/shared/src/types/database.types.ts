@@ -109,14 +109,32 @@ export interface IndexInfo {
   isPrimaryKey?: boolean;
 }
 
+/**
+ * Every referential action a supported engine can report, in one spelling.
+ *
+ * SQL Server's catalogue is enumerated (`sys.foreign_keys.delete_referential_action`), while
+ * PostgreSQL and MySQL report `information_schema`'s prose — `NO ACTION`, `SET NULL`, `RESTRICT`.
+ * `MetadataService.listForeignKeys` normalises onto this list, so exactly one spelling crosses the
+ * IPC bridge and a consumer can compare against it rather than normalising for itself (J-66).
+ */
+export const FOREIGN_KEY_ACTIONS = [
+  'no_action',
+  'cascade',
+  'set_null',
+  'set_default',
+  'restrict',
+] as const;
+
+export type ForeignKeyAction = (typeof FOREIGN_KEY_ACTIONS)[number];
+
 export interface ForeignKeyInfo {
   name: string;
   columns: string[];
   referencedTable: string;
   referencedSchema: string;
   referencedColumns: string[];
-  onDelete?: 'no_action' | 'cascade' | 'set_null' | 'set_default';
-  onUpdate?: 'no_action' | 'cascade' | 'set_null' | 'set_default';
+  onDelete?: ForeignKeyAction;
+  onUpdate?: ForeignKeyAction;
 }
 
 export interface ConstraintInfo {
