@@ -20,7 +20,24 @@ files:
   - packages/shared/dist/**/*
   - packages/shared/package.json
   - package.json
-  - node_modules/**/*
+  # ── No `node_modules/**/*` here, and that is the whole of J-90 ─────────────────────────────────
+  #
+  # It used to be the line below `package.json`, and while it was there NO exclusion in this file
+  # could keep a dependency out of the archive. Measured, not reasoned: adding
+  # `!**/node_modules/devicon/**` to the list below produced an app.asar byte-identical to the one
+  # without it (201,274,245 bytes both times); deleting this one line dropped the same archive to
+  # 79,376,875.
+  #
+  # Why, in app-builder-lib 26.15.3's own terms. `getNodeModuleFileMatcher` (fileMatcher.js) builds
+  # the pattern list that filters the collected dependency tree, and `createFilter`'s `minimatchAll`
+  # (util/filter.js) walks it last-match-wins: a negation is only consulted while the file is
+  # currently INCLUDED, and an inclusion only while it is currently excluded. `node_modules/**/*`
+  # lands at the END of that list (`release/builder-debug.yml` prints it as
+  # `<arch>.nodeModuleFilePatterns`), so it re-included every file the negations above it had just
+  # dropped. It was also redundant from the start: electron-builder collects node_modules from the
+  # production dependency tree on its own — `getMainFileMatchers` even splices `!**/node_modules/**`
+  # into the application walk to make sure the two do not overlap.
+  #
   # Map workspace package to node_modules location
   - from: packages/shared
     to: node_modules/@joinery/shared
@@ -38,17 +55,31 @@ files:
   - "!**/{appveyor.yml,.travis.yml,circle.yml}"
   - "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
   - "!**/node_modules/cpu-features/**"
-  # Build-time toolchain. `nodeLinker: hoisted` puts every devDependency in the
-  # root node_modules, which the `node_modules/**/*` line above collects, so each
-  # of these ships in the asar unless it is named here. The four Angular entries
-  # (@angular-devkit, @angular/cli, karma*, jasmine*) were swapped for their Vite
-  # equivalents at Task 24.
-  - "!**/node_modules/typescript/**"
-  - "!**/node_modules/vite/**"
-  - "!**/node_modules/rolldown/**"
-  - "!**/node_modules/@vitejs/**"
-  - "!**/node_modules/tailwindcss/**"
-  - "!**/node_modules/@tailwindcss/**"
+  # ── Production dependencies that nothing shipped reads (J-90) ─────────────────────────────────
+  #
+  # Only a production dependency can be excluded here, because only a production dependency is ever
+  # collected. Six lines naming build-time packages (typescript, vite, rolldown, @vitejs,
+  # tailwindcss, @tailwindcss) used to sit here claiming otherwise: `nodeLinker: hoisted` puts every
+  # devDependency in the root node_modules, said the comment, and `node_modules/**/*` then collects
+  # it. Measured on the 0.5.0 arm64 build, that was false twice over — the pattern order above made
+  # every negation inert, and all 209 packages in the archive were production-tree packages anyway.
+  # Playwright, Vitest, esbuild, eslint and rollup were never in it, named or not.
+  #
+  # What guards against a build-time package arriving is a check on the artifact:
+  # `node scripts/release/asar-inventory.ts --check`, run by `pnpm run verify:package` (and so by
+  # the release workflow's mac build). A line here cannot catch it; the built archive can.
+  #
+  # devicon: 121.3 MB across 2,082 files, 61% of the archive it was in. A root `dependencies` entry
+  # left behind by the Angular renderer, whose `devicon-*` webfont classes went away with it — the
+  # React renderer draws lucide SVGs, and no file under any `dist/` references the package. Deleting
+  # the dependency outright is the real fix and is a follow-up; this keeps 121 MB out of what a user
+  # downloads today.
+  - "!**/node_modules/devicon/**"
+  # @types/*: declarations only, and genuinely in the production tree — `tedious` and `protobufjs`
+  # declare `@types/node` as a runtime `dependencies` entry, and `bl` declares
+  # `@types/readable-stream`. electron-builder already strips `.d.ts`, so what shipped was a LICENSE
+  # and a package.json each — 4 files, 3.6 KB. Excluded because nothing loads them, not for size.
+  - "!**/node_modules/@types/**"
 
 # Extra resources (outside asar)
 extraResources:
