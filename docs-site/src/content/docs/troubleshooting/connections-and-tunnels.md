@@ -57,16 +57,20 @@ Each connection profile carries a **Timeout (seconds)** field, defaulting to **3
 **connection** timeout only — how long the driver waits to establish the connection. It does not
 govern how long a query may run.
 
-The request timeout is **not configurable**. Every engine takes it from the profile's
-`requestTimeout`, which no control in the connection editor writes, so it is always its fallback
-of **30 seconds**. The Settings dialog's _Query timeout_ control does not govern it either: that
-one ships disabled and nothing reads it (see [Settings](../../reference/settings/)). A **Test** on
-SQL Server is stricter again — its request timeout is pinned at 10 seconds, so a `SELECT
-@@VERSION` that takes longer fails the test on a connection that would otherwise work.
+How long a query may run is the Settings dialog's **Query timeout**, which defaults to 30 seconds
+and applies on every engine (see [Settings](../../reference/settings/)). Separately, SQL Server and
+PostgreSQL pools carry a request timeout taken from the profile's `requestTimeout` — a field no
+control in the connection editor writes, so it is always its fallback of **30 seconds**. A query
+ends at whichever of the two deadlines arrives first; MySQL pools carry no request timeout, so
+there the Settings value is the only limit. A **Test** on SQL Server is stricter again — its
+request timeout is pinned at 10 seconds, so a `SELECT @@VERSION` that takes longer fails the test
+on a connection that would otherwise work.
 
 Raising the profile's timeout is the right move for a server that is genuinely slow to **accept**
 connections — a cold Azure SQL database, a container still starting. It will not help a refused
-connection, which fails immediately, and it will not help a slow query.
+connection, which fails immediately, and it will not help a slow query: raise **Query timeout** in
+Settings for that, and remember the 30-second `requestTimeout` on SQL Server and PostgreSQL is
+still the other ceiling.
 
 ## Aurora DSQL
 
@@ -168,7 +172,9 @@ The tunnel fields are documented under
 | Auth failures append the password-hygiene findings                                                 | `packages/main/src/services/sql/connection-pool.ts:1166-1180`                                                                                       |
 | The profile's Timeout field, and its default of 30 seconds                                         | `packages/renderer/src/features/connections/connection-editor.tsx:446-451`, `form-model.ts:141, 155`                                                |
 | It is applied as the driver's CONNECTION timeout only                                              | `packages/main/src/services/sql/connection-pool.ts:485, 552, 643, 682, 824`                                                                         |
-| The request timeout is `profile.requestTimeout \|\| 30`, and no editor control writes that field   | `packages/main/src/services/sql/connection-pool.ts:627, 644, 825`; no `requestTimeout` input in `connection-editor.tsx`                             |
+| The request timeout is `profile.requestTimeout \|\| 30`, and no editor control writes that field   | `packages/main/src/services/sql/connection-pool.ts:634, 651, 821`; no `requestTimeout` input in `connection-editor.tsx`                             |
+| The Settings _Query timeout_ is sent per query and enforced on every engine                        | `packages/renderer/src/features/query/use-run-query.ts:156`, `packages/main/src/services/sql/query-executor.ts:71, 292, 369, 447`                   |
+| MySQL pools set only `connectTimeout`, so no request timeout bounds a MySQL query                  | `packages/main/src/services/sql/mysql-pool-options.ts:51-75`                                                                                        |
 | A SQL Server Test pins its request timeout at 10 seconds                                           | `packages/main/src/services/sql/connection-pool.ts:484-487`                                                                                         |
 | Aurora DSQL credential failures name the AWS profile and the `aws sso login` line                  | `packages/main/src/services/sql/connection-pool.ts:1286-1296`                                                                                       |
 | A DSQL profile with a tunnel is refused before any tunnel is opened                                | `packages/main/src/services/sql/connection-pool.ts:404-415`                                                                                         |

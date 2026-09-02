@@ -23,7 +23,7 @@
  * | Query     | `executeScope`         | `query-panel.tsx` → `editor/statements.ts`                      |
  * | Query     | `showExecutionTime`    | `features/query/query-results.tsx`'s Messages pane              |
  * | Query     | `confirmBeforeExecute` | `query-panel.tsx`'s execute gate                                |
- * | Query     | `defaultTimeout`       | **NOBODY — disabled, J-54**                                     |
+ * | Query     | `defaultTimeout`       | `features/query/use-run-query.ts` → the executor's deadline     |
  * | Grid      | all six                | `features/query/results-grid.tsx`                               |
  *
  * `QuerySettings.autoExecuteOnOpen` has **no row at all**: auto-execute is a per-tab fact
@@ -364,18 +364,18 @@ export function QueryGroup() {
         onChange={next => update('confirmBeforeExecute', next)}
       />
 
-      {/* DISABLED, and this is the J-44 rule being honoured rather than an oversight. `QueryRequest`
-          carries a `timeout` field and `query-executor.ts` never reads it: the effective timeout comes
-          from the connection profile's `requestTimeout`. Making it live is a `packages/main` change
-          this task may not make, so the control states that instead of pretending. */}
+      {/* Live since J-54. `use-run-query.ts` sends it as `QueryRequest.timeout` and
+          `main/.../query-timeout.ts` enforces it per engine — an mssql attention packet, a
+          destroyed pg client, a destroyed mysql2 connection. The connection profile's own
+          `requestTimeout` still bounds the pool, and nothing reconciles the two on purpose: a
+          query stops at the first of the two deadlines to fire, which is what the hint says. */}
       <NumberSetting
         testId="settings-query-timeout"
         label="Query timeout (seconds)"
-        hint="Not in use yet — queries time out per connection, from the profile's own timeout. Arrives with J-54."
+        hint="A query is stopped at this limit, or at the connection's own request timeout — whichever is shorter."
         value={Math.round(query.defaultTimeout / 1000)}
         min={5}
         max={300}
-        disabled
         onCommit={value => update('defaultTimeout', value * 1000)}
       />
     </SettingsGroup>

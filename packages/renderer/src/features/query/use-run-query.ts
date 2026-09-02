@@ -153,6 +153,7 @@ export function useRunQuery(): RunQuery {
         database: context.database,
         sql,
         maxRows: context.querySettings.maxRowsToDisplay,
+        timeout: context.querySettings.defaultTimeout,
       });
 
       // `null` means superseded or no bridge; a failed query is a result with `success: false`.

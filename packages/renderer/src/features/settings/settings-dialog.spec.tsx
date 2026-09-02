@@ -24,6 +24,7 @@
  * |                        | + `sql-editor.spec.tsx` (the prop reaches `updateOptions`)            |
  * | `grid.*`               | `results-grid.spec.tsx` (AG Grid props, column set, striping, copy)   |
  * | `query.maxRowsToDisplay`| `use-run-query.spec.tsx` (`QueryRequest.maxRows`)                    |
+ * | `query.defaultTimeout` | `use-run-query.spec.tsx` (`QueryRequest.timeout`)                     |
  * | `query.showExecutionTime`| `query-results.spec.tsx` (the Messages duration line)               |
  * | `query.confirmBeforeExecute`| `query-panel.spec.tsx` (every execute entry point is gated)      |
  * | `editor-prefs` ⌃E flag | `query-panel.spec.tsx` (the gate reappears)                           |
@@ -223,9 +224,9 @@ describe('the AI group', () => {
  * wearing a different hat, and the test below is what makes adding one a failure.
  */
 const DISABLED_PENDING_A_CONSUMER: readonly string[] = [
-  // `QueryRequest.timeout` is declared and `query-executor.ts` never reads it — the effective timeout
-  // is the connection profile's. Making it live is a `packages/main` change.
-  'settings-query-timeout',
+  // Empty since J-54 made the query timeout live, and that is the state to keep it in. An entry
+  // here is a control that persists a value nothing reads; the walk below still demands each one
+  // name its owner, so a new entry has to admit what it is.
 ];
 
 const DISABLED_BECAUSE_INAPPLICABLE: readonly string[] = [
@@ -457,21 +458,24 @@ describe('the editor group', () => {
 // ── Query ──────────────────────────────────────────────────────────────────────────────────
 
 describe('the query group', () => {
-  it('writes the four live query settings', async () => {
+  it('writes the five live query settings', async () => {
     const user = await openPanel('query');
 
     await fillNumber(user, 'settings-query-max-rows', '500');
     await selectOption(user, 'settings-query-execute-scope', /statement at the caret/);
     await user.click(screen.getByTestId('settings-query-show-execution-time'));
     await user.click(screen.getByTestId('settings-query-confirm-before-execute'));
+    await fillNumber(user, 'settings-query-timeout', '90');
 
     const query = settingsStore.getState().settings.query;
     expect(query.maxRowsToDisplay).toBe(500);
     expect(query.executeScope).toBe('currentStatement');
     expect(query.showExecutionTime).toBe(false);
     expect(query.confirmBeforeExecute).toBe(true);
-    // The disabled control wrote nothing, which is the other half of "disabled" meaning anything.
-    expect(query.defaultTimeout).toBe(DEFAULT_SETTINGS.query.defaultTimeout);
+    // Shown in seconds, stored in milliseconds — J-54 made this control live, and the unit it
+    // writes is what `QueryRequest.timeout` and the executor's timer both expect.
+    expect(query.defaultTimeout).toBe(90_000);
+    expect(DEFAULT_SETTINGS.query.defaultTimeout).toBe(30_000);
   });
 
   it('changes what an execute sends — the executeScope consumer, end to end', async () => {
