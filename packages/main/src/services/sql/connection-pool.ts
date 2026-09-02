@@ -4,8 +4,11 @@
  * Supports SQL Server (mssql), PostgreSQL (pg), and MySQL (mysql2) engines.
  */
 
-import { ConnectionPool, config as SqlConfig, IResult } from 'mssql';
-import { Pool as PgPool } from 'pg';
+import type { EventEmitter } from 'node:events';
+import mssql from 'mssql';
+import pg from 'pg';
+import type { ConnectionPool, config as SqlConfig, IResult } from 'mssql';
+import type { Pool as PgPool } from 'pg';
 import { AuroraDSQLPool } from '@aws/aurora-dsql-node-postgres-connector';
 import mysql from 'mysql2/promise';
 import type { Pool as MySQLPool } from 'mysql2/promise';
@@ -178,6 +181,39 @@ export class ConnectionPoolManager extends BaseSingleton {
   }
 
   /**
+   * Attach the `'error'` listener every driver pool needs (J-175).
+   *
+   * A pool is a Node `EventEmitter`, and an `EventEmitter` with no `'error'` listener *rethrows*
+   * the error from inside `emit()`. Pool errors arrive on a socket callback rather than on an
+   * awaited promise, so that throw lands in the event loop as an uncaught exception — in the
+   * main process, a crash of the whole app. This needs no bug to provoke:
+   *
+   * - pg-pool 3.14.0 `makeIdleListener` (`pg-pool/index.js:51-63`) removes the client from the
+   *   pool and *then* calls `pool.emit('error', err, client)`. That is the path a server-side
+   *   FATAL on an idle pooled connection takes — a Postgres restart, an admin
+   *   `pg_terminate_backend`, or `DROP DATABASE … WITH (FORCE)`, including Joinery's own
+   *   drop-database flow (all `57P01`).
+   * - mssql 11.0.1 emits on the pool from its tedious connection's own `'error'` handler for
+   *   anything that is not `ESOCKET` (`mssql/lib/tedious/connection-pool.js:101-107`), and from a
+   *   failed `acquire()` (`mssql/lib/base/connection-pool.js:365-368`).
+   *
+   * Logging is the whole job: both drivers have already given up on the connection by the time
+   * they emit, so the pool stays usable and opens a fresh connection on the next call.
+   *
+   * mysql2 pools are deliberately NOT guarded. `PromisePool` inherits only
+   * `acquire | connection | enqueue | release` from the core pool
+   * (`mysql2/lib/promise/pool.js:18`) and neither pool class ever emits `'error'`, so a listener
+   * there would be unreachable code; its `PoolConnection` registers its own
+   * (`mysql2/lib/pool_connection.js:14-16`).
+   */
+  private guardPoolErrors(pool: EventEmitter, label: string): void {
+    pool.on('error', (err: unknown) => {
+      const code = (err as { code?: string } | null)?.code;
+      log.error(`Pool error on ${label}${code ? ` [${code}]` : ''}: ${this.errMessage(err)}`);
+    });
+  }
+
+  /**
    * Construct an AuroraDSQLPool for an aws-iam profile. Shared by getPgPool
    * (persistent pool) and testPgConnection (throwaway pool) so the two
    * paths can't drift on option names. The connector mints a fresh IAM
@@ -194,7 +230,9 @@ export class ConnectionPoolManager extends BaseSingleton {
     dbName: string,
     poolOptions: { max: number; idleTimeoutMillis?: number; query_timeout?: number }
   ): AuroraDSQLPool {
-    return new AuroraDSQLPool(auroraDsqlPoolOptions(profile, dbName, poolOptions));
+    const pool = new AuroraDSQLPool(auroraDsqlPoolOptions(profile, dbName, poolOptions));
+    this.guardPoolErrors(pool, `Aurora DSQL ${profile.name} (${dbName})`);
+    return pool;
   }
 
   /**
@@ -213,7 +251,7 @@ export class ConnectionPoolManager extends BaseSingleton {
     // first connection — we don't want to log "tunnel is gone" then. Collect
     // affected pools first; only proceed (and log) if there's something to
     // actually invalidate.
-    const mssql = this.pools.get(profile.id);
+    const mssqlEntry = this.pools.get(profile.id);
     const pgEntries = [...this.pgPools.entries()].filter(
       ([key]) => key === profile.id || key.startsWith(`${profile.id}:`)
     );
@@ -221,13 +259,13 @@ export class ConnectionPoolManager extends BaseSingleton {
       ([key]) => key === profile.id || key.startsWith(`${profile.id}:`)
     );
 
-    if (!mssql && pgEntries.length === 0 && mysqlEntries.length === 0) return;
+    if (!mssqlEntry && pgEntries.length === 0 && mysqlEntries.length === 0) return;
 
     log.info(`SSH tunnel for ${profile.id} is gone — discarding stale pools`);
 
-    if (mssql) {
+    if (mssqlEntry) {
       try {
-        await mssql.pool.close();
+        await mssqlEntry.pool.close();
       } catch (err) {
         log.warn(`Failed to close stale mssql pool: ${this.errMessage(err)}`);
       }
@@ -497,7 +535,8 @@ export class ConnectionPoolManager extends BaseSingleton {
         `Config: encrypt=${config.options?.encrypt}, trustCert=${config.options?.trustServerCertificate}, auth=${profile.authenticationType}`
       );
 
-      pool = new ConnectionPool(config);
+      pool = new mssql.ConnectionPool(config);
+      this.guardPoolErrors(pool, `SQL Server probe ${profile.name}`);
       log.debug('Attempting test connection...');
       await pool.connect();
       log.info('Test connection successful');
@@ -549,7 +588,7 @@ export class ConnectionPoolManager extends BaseSingleton {
       if (profile.authenticationType === 'aws-iam') {
         testPool = this.buildAuroraDsqlPool(profile, profile.database || 'postgres', { max: 1 });
       } else {
-        testPool = new PgPool({
+        testPool = new pg.Pool({
           host: profile.server,
           port: profile.port,
           user: profile.username,
@@ -559,6 +598,7 @@ export class ConnectionPoolManager extends BaseSingleton {
           connectionTimeoutMillis: profile.connectionTimeout * 1000,
           max: 1,
         });
+        this.guardPoolErrors(testPool, `PostgreSQL probe ${profile.name}`);
       }
 
       const client = await testPool.connect();
@@ -638,7 +678,7 @@ export class ConnectionPoolManager extends BaseSingleton {
       const { effectiveProfile } = await this.withTunnel(profile);
       const password = await this.profileStore.getPassword(profileId);
       if (!password) throw new Error('Connection password not found in Keychain');
-      pool = new PgPool({
+      pool = new pg.Pool({
         host: effectiveProfile.server,
         port: effectiveProfile.port,
         user: effectiveProfile.username,
@@ -652,6 +692,7 @@ export class ConnectionPoolManager extends BaseSingleton {
         max: 10,
         idleTimeoutMillis: 30000,
       });
+      this.guardPoolErrors(pool, `PostgreSQL ${profile.name} (${dbName})`);
     }
 
     // Verify connection
@@ -837,7 +878,8 @@ export class ConnectionPoolManager extends BaseSingleton {
       `Pool config: server=${config.server}:${config.port}, db=${targetDb}, auth=${effectiveProfile.authenticationType}`
     );
 
-    const pool = new ConnectionPool(config);
+    const pool = new mssql.ConnectionPool(config);
+    this.guardPoolErrors(pool, `SQL Server ${profile.name} (${targetDb})`);
     await pool.connect();
     log.info(`Connected to ${profile.name} (db: ${targetDb})`);
 

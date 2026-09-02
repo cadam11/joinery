@@ -133,11 +133,11 @@ describe.each<Engine>(['postgres', 'mysql', 'mssql'])('the per-query timeout on 
  * `afterEach` — Joinery's pools released BEFORE the fixture drops that database.
  *
  * `withFreshDatabase` drops PostgreSQL databases `WITH (FORCE)`, which FATALs any connection still
- * open on them (`57P01`). pg-pool re-emits that on the Pool, and a Pool with no `'error'` listener
- * throws it as an uncaught exception — which vitest reports as an unhandled error beside otherwise
- * green tests. An `afterEach` cannot help: `withFreshDatabase`'s own `finally` has already dropped
- * the database by then. (Joinery's pg pools carry no `'error'` listener either, which is a real
- * crash risk in the app and a follow-up rather than this ticket's business.)
+ * open on them (`57P01`). pg-pool re-emits that on the Pool, so the pool would log an eviction in
+ * the middle of an unrelated test's teardown. An `afterEach` cannot help: `withFreshDatabase`'s own
+ * `finally` has already dropped the database by then. (Before J-175 this was worse than noise —
+ * Joinery's pg pools carried no `'error'` listener, so the re-emit threw as an uncaught exception.
+ * `tests/integration/sql/pg-pool-error.spec.ts` now owns that property.)
  */
 async function withConnection(
   engine: Engine,

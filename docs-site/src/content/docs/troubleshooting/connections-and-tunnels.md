@@ -100,6 +100,17 @@ restored_.
 Separately, a pool that has been **idle for ten minutes with no queries running** is closed. A
 sweep runs every five minutes. You will not notice: the next query opens a fresh pool.
 
+A server can also end a connection from its own side while Joinery is holding it idle — a database
+restart, an administrator's `pg_terminate_backend`, or a `DROP DATABASE … WITH (FORCE)` against a
+database you still have open, including from Joinery's own **Drop database**. Joinery discards that
+one connection and writes a line to the output panel naming the pool and the driver's code:
+
+_Pool error on PostgreSQL \<profile\> (\<database\>) \[57P01\]: terminating connection due to
+administrator command_
+
+Your next query opens a fresh connection on the same pool. Nothing else in the app is disturbed,
+and no work in another tab is affected.
+
 ## Dropped SSH tunnels
 
 A silently dropped TCP socket — a NAT or firewall idle timeout, a network change, a laptop going
