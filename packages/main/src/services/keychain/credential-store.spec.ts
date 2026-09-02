@@ -6,6 +6,11 @@ import * as keytar from 'keytar';
 // not matter (CommonJS makes a named import the same property read), so the seam this drives is
 // the call itself, not the import form (J-161).
 import * as runtimeMode from '../../utils/runtime-mode';
+// Same seam, same reason, for the other half of the packaged decision (J-167): whether the BUNDLE
+// was stamped as a test build. Real production module — `isTestCapableBuild` reads
+// `process.resourcesPath`, which is undefined in a vitest process, so it answers `false` here
+// unless a spec says otherwise.
+import * as testBuildCapability from '../../utils/test-build-capability';
 import { onLogEntry } from '../../utils/logger';
 import { CredentialStore } from './credential-store';
 import { KEYCHAIN_SERVICE_ENV_VAR } from './service-name';
@@ -246,6 +251,17 @@ describe('CredentialStore keychain service name', () => {
     CredentialStore.resetInstance();
   }
 
+  /**
+   * A packaged bundle stamped as a test build (J-167). Both signals are spied, because the store
+   * must read BOTH at the call site: `isTestCapableBuild` alone would leave a release build
+   * honouring nothing, and `isPackagedApp` alone is what J-161 already covers.
+   */
+  function pretendPackagedTestBuild(): void {
+    otherSpies.push(vi.spyOn(runtimeMode, 'isPackagedApp').mockReturnValue(true));
+    otherSpies.push(vi.spyOn(testBuildCapability, 'isTestCapableBuild').mockReturnValue(true));
+    CredentialStore.resetInstance();
+  }
+
   it('refuses the override and keeps the application id when the app is packaged', async () => {
     process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
     pretendPackaged();
@@ -277,6 +293,37 @@ describe('CredentialStore keychain service name', () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0].message).not.toContain(APP_ID);
     expect(refusals[0].message).not.toContain('ca.adam11.joinery.tests');
+  });
+
+  /**
+   * The J-167 half of the wiring, and the mutation that makes it non-vacuous: hard-coding
+   * `isTestBuild: true` at the call site passes this test and fails the release one above, while
+   * hard-coding `false` passes that one and fails this. Only a real read of both signals satisfies
+   * both, which is the property `scripts/release/smoke-packaged-app.ts` depends on to boot a real
+   * bundle without touching the developer's production vault.
+   */
+  it('honours the override in a packaged bundle stamped as a test build', async () => {
+    process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+    pretendPackagedTestBuild();
+
+    const services = await servicesTouchedByASet();
+
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set(['ca.adam11.joinery.tests']));
+  });
+
+  it('logs no refusal when a test build obeys the override', async () => {
+    const entries: LogEntry[] = [];
+    const stopListening = onLogEntry(entry => entries.push(entry));
+    try {
+      process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+      pretendPackagedTestBuild();
+      await servicesTouchedByASet();
+    } finally {
+      stopListening();
+    }
+
+    expect(entries.filter(entry => entry.message.includes(KEYCHAIN_SERVICE_ENV_VAR))).toEqual([]);
   });
 
   it('stays silent about the environment when nothing overrides the service', async () => {

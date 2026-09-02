@@ -14,6 +14,12 @@ import { isDevelopmentHatchOpen, isTestHatchOpen } from './runtime-mode';
  * `app.isPackaged`, and a vitest process is not a packaged Electron app, so there is nothing
  * honest to assert about it in-process; the packaged branch is proven by the callers that pass
  * `isPackaged: true` below and by a real packaged launch.
+ *
+ * J-167 adds the one way back in for a packaged app: `isTestBuild`, a property of the ARTIFACT
+ * (`Contents/Resources/joinery-test-build`, written by `pnpm run package:test` and refused by
+ * `pnpm run verify:package`) rather than of the environment. It is what lets the packaged smoke
+ * run keep its hidden window and its throwaway keychain namespace without reopening the hole for
+ * a release build, which cannot carry the marker.
  */
 describe('isTestHatchOpen', () => {
   it('is open for the launchers: unpackaged with JOINERY_TEST=1', () => {
@@ -22,6 +28,30 @@ describe('isTestHatchOpen', () => {
 
   it('is shut in a packaged app even with JOINERY_TEST=1', () => {
     expect(isTestHatchOpen({ isPackaged: true, env: { JOINERY_TEST: '1' } })).toBe(false);
+  });
+
+  // Same again with the flag stated rather than defaulted, so nobody can read the case above as
+  // "an omitted field is undecided". A release bundle is `isTestBuild: false`.
+  it('is shut in a packaged RELEASE build even with JOINERY_TEST=1', () => {
+    expect(
+      isTestHatchOpen({ isPackaged: true, isTestBuild: false, env: { JOINERY_TEST: '1' } })
+    ).toBe(false);
+  });
+
+  /**
+   * The packaged test bundle (J-167). `scripts/release/smoke-packaged-app.ts` boots a real
+   * `Joinery.app` and needs the hidden window it has always had; without this case it gets a
+   * visible one, which is how the J-167 review found this call site in the first place. The
+   * capability is a stamped file inside the bundle, so a release build cannot reach this branch.
+   */
+  it('is open in a packaged app that carries the build-time test capability', () => {
+    expect(
+      isTestHatchOpen({ isPackaged: true, isTestBuild: true, env: { JOINERY_TEST: '1' } })
+    ).toBe(true);
+  });
+
+  it('is shut in a test build that did not ask for it', () => {
+    expect(isTestHatchOpen({ isPackaged: true, isTestBuild: true, env: {} })).toBe(false);
   });
 
   it('is shut when the variable is absent', () => {
@@ -52,6 +82,22 @@ describe('isDevelopmentHatchOpen', () => {
     expect(isDevelopmentHatchOpen({ isPackaged: true, env: { NODE_ENV: 'development' } })).toBe(
       false
     );
+  });
+
+  /**
+   * And it stays shut for a packaged TEST build, unlike the test hatch above (J-167). A stamped
+   * bundle has no Vite dev server to load, so opening this would buy nothing and would let
+   * whoever set `NODE_ENV` serve their own page into a bundle that already carries the preload
+   * bridge — the one hatch where "it is only a test build" is not a good enough reason.
+   */
+  it('is shut in a packaged test build too — a stamped bundle has no dev server', () => {
+    expect(
+      isDevelopmentHatchOpen({
+        isPackaged: true,
+        isTestBuild: true,
+        env: { NODE_ENV: 'development' },
+      })
+    ).toBe(false);
   });
 
   it.each(['production', 'test', ''])('is shut for NODE_ENV=%j', value => {

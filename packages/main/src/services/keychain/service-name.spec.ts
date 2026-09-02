@@ -9,9 +9,18 @@ function unpackaged(env: NodeJS.ProcessEnv = {}) {
   return resolveKeychainServiceName({ isPackaged: false, env });
 }
 
-/** A packaged, shipped `Joinery.app` with the given environment. */
+/** A packaged, shipped `Joinery.app` with the given environment — a RELEASE bundle. */
 function packaged(env: NodeJS.ProcessEnv = {}) {
-  return resolveKeychainServiceName({ isPackaged: true, env });
+  return resolveKeychainServiceName({ isPackaged: true, isTestBuild: false, env });
+}
+
+/**
+ * A packaged bundle stamped as a TEST build (J-167): `pnpm run package:test` writes
+ * `Contents/Resources/joinery-test-build` into it, and `pnpm run verify:package` fails on a release
+ * artifact that carries it. This is the only packaged shape that gets the override back.
+ */
+function packagedTestBuild(env: NodeJS.ProcessEnv = {}) {
+  return resolveKeychainServiceName({ isPackaged: true, isTestBuild: true, env });
 }
 
 /**
@@ -28,6 +37,12 @@ function packaged(env: NodeJS.ProcessEnv = {}) {
  * items — which `credential-store.ts`'s legacy-migration path would then copy and DELETE.
  * The resolver takes the packaged flag as an argument rather than reading Electron, so both
  * halves are provable in the unit tier.
+ *
+ * J-167 adds the third case: a packaged bundle that carries the build-time test-capability marker
+ * honours the override again, because `scripts/release/smoke-packaged-app.ts` boots a real bundle
+ * and must not boot it against the developer's production vault. That capability is a property of
+ * the artifact, not of the environment — a second environment variable would have reopened the
+ * hole, since whoever can set one can set two.
  */
 describe('resolveKeychainServiceName', () => {
   describe('unpackaged (dev, and every Electron test launcher)', () => {
@@ -90,6 +105,54 @@ describe('resolveKeychainServiceName', () => {
 
     it('says nothing when no override is set — the normal case for every user', () => {
       expect(packaged({})).toEqual({ serviceName: APP_ID });
+    });
+
+    // The default, spelled out: a runtime that says nothing about the marker is not a test build.
+    // The field is optional so a call site that forgets it fails CLOSED — it refuses the override
+    // — rather than silently granting it.
+    it('refuses the override when the runtime says nothing about the marker', () => {
+      const resolution = resolveKeychainServiceName({
+        isPackaged: true,
+        env: { [KEYCHAIN_SERVICE_ENV_VAR]: OVERRIDE },
+      });
+
+      expect(resolution.serviceName).toBe(APP_ID);
+      expect(resolution.warning).toContain(KEYCHAIN_SERVICE_ENV_VAR);
+    });
+  });
+
+  describe('packaged, stamped as a test build (J-167)', () => {
+    it('honours the override — this is the whole point of the marker', () => {
+      expect(packagedTestBuild({ [KEYCHAIN_SERVICE_ENV_VAR]: OVERRIDE })).toEqual({
+        serviceName: OVERRIDE,
+      });
+    });
+
+    it('warns about nothing: the override was obeyed, so there is nothing to report', () => {
+      expect(packagedTestBuild({ [KEYCHAIN_SERVICE_ENV_VAR]: OVERRIDE }).warning).toBeUndefined();
+    });
+
+    it('trims the override, exactly as an unpackaged process does', () => {
+      expect(packagedTestBuild({ [KEYCHAIN_SERVICE_ENV_VAR]: `  ${OVERRIDE}\n` })).toEqual({
+        serviceName: OVERRIDE,
+      });
+    });
+
+    // Honouring the override means honouring the blank-is-a-bug rule with it. A stamped bundle is
+    // only ever launched by our own smoke script, so a blank value there is a launcher bug that
+    // must be loud — not a quiet fall-back to the production vault, which is the accident this
+    // whole module exists to prevent.
+    it.each(['', '   ', '\t\n'])(
+      'rejects a blank override (%j) rather than falling back',
+      blank => {
+        expect(() => packagedTestBuild({ [KEYCHAIN_SERVICE_ENV_VAR]: blank })).toThrow(
+          KEYCHAIN_SERVICE_ENV_VAR
+        );
+      }
+    );
+
+    it('still defaults to the application id when no override is set', () => {
+      expect(packagedTestBuild({})).toEqual({ serviceName: APP_ID });
     });
   });
 });
