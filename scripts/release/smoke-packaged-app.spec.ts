@@ -14,7 +14,7 @@
  * namespace a launched Electron picked.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,12 +23,44 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertBundleIsTestCapable,
   executableInBundle,
+  packagedExecutable,
   parseArgs,
   productNameFromConfig,
 } from './smoke-packaged-app';
 import { stampBundle } from './test-build-marker.ts';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
+
+/**
+ * Real bundle-shaped temp directories, shared by the two describes that need one.
+ *
+ * No `fs` double anywhere in this file: every claim under test is "what is on disk inside this
+ * bundle", so a stubbed `fs` would be a stub for the claim itself.
+ */
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  while (temporaryDirectories.length > 0) {
+    const directory = temporaryDirectories.pop();
+    if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function makeBundle(): string {
+  const root = mkdtempSync(join(tmpdir(), 'joinery-smoke-spec-'));
+  temporaryDirectories.push(root);
+  const appPath = join(root, 'Joinery.app');
+  mkdirSync(join(appPath, 'Contents', 'Resources'), { recursive: true });
+  return appPath;
+}
+
+/** A bundle that also has the executable electron-builder names after `productName`. */
+function makeBundleWithExecutable(): string {
+  const appPath = makeBundle();
+  mkdirSync(join(appPath, 'Contents', 'MacOS'), { recursive: true });
+  writeFileSync(join(appPath, 'Contents', 'MacOS', 'Joinery'), '');
+  return appPath;
+}
 
 describe('productNameFromConfig', () => {
   it('reads the product name electron-builder names the executable after', () => {
@@ -89,23 +121,6 @@ describe('parseArgs', () => {
  * front of it rather than a fact somebody had to remember to update.
  */
 describe('assertBundleIsTestCapable', () => {
-  const temporaryDirectories: string[] = [];
-
-  afterEach(() => {
-    while (temporaryDirectories.length > 0) {
-      const directory = temporaryDirectories.pop();
-      if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  function makeBundle(): string {
-    const root = mkdtempSync(join(tmpdir(), 'joinery-smoke-spec-'));
-    temporaryDirectories.push(root);
-    const appPath = join(root, 'Joinery.app');
-    mkdirSync(join(appPath, 'Contents', 'Resources'), { recursive: true });
-    return appPath;
-  }
-
   it('refuses a bundle the release path built', () => {
     // The refusal has to happen BEFORE the launch: the writes it prevents happen during
     // `whenReady`, so a check that ran once a window existed would be too late.
@@ -120,5 +135,24 @@ describe('assertBundleIsTestCapable', () => {
     const appPath = makeBundle();
     stampBundle(appPath);
     expect(() => assertBundleIsTestCapable(appPath)).not.toThrow();
+  });
+});
+
+/**
+ * Where the executable is, and the refusal to guess when it is not there (J-88).
+ *
+ * Extracted from `smoke()` so the packaged-app smoke TIER
+ * (`tests/smoke-packaged/packaged-app.ts`) resolves its executable through the same three
+ * decisions this script does — the product name from the real config, the macOS bundle layout,
+ * and "is it actually there" — instead of restating them and drifting.
+ */
+describe('packagedExecutable', () => {
+  it('resolves the binary inside a bundle, named from the real electron-builder.yml', () => {
+    const appPath = makeBundleWithExecutable();
+    expect(packagedExecutable(appPath)).toBe(join(appPath, 'Contents', 'MacOS', 'Joinery'));
+  });
+
+  it('names the command that builds one rather than launching nothing', () => {
+    expect(() => packagedExecutable(join(tmpdir(), 'joinery-absent.app'))).toThrow(/package:test/);
   });
 });

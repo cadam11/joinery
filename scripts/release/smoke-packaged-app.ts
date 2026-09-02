@@ -72,7 +72,9 @@ import { bundleCarriesTestCapability } from './test-build-marker.ts';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
 const CONFIG_PATH = join(REPO_ROOT, 'electron-builder.yml');
-const DEFAULT_APP = join(REPO_ROOT, 'release/mac-arm64/Joinery.app');
+
+/** The bundle `pnpm run package:dir` / `package:test` writes, and every caller's default. */
+export const DEFAULT_APP = join(REPO_ROOT, 'release/mac-arm64/Joinery.app');
 
 /**
  * The Keychain service this launch stores credentials under — the same value as
@@ -167,12 +169,29 @@ export function assertBundleIsTestCapable(appPath: string): void {
   );
 }
 
-async function smoke(args: Args): Promise<void> {
+/**
+ * The executable inside a packaged bundle, or a throw naming the command that builds one.
+ *
+ * The three decisions a launcher makes before it spawns anything, in one place so the packaged-app
+ * smoke TIER (`tests/smoke-packaged/packaged-app.ts`, J-88) makes them identically rather than
+ * restating them: the product name comes from the real `electron-builder.yml` (a rename used to
+ * make this fail naming a path that had never existed), the bundle layout is macOS's, and a missing
+ * bundle is reported as "package one" rather than as a spawn failure.
+ *
+ * Says nothing about whether the bundle may be LAUNCHED — that is
+ * {@link assertBundleIsTestCapable}, which every caller must also call.
+ */
+export function packagedExecutable(appPath: string = DEFAULT_APP): string {
   const productName = productNameFromConfig(readFileSync(CONFIG_PATH, 'utf8'));
-  const executable = executableInBundle(args.appPath, productName);
+  const executable = executableInBundle(appPath, productName);
   if (!existsSync(executable)) {
     throw new Error(`no packaged app at ${executable} — run "pnpm run package:test" first`);
   }
+  return executable;
+}
+
+async function smoke(args: Args): Promise<void> {
+  const executable = packagedExecutable(args.appPath);
   assertBundleIsTestCapable(args.appPath);
 
   const userDataDir = mkdtempSync(join(tmpdir(), 'joinery-smoke-userdata-'));

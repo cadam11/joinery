@@ -68,7 +68,12 @@ const UNPACKAGED_LAUNCH_SITES = [
  * because rule 3 applies to these and only these: an unpackaged launcher's environment pin is
  * honoured, so it needs no marker, and requiring one would fail every Playwright tier.
  */
-const PACKAGED_LAUNCH_SITES = ['scripts/release/smoke-packaged-app.ts'] as const;
+const PACKAGED_LAUNCH_SITES = [
+  // `pnpm run smoke:package` — does the bundle come up at all (J-90).
+  'scripts/release/smoke-packaged-app.ts',
+  // `pnpm run test:smoke:packaged` — the packaged-app smoke TIER's launcher (J-88).
+  'tests/smoke-packaged/packaged-app.ts',
+] as const;
 
 const LAUNCH_SITES = [...UNPACKAGED_LAUNCH_SITES, ...PACKAGED_LAUNCH_SITES] as const;
 

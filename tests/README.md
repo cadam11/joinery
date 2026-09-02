@@ -45,6 +45,13 @@ pnpm run test:integration      # run integration tier once
 pnpm run test:harness:down     # tear down when done
 ```
 
+The packaged-app smoke tier is not part of `test:full` and is run on its own, because it packages a
+bundle first (about 15s) and only runs on macOS:
+
+```bash
+pnpm run test:smoke:packaged   # package:test, then boot the .app against all three engines
+```
+
 ## The report
 
 `pnpm run test:full` produces a single self-contained HTML file styled to match Joinery's purple-tinted theme.
@@ -58,21 +65,22 @@ pnpm run test:harness:down     # tear down when done
 
 ## Available scripts
 
-| Script                            | What it does                                                             |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| `pnpm run test`                   | Unit tier only (no infrastructure required)                              |
-| `pnpm run test:integration`       | Integration tier — requires harness up                                   |
-| `pnpm run test:integration:watch` | Integration in watch mode for active dev                                 |
-| `pnpm run test:full`              | All tiers + HTML report. Brings harness up automatically.                |
-| `pnpm run test:dashboard`         | Live HTML dashboard at http://127.0.0.1:5188, vitest watch on both tiers |
-| `pnpm run test:e2e:react`         | Functional E2E tier (`tests/e2e-react/`)                                 |
-| `pnpm run test:e2e:react:live`    | Same, but stream events to the dashboard                                 |
-| `pnpm run test:visual:react`      | Visual baselines (`tests/e2e-react-visual/`) — macOS only                |
-| `pnpm run test:visual:react:live` | Same, but stream events to the dashboard                                 |
-| `pnpm run test:perf:react`        | Performance gates (`tests/e2e-react-perf/`) — slow                       |
-| `pnpm run test:harness:up`        | Start docker-compose network, generate SSH keypair if needed             |
-| `pnpm run test:harness:down`      | Stop network and remove volumes                                          |
-| `pnpm run test:harness:status`    | Show compose service health                                              |
+| Script                            | What it does                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `pnpm run test`                   | Unit tier only (no infrastructure required)                                    |
+| `pnpm run test:integration`       | Integration tier — requires harness up                                         |
+| `pnpm run test:integration:watch` | Integration in watch mode for active dev                                       |
+| `pnpm run test:full`              | All tiers + HTML report. Brings harness up automatically.                      |
+| `pnpm run test:dashboard`         | Live HTML dashboard at http://127.0.0.1:5188, vitest watch on both tiers       |
+| `pnpm run test:e2e:react`         | Functional E2E tier (`tests/e2e-react/`)                                       |
+| `pnpm run test:e2e:react:live`    | Same, but stream events to the dashboard                                       |
+| `pnpm run test:visual:react`      | Visual baselines (`tests/e2e-react-visual/`) — macOS only                      |
+| `pnpm run test:visual:react:live` | Same, but stream events to the dashboard                                       |
+| `pnpm run test:perf:react`        | Performance gates (`tests/e2e-react-perf/`) — slow                             |
+| `pnpm run test:smoke:packaged`    | Packaged-app smoke tier (`tests/smoke-packaged/`) — packages first, macOS only |
+| `pnpm run test:harness:up`        | Start docker-compose network, generate SSH keypair if needed                   |
+| `pnpm run test:harness:down`      | Stop network and remove volumes                                                |
+| `pnpm run test:harness:status`    | Show compose service health                                                    |
 
 `test:full` accepts flags via `pnpm run test:full -- <flag>`:
 
@@ -139,10 +147,12 @@ the next run recreates it.
 
 ### Launchers that start a PACKAGED bundle
 
-`scripts/release/smoke-packaged-app.ts` is the one launcher that boots `Joinery.app` rather than
-`packages/main/dist/index.js`, and setting the environment pin is not enough for it: a shipped,
-signed app is the binary the user has already trusted with their keychain, so it must not let the
-environment aim it somewhere else. The way back in for a test is a property of the ARTIFACT —
+Two launchers boot `Joinery.app` rather than `packages/main/dist/index.js`:
+`scripts/release/smoke-packaged-app.ts` behind `pnpm run smoke:package` (does the bundle come up at
+all), and `tests/smoke-packaged/packaged-app.ts` behind `pnpm run test:smoke:packaged` (the smoke
+TIER — does the bundle still connect to a database and return rows). Setting the environment pin is
+not enough for either: a shipped, signed app is the binary the user has already trusted with their
+keychain, so it must not let the environment aim it somewhere else. The way back in for a test is a property of the ARTIFACT —
 `pnpm run package:test` writes `Contents/Resources/joinery-test-build` into the bundle, nothing in
 the environment can forge it, and `pnpm run verify:package` fails on a release bundle that carries
 it (J-167).
@@ -157,6 +167,16 @@ marker, `packages/main/src/utils/runtime-mode.ts` carries it as `RuntimeSignals.
 `services/keychain/service-name.ts` honours the override for a runtime that has it. So the smoke
 run gets both halves it needs — a throwaway keychain service and a hidden window — and a release
 bundle, which cannot carry the marker, gets neither.
+
+The two packaged launchers differ in what they do with the throwaway service. `smoke:package` uses
+the same stable `ca.adam11.joinery.tests` name the Playwright tiers use, and leaves the item behind.
+The smoke TIER mints a fresh `ca.adam11.joinery.smoke.<id>` per run and deletes every item under
+`ca.adam11.joinery.smoke.` in its teardown — the sweep is by prefix, so a run that was killed before
+teardown is cleaned up by the next one. That is possible there and not in a Playwright worker for a
+dull reason: macOS ships `security delete-generic-password`, which removes a keytar-written item
+without a prompt, and a vitest tier is free to shell out to it. The tier asserts both halves after
+its own teardown — nothing left under its own prefix, and the production namespace holding exactly
+as many items as it did before the run.
 
 ## The Docker panel's pinned container inventory (visual tier)
 

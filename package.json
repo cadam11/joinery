@@ -23,6 +23,8 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "vitest watch --config vitest.integration.config.ts",
+    "pretest:smoke:packaged": "pnpm run package:test",
+    "test:smoke:packaged": "vitest run --config vitest.smoke-packaged.config.ts",
     "test:harness:up": "node tests/scripts/ensure-ssh-key.mjs && docker compose -f tests/docker-compose.test.yml up -d --wait",
     "test:harness:down": "docker compose -f tests/docker-compose.test.yml down -v",
     "test:harness:status": "docker compose -f tests/docker-compose.test.yml ps",
