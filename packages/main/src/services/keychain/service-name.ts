@@ -101,9 +101,9 @@ export function resolveKeychainServiceName(
     return {
       serviceName: APP_ID,
       warning:
-        `${KEYCHAIN_SERVICE_ENV_VAR} is set, but a packaged Joinery ignores it and uses its ` +
-        `own keychain service. It is honoured only in unpackaged (development and test) ` +
-        `builds. Unset it to silence this warning.`,
+        `${KEYCHAIN_SERVICE_ENV_VAR} is set, but this Joinery ignores it and uses its own ` +
+        `keychain service. It is honoured only by a development build or a bundle built for ` +
+        `testing. Unset it to silence this warning.`,
     };
   }
 
