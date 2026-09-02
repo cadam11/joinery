@@ -4,13 +4,13 @@
  */
 
 import * as keytar from 'keytar';
-import { APP_ID, type KeychainStatus } from '@joinery/shared';
+import { type KeychainStatus } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
+import { resolveKeychainServiceName } from './service-name';
 
 const log = createLogger('CredentialStore');
 
-const SERVICE_NAME = APP_ID;
 const CREDENTIALS_KEY = 'credentials-vault';
 
 interface CredentialsVault {
@@ -21,6 +21,12 @@ interface CredentialsVault {
 export type KeychainStatusListener = (status: KeychainStatus) => void;
 
 export class CredentialStore extends BaseSingleton {
+  /**
+   * The Keychain service every entry below lives under, resolved once per instance from the
+   * environment (J-96). Read here and nowhere else, so a test launcher can repoint the whole
+   * store at a throwaway namespace by setting one variable before Electron starts.
+   */
+  private readonly serviceName: string = resolveKeychainServiceName();
   // In-memory cache - all credentials loaded from single keychain entry
   private cache: Map<string, string> = new Map();
   private cacheLoaded = false;
@@ -53,7 +59,7 @@ export class CredentialStore extends BaseSingleton {
     log.info('Loading credentials vault from keychain...');
     try {
       // First, try to load the new single-entry vault
-      const vaultJson = await keytar.getPassword(SERVICE_NAME, CREDENTIALS_KEY);
+      const vaultJson = await keytar.getPassword(this.serviceName, CREDENTIALS_KEY);
 
       if (vaultJson) {
         // Parse the JSON vault
@@ -65,7 +71,7 @@ export class CredentialStore extends BaseSingleton {
       } else {
         // Migration: Check for old individual entries and migrate them
         log.info('No vault found, checking for legacy credentials...');
-        const legacyCredentials = await keytar.findCredentials(SERVICE_NAME);
+        const legacyCredentials = await keytar.findCredentials(this.serviceName);
         const nonVaultCredentials = legacyCredentials.filter(c => c.account !== CREDENTIALS_KEY);
 
         if (nonVaultCredentials.length > 0) {
@@ -77,7 +83,7 @@ export class CredentialStore extends BaseSingleton {
           await this.saveVault();
           // Clean up old individual entries
           for (const cred of nonVaultCredentials) {
-            await keytar.deletePassword(SERVICE_NAME, cred.account);
+            await keytar.deletePassword(this.serviceName, cred.account);
           }
           log.info('Migration complete');
         }
@@ -102,7 +108,7 @@ export class CredentialStore extends BaseSingleton {
   private async saveVault(): Promise<void> {
     const vault: CredentialsVault = Object.fromEntries(this.cache);
     const vaultJson = JSON.stringify(vault);
-    await keytar.setPassword(SERVICE_NAME, CREDENTIALS_KEY, vaultJson);
+    await keytar.setPassword(this.serviceName, CREDENTIALS_KEY, vaultJson);
     log.debug(`Saved vault with ${this.cache.size} credentials`);
   }
 
