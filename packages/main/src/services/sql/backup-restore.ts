@@ -22,7 +22,12 @@ import { createLogger } from '../../utils/logger';
 import { ConnectionPoolManager } from './connection-pool';
 import { MetadataService } from './metadata';
 import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
-import { resolveReplaceExisting } from './backup-args';
+import {
+  buildMssqlBackupTsql,
+  buildMssqlRestoreTsql,
+  resolveReplaceExisting,
+  resolveRestoreTarget,
+} from './backup-args';
 
 const log = createLogger('BackupRestore');
 
@@ -71,22 +76,8 @@ export class BackupRestoreService extends BaseSingleton {
     };
     this.activeOperations.set(operationId, operation);
 
-    // Generate T-SQL
-    const tsql = TsqlBuilder.backup({
-      databaseName: request.database,
-      destinationPath: request.backupPath,
-      // `backupType` is optional on the wire because PostgreSQL and MySQL have no such choice to
-      // express (J-48d). This is the SQL Server path, where the dialog always sends one; `'full'`
-      // is what `BACKUP DATABASE` does with no type clause, so an omission runs the same statement
-      // it names rather than a different one.
-      backupType: request.backupType ?? 'full',
-      compression: request.compression ?? false,
-      // Both of these reached the builder and were dropped on the floor before J-48: `checksum`
-      // arrived as a `verify` the builder never read, and `copyOnly` was read by nothing anywhere.
-      checksum: request.checksum ?? false,
-      copyOnly: request.copyOnly ?? false,
-      description: request.description,
-    });
+    // Generate T-SQL. `backup-args.ts` owns the mapping; see J-112 in its header for why.
+    const tsql = buildMssqlBackupTsql(request);
 
     // Start progress monitoring
     this.startProgressMonitoring(operation, 'backup');
@@ -258,9 +249,9 @@ export class BackupRestoreService extends BaseSingleton {
     const operationId = request.restoreId || uuidv4();
     const startTime = Date.now();
 
-    // The same default the statement builder uses below, so the claim names the database that
-    // will actually be written rather than an absent request field.
-    const claimedTarget = request.targetDatabase || 'RestoredDatabase';
+    // The same default the statement builder uses, so the claim names the database that will
+    // actually be written rather than an absent request field.
+    const claimedTarget = resolveRestoreTarget(request);
 
     // Two RESTOREs into one database is the corrupting case here, and on this engine the second
     // one can also fail outright against a database the first holds exclusive (J-48f / J-51g).
@@ -280,27 +271,8 @@ export class BackupRestoreService extends BaseSingleton {
     };
     this.activeOperations.set(operationId, operation);
 
-    // Convert file relocations to file moves
-    const fileMoves = (request.fileRelocations || [])
-      .filter(r => r.physicalName || r.newPath)
-      .map(r => ({
-        logicalName: r.logicalName,
-        destinationPath: r.physicalName || r.newPath || '',
-      }));
-
-    // Determine target database name - use provided name or fall back to reading from backup
-    const targetDbName = request.targetDatabase || 'RestoredDatabase';
-
-    // Generate T-SQL
-    const tsql = TsqlBuilder.restore({
-      sourcePath: request.backupPath,
-      targetDatabaseName: targetDbName,
-      overwriteExisting: resolveReplaceExisting(request),
-      fileMoves,
-      recoveryState: (request.recoveryState?.toLowerCase() ||
-        (request.withNoRecovery ? 'norecovery' : 'recovery')) as
-        'recovery' | 'norecovery' | 'standby',
-    });
+    // Generate T-SQL. `backup-args.ts` owns the mapping; see J-112 in its header for why.
+    const tsql = buildMssqlRestoreTsql(request);
 
     // Start progress monitoring
     this.startProgressMonitoring(operation, 'restore');

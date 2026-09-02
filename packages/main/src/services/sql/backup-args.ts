@@ -5,7 +5,9 @@
  * tested in isolation. The PG and MySQL backup services consume these.
  */
 
-import type { RestoreRequest } from '@joinery/shared';
+import type { BackupRequest, RestoreRequest } from '@joinery/shared';
+
+import { TsqlBuilder } from '../../utils/tsql-builder';
 
 /**
  * How the host CLI tool is reached. The subset of a connection profile these builders need — a
@@ -98,6 +100,73 @@ export function resolveReplaceExisting(request: RestoreRequest): boolean {
   // Either flag being truthy means "overwrite requested" — they are aliases,
   // never used to express conflicting intent.
   return Boolean(request.replaceExisting || request.withReplace);
+}
+
+/**
+ * The database a restore will actually write into.
+ *
+ * `targetDatabase` is optional on the wire, and the operation claim and the statement have to name
+ * the same database or the claim guards nothing. It was written out twice in `startRestore` with a
+ * comment tying the copies together; this is that comment made mechanical (J-112).
+ */
+export function resolveRestoreTarget(request: RestoreRequest): string {
+  return request.targetDatabase || 'RestoredDatabase';
+}
+
+/**
+ * The exact `BACKUP …` statement `BackupRestoreService.startBackup` sends to the server.
+ *
+ * Pulled out of that method so the statement can be produced from a request alone — no pool, no
+ * connection, no in-flight operation. The backup dialog shows the user a preview of this SQL
+ * (`packages/renderer/src/features/backup/backup-model.ts:backupTsql`) and the renderer may not
+ * import from `packages/main`, so the preview is a second implementation. Before J-112 nothing
+ * tied the two together: `tests/fixtures/tsql-preview/mssql-statements.sql` is now generated from
+ * THIS function by `mssql-preview-fixture.spec.ts` and the preview is asserted against that
+ * fixture, so a change here fails a test rather than quietly falsifying the preview.
+ */
+export function buildMssqlBackupTsql(request: BackupRequest): string {
+  return TsqlBuilder.backup({
+    databaseName: request.database,
+    destinationPath: request.backupPath,
+    // `backupType` is optional on the wire because PostgreSQL and MySQL have no such choice to
+    // express (J-48d). This is the SQL Server path, where the dialog always sends one; `'full'`
+    // is what `BACKUP DATABASE` does with no type clause, so an omission runs the same statement
+    // it names rather than a different one.
+    backupType: request.backupType ?? 'full',
+    compression: request.compression ?? false,
+    // Both of these reached the builder and were dropped on the floor before J-48: `checksum`
+    // arrived as a `verify` the builder never read, and `copyOnly` was read by nothing anywhere.
+    checksum: request.checksum ?? false,
+    copyOnly: request.copyOnly ?? false,
+    description: request.description,
+  });
+}
+
+/**
+ * The exact `RESTORE DATABASE …` statement `BackupRestoreService.startRestore` sends to the server.
+ *
+ * Same reason as {@link buildMssqlBackupTsql}: the restore dialog previews this statement from its
+ * own implementation (`packages/renderer/src/features/restore/restore-model.ts:restoreTsql`), and
+ * the fixture generated from here is what keeps the two honest (J-112).
+ */
+export function buildMssqlRestoreTsql(request: RestoreRequest): string {
+  // Convert file relocations to file moves. A relocation with neither path is nothing to move.
+  const fileMoves = (request.fileRelocations || [])
+    .filter(r => r.physicalName || r.newPath)
+    .map(r => ({
+      logicalName: r.logicalName,
+      destinationPath: r.physicalName || r.newPath || '',
+    }));
+
+  return TsqlBuilder.restore({
+    sourcePath: request.backupPath,
+    targetDatabaseName: resolveRestoreTarget(request),
+    overwriteExisting: resolveReplaceExisting(request),
+    fileMoves,
+    recoveryState: (request.recoveryState?.toLowerCase() ||
+      (request.withNoRecovery ? 'norecovery' : 'recovery')) as
+      'recovery' | 'norecovery' | 'standby',
+  });
 }
 
 /**

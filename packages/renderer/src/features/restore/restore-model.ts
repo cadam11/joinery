@@ -318,7 +318,7 @@ function sanitizeFileStem(value: string): string {
 /**
  * The relocations that are worth sending: the ones that actually move a file.
  *
- * `backup-restore.ts:256-261` maps every relocation it is given into a `MOVE`, so sending the
+ * `backup-args.ts:154-159` maps every relocation it is given into a `MOVE`, so sending the
  * unchanged ones would emit a `MOVE` to the path the file is already at — legal, but noise in a
  * statement the user is being shown for transparency.
  */
@@ -331,20 +331,20 @@ export function changedRelocations(relocations: readonly Relocation[]): Relocati
 /**
  * The T-SQL `packages/main` will actually run for this form.
  *
- * A transcription of `TsqlBuilder.restore` (`packages/main/src/utils/tsql-builder.ts:149-185`),
+ * A transcription of `TsqlBuilder.restore` (`packages/main/src/utils/tsql-builder.ts:173-206`),
  * including the `STATS = 5` the user never chose and the `RECOVERY` the builder emits whether or not
  * anything was ticked. Duplication rather than an import, because the renderer may not import from
  * `packages/main`.
  *
- * **What the spec around this actually guards, precisely:** `restore-model.spec.ts` pins *this
- * function's* output — the clauses, their order, the quoting and the escaping — against the strings
- * that were read out of `tsql-builder.ts:149-185` when this was written. So an edit to this file that
- * changes the preview fails a test. **Nothing here detects a change to `tsql-builder.ts` itself**:
- * the spec has no access to that file, does not import it, and derives nothing from it. If the main
- * process starts emitting `STATS = 10`, or drops the implicit `RECOVERY`, this preview goes quietly
- * wrong and the suite stays green until somebody re-reads both files. A real drift alarm would need a
- * test that imports the builder (or a fixture generated from it), which this task may not add —
- * `packages/main` and the shared package are out of scope. Recorded in the task report as such.
+ * **What the specs around this guard, precisely:** `restore-model.spec.ts` pins *this function's*
+ * output — the clauses, their order, the quoting and the escaping — so an edit to this file that
+ * changes the preview fails a test. It says nothing about the main process. The drift alarm this
+ * comment used to ask for is `../tsql-preview-drift.spec.ts` (J-112): it compares the output below
+ * against `tests/fixtures/tsql-preview/mssql-statements.sql`, which
+ * `packages/main/src/services/sql/mssql-preview-fixture.spec.ts` **generates from the builder the
+ * service actually calls**. So if the main process starts emitting `STATS = 10`, or drops the
+ * implicit `RECOVERY`, regenerating the fixture turns that spec red instead of leaving this preview
+ * quietly wrong.
  */
 export function restoreTsql(values: RestoreFormValues, relocations: readonly Relocation[]): string {
   const target = values.targetDatabase.trim();

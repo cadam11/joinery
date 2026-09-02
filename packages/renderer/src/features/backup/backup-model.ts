@@ -185,7 +185,7 @@ export function suggestedFileName(databaseName: string, engine: DatabaseEngine, 
 /**
  * The T-SQL `packages/main` will actually run for this form.
  *
- * A transcription of `TsqlBuilder.backup` (`packages/main/src/utils/tsql-builder.ts:118-147`),
+ * A transcription of `TsqlBuilder.backup` (`packages/main/src/utils/tsql-builder.ts:131-168`),
  * including the two options the user never chose — `INIT`, which is why a repeated path overwrites
  * rather than appends, and `STATS = 5`, which is what makes the server's percentage progress
  * arrive at all. The Angular preview omitted both and invented `COPY_ONLY`/`CHECKSUM` clauses the
@@ -193,8 +193,15 @@ export function suggestedFileName(databaseName: string, engine: DatabaseEngine, 
  * job is "SQL transparency" (CLAUDE.md) has to be the statement or it is worse than nothing.
  *
  * Duplication rather than an import: the builder lives in `packages/main`, which the renderer may
- * not import from. `backup-model.spec.ts` pins the transcription against the clauses that file
- * emits, so a drift is a test failure rather than a silently wrong preview.
+ * not import from. Two tests hold the copies together, and it is worth knowing which does what:
+ *
+ *  - `backup-model.spec.ts` pins *this* function's clauses, so an edit here that changes the
+ *    preview fails a test;
+ *  - `../tsql-preview-drift.spec.ts` compares its output against
+ *    `tests/fixtures/tsql-preview/mssql-statements.sql`, which is **generated from the main
+ *    process's own builder** by `packages/main/src/services/sql/mssql-preview-fixture.spec.ts`.
+ *    That is what catches a change on the far side of the IPC boundary — before J-112 nothing did,
+ *    and a builder change falsified this preview with the suite green.
  */
 export function backupTsql(values: BackupFormValues, databaseName: string): string {
   const name = quoteIdentifier(databaseName, 'mssql');

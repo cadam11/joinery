@@ -41,7 +41,7 @@
  * ── There is no Cancel-the-restore button, and that is deliberate ────────────────────────────
  *
  * `RESTORE.CANCEL` routes every engine to `BackupRestoreService.cancel`
- * (`backup-restore.ts:353-360`), whose only effect is to stop the progress *poll*; it never reaches
+ * (`backup-restore.ts:363-369`), whose only effect is to stop the progress *poll*; it never reaches
  * the PG/MySQL services' own operation maps. A Cancel button would stop the readout and leave a
  * half-restored database behind — which is strictly worse here than it is for a backup, because the
  * thing left half-written is a database rather than a file. Closing is offered instead, with the

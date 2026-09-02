@@ -28,7 +28,7 @@
  *
  * ── There is no Cancel-the-backup button, and that is deliberate ─────────────────────────────
  *
- * `BackupRestoreService.cancel` (`packages/main/src/services/sql/backup-restore.ts:353-360`) sets a
+ * `BackupRestoreService.cancel` (`packages/main/src/services/sql/backup-restore.ts:363-369`) sets a
  * flag whose only effect is to stop the progress *poll*; its own comment says so. The `BACKUP.CANCEL`
  * handler routes to that service for every engine, so it never reaches the PG/MySQL services' own
  * operation maps at all. A Cancel button would therefore stop the progress readout and leave the dump

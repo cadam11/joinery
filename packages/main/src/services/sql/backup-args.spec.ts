@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { CliBackupRequest, RestoreRequest } from '@joinery/shared';
 import {
   resolveReplaceExisting,
+  resolveRestoreTarget,
+  buildMssqlBackupTsql,
+  buildMssqlRestoreTsql,
   buildPgRestoreArgs,
   buildMysqlRestorePrelude,
   buildPgDumpArgs,
@@ -200,5 +203,53 @@ describe('CliBackupRequest', () => {
     };
     // @ts-expect-error — there is no dump format to choose on the PG/MySQL path (J-48d).
     expect(request.backupType).toBeUndefined();
+  });
+});
+
+describe('resolveRestoreTarget', () => {
+  it('is the requested database', () => {
+    expect(resolveRestoreTarget(baseRequest({ targetDatabase: 'sales_copy' }))).toBe('sales_copy');
+  });
+
+  it('falls back to RestoredDatabase when the request names none', () => {
+    // `startRestore` claims this name and restores into it, and the two must agree — a claim on a
+    // different name than the statement writes guards nothing (J-112).
+    expect(resolveRestoreTarget(baseRequest())).toBe('RestoredDatabase');
+  });
+});
+
+describe('the MSSQL statement builders', () => {
+  // Full clause-by-clause coverage lives in `mssql-preview-fixture.spec.ts`, which generates the
+  // fixture the renderer's preview is checked against. These pin the defaults the request mapping
+  // applies, which is the half a fixture regeneration would quietly absorb.
+  it('runs a backup with no type as a full backup', () => {
+    const sql = buildMssqlBackupTsql({
+      connectionId: 'c1',
+      database: 'sales',
+      backupPath: 'C:\\Backups\\sales.bak',
+    });
+    expect(sql).toContain('BACKUP DATABASE [sales]');
+    expect(sql).not.toContain('DIFFERENTIAL');
+  });
+
+  it('leaves CHECKSUM and COPY_ONLY off unless the request asks for them', () => {
+    const sql = buildMssqlBackupTsql({
+      connectionId: 'c1',
+      database: 'sales',
+      backupPath: 'C:\\Backups\\sales.bak',
+      backupType: 'full',
+    });
+    expect(sql).not.toContain('CHECKSUM');
+    expect(sql).not.toContain('COPY_ONLY');
+  });
+
+  it('drops a relocation that names no destination', () => {
+    const sql = buildMssqlRestoreTsql(
+      baseRequest({
+        targetDatabase: 'sales_copy',
+        fileRelocations: [{ logicalName: 'sales', physicalName: '' }],
+      })
+    );
+    expect(sql).not.toContain('MOVE');
   });
 });
