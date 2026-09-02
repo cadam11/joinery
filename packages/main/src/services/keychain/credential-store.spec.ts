@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_ID, type KeychainStatus, type LogEntry } from '@joinery/shared';
 // Resolved to packages/main/src/__mocks__/keytar.ts via the vitest alias.
 import * as keytar from 'keytar';
-// Namespace import on purpose: the store calls `isPackagedApp()` through this module object at
-// construction time, which is the seam that lets a spec drive the packaged branch (J-161).
+// Namespace import because `vi.spyOn` needs an object to patch; the store's own import style does
+// not matter (CommonJS makes a named import the same property read), so the seam this drives is
+// the call itself, not the import form (J-161).
 import * as runtimeMode from '../../utils/runtime-mode';
 import { onLogEntry } from '../../utils/logger';
 import { CredentialStore } from './credential-store';

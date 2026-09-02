@@ -108,6 +108,28 @@ from it. Nothing sets the variable in a shipped app, so an installed Joinery sti
   the **unit** tier if a launcher stops setting the variable, names the production service, or
   starts launching a packaged bundle.
 
+### The same rule holds for every environment hatch
+
+`JOINERY_KEYCHAIN_SERVICE` is not the only variable the tiers use to steer the app, and since J-161
+none of them are honoured by a packaged build. `packages/main/src/utils/runtime-mode.ts` is the one
+place that reads `app.isPackaged` and decides:
+
+| Variable                   | Set by         | What it does unpackaged                                                                    | Packaged                              |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------ | ------------------------------------- |
+| `JOINERY_TEST=1`           | both launchers | keeps the main window hidden, so it does not flash in and out on every spec                | ignored — the window shows            |
+| `NODE_ENV=development`     | `pnpm run dev` | loads the Vite dev server instead of the bundled renderer, opens devtools, relaxes the CSP | ignored — always the bundled renderer |
+| `JOINERY_KEYCHAIN_SERVICE` | both launchers | repoints the credential vault (above)                                                      | ignored, with a logged warning        |
+
+The practical consequence for anyone writing a new tier: **a launcher that starts a packaged
+`Joinery.app` gets none of this.** It will show a window, and it will read and write the developer's
+real keychain vault. If you need a packaged bundle under test, that needs a build-time capability
+baked into the test package, not an environment variable — an environment variable is exactly the
+thing a shipped app must not trust.
+
+`packages/main/src/utils/env-hatch-gating.spec.ts` fails the unit tier if any other file in
+`packages/main` so much as names one of these variables, which is what keeps the rule true through
+the next refactor.
+
 A test run therefore leaves exactly one stray keychain item, `ca.adam11.joinery.tests`. Delete it in
 Keychain Access (or `security delete-generic-password -s ca.adam11.joinery.tests`) whenever you like;
 the next run recreates it.

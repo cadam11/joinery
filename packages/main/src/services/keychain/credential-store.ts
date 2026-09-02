@@ -7,9 +7,11 @@ import * as keytar from 'keytar';
 import { type KeychainStatus } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
-// Namespace import on purpose: `isPackagedApp()` is read through this module object at
-// construction time, which is what lets a spec drive the packaged branch of the wiring below
-// (`vi.spyOn(runtimeMode, 'isPackagedApp')`) — see credential-store.spec.ts (J-161).
+// Namespace import to keep the seam visible at the call site below: the spec drives the packaged
+// branch of this wiring with `vi.spyOn(runtimeMode, 'isPackagedApp')` (J-161). Not load-bearing —
+// this package compiles to CommonJS, where a named import is a property read on the same module
+// object, and the spy reaches it either way (measured in the cycle-9 re-review). Prefer this form
+// anyway, so the next reader can see why the call is a call.
 import * as runtimeMode from '../../utils/runtime-mode';
 import { resolveKeychainServiceName } from './service-name';
 
