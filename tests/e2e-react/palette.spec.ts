@@ -58,8 +58,8 @@ test.describe('Joinery — the command palette', () => {
       await closeOverlay(window, 'palette');
 
       // The second binding, asserted here rather than only implied by `openPaletteFromEditor`:
-      // ⇧⌘P is the chord the Angular tier's `ui-actions.spec.ts` drove, and it exists because ⌘K
-      // does not survive Monaco having focus (J-73). Both must reach the same overlay, and it must
+      // ⇧⌘P is the chord the Angular tier's `ui-actions.spec.ts` drove, and it exists because it is
+      // VS Code muscle memory (`palette-actions.ts`). Both must reach the same overlay, and it must
       // open with the filter cleared rather than remembering the last search.
       await openPaletteFromEditor(window);
       await expect(overlayRows(window, 'palette')).toHaveCount(total);

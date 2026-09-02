@@ -27,11 +27,13 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import {
   activeTabTitle,
+  closeOverlay,
   connectFromSidebar,
   createPostgresProfile,
   ensureJoineryTestSeeded,
   gridColumnHeaders,
   newQueryTabFromMenu,
+  openPalette,
   openQueryTab,
   queryEditor,
   selectDatabase,
@@ -154,6 +156,53 @@ test.describe('Joinery (React) — editor keys with more than one query tab', ()
         await inMonaco(window),
         '⌃M did not free Tab in the surviving editor — a closed tab is answering for it'
       ).toBe(false);
+    });
+  });
+});
+
+/**
+ * J-73: the palette's own shortcut, pressed where a user actually presses it.
+ *
+ * Monaco registers ⌘K as the first chord of thirty-one two-chord bindings, so with the caret in a
+ * SQL editor the standalone keybinding service resolved it to `MoreChordsNeeded` and called both
+ * `preventDefault()` and `stopPropagation()` on the keydown. The palette listens on `document`,
+ * which sits above Monaco's listener, so it never saw the key it advertises — and a user typing SQL,
+ * the most common state this app is in, could not open the palette with ⌘K at all.
+ *
+ * The fix releases the keystroke with a null-command keybinding rule (`editor/sql-editor.tsx`), so
+ * Monaco resolves it, runs nothing, and lets the event through. The unit tier proves the rule is
+ * registered, scoped and disposed; this proves the consequence in the shipped bundle, which is the
+ * only place the two listeners are really stacked.
+ */
+test.describe('Joinery (React) — the palette’s ⌘K from inside the editor', () => {
+  test('⌘K opens the palette with the caret in a SQL editor', async () => {
+    await withJoineryReact(async ({ window }) => {
+      await readyEditor(window);
+      await typeSql(window, 'SELECT 1');
+      await focusEditor(window);
+      expect(await inMonaco(window), 'the test did not start with focus in the editor').toBe(true);
+
+      // `openPalette` presses ⌘K and waits for the overlay. Before the fix this timed out, which is
+      // why every other spec that needs the palette from an editor uses ⇧⌘P.
+      await openPalette(window);
+      await closeOverlay(window, 'palette');
+    });
+  });
+
+  test('and ⇧⌘K still deletes a line, so the release is one keystroke wide', async () => {
+    await withJoineryReact(async ({ window }) => {
+      await readyEditor(window);
+      // Two lines, so the delete is visible in what is left rather than in an empty editor.
+      await typeSql(window, 'SELECT 111 AS keeper\n-- doomed');
+      await focusEditor(window);
+
+      // ⇧⌘K is Monaco's `editor.action.deleteLines`, and a DIFFERENT dispatch chord from ⌘K — so
+      // releasing ⌘K must not have touched it. ⌃K (delete all right) is the other neighbour;
+      // this is the one whose effect is visible in the document.
+      await window.keyboard.press('ControlOrMeta+Shift+k');
+
+      await expect.poll(async () => visibleSql(window)).not.toContain('doomed');
+      expect(await visibleSql(window)).toContain('keeper');
     });
   });
 });

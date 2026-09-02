@@ -54,11 +54,14 @@ export async function openPalette(window: Page): Promise<Locator> {
 /**
  * Open the command palette with **⇧⌘P** rather than ⌘K.
  *
- * ⌘K does not reach the renderer while Monaco has focus: Monaco binds it as a chord prefix and swallows
- * it, so `openPalette` (which presses ⌘K) cannot be used from inside a query editor. Recorded as J-73 —
- * a user typing SQL cannot open the palette with the shortcut the palette advertises. This helper uses
- * the alternate binding the palette also accepts (`command-palette.tsx:85`), which is also the binding
- * the Angular tier's `ui-actions.spec.ts` asserted.
+ * This existed because ⌘K did not reach the renderer while Monaco had focus: Monaco binds it as a chord
+ * prefix and swallowed the keydown, so `openPalette` could not be used from inside a query editor.
+ * **J-73 fixed that** — `editor/sql-editor.tsx` releases ⌘K back to the window with a null-command
+ * keybinding rule, and `query-keybindings.spec.ts` presses ⌘K in a focused editor to prove it.
+ *
+ * The helper stays because ⇧⌘P is the palette's second advertised binding (`command-palette.tsx:85`,
+ * `palette-actions.ts`) and the callers below are the tier's only coverage of it. It is no longer a
+ * workaround, and a spec that wants ⌘K from an editor should use `openPalette`.
  */
 export async function openPaletteFromEditor(window: Page): Promise<Locator> {
   return pressForPalette(window, 'ControlOrMeta+Shift+p');

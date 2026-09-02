@@ -53,10 +53,11 @@ for (const theme of PAGE_THEMES) {
         await connectFromSidebar(window, PROFILE);
         await selectDatabase(window, DATABASE);
         await dismissToasts(window);
-        // ⌘K does not reach the renderer while Monaco has focus — Monaco binds it as a chord prefix
-        // and swallows it (J-73). Connecting can open a query tab on its own, so dropping focus
-        // first is what makes the ⌘K path — the one the palette advertises and the one the docs
-        // page will tell a reader to press — the one actually exercised here.
+        // Connecting can open a query tab on its own, so focus may be in Monaco by now. J-73 made
+        // ⌘K work from there — `editor/sql-editor.tsx` releases the keystroke back to the window —
+        // so this is no longer a workaround for a swallowed key. It stays because a focused editor
+        // draws a caret and a focus ring behind the overlay, and a docs screenshot should not change
+        // depending on whether the sidebar happened to open a tab.
         await blurFocus(window);
 
         const palette = await openPalette(window);
