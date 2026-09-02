@@ -23,9 +23,14 @@
  * recorder decides nothing and builds no options — it stores what it was handed
  * and answers the probe's single `SELECT VERSION() AS version, DATABASE() AS name`
  * with a fixed row, so it cannot make wrong options look right. Its surface is
- * only what the path touches, read off the real call site: `.query(sql)` and
- * `.end()`. Behaviour against a live MySQL server is the integration tier's job.
+ * only what the path touches, read off the real call site: `.query(sql)`,
+ * `.end()`, and — since J-184 attaches a `'connection'` listener to the probe
+ * pool — the `EventEmitter` the real `Pool` has always been
+ * (`mysql2/promise.d.ts:92`, `Pool extends Connection extends
+ * QueryableAndExecutableBase(EventEmitter)`). Behaviour against a live MySQL
+ * server is the integration tier's job.
  */
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mysql from 'mysql2/promise';
 import type { Pool, PoolOptions } from 'mysql2/promise';
@@ -57,12 +62,12 @@ beforeEach(() => {
   ended = 0;
   vi.spyOn(mysql, 'createPool').mockImplementation((options): Pool => {
     created.push(options as PoolOptions);
-    return {
+    return Object.assign(new EventEmitter(), {
       query: async () => [[{ version: '8.0.36', name: 'appdb' }], []],
       end: async () => {
         ended += 1;
       },
-    } as unknown as Pool;
+    }) as unknown as Pool;
   });
 });
 

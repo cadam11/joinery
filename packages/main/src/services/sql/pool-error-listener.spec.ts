@@ -25,16 +25,22 @@
  *    `request().query()` → `{ recordset }` and `close()`; `getPool` additionally reads
  *    `.connected`.
  *
- * mysql2 pools are deliberately absent. `PromisePool` inherits only
+ * mysql2 *pools* are still absent, and deliberately so. `PromisePool` inherits only
  * `acquire | connection | enqueue | release` from the core pool
  * (mysql2 3.23.3 `lib/promise/pool.js:18`) and neither pool class ever emits `'error'`, so a
- * listener on a mysql2 pool would be unreachable code. Its `PoolConnection` registers its own
- * (`lib/pool_connection.js:14-16`, `once('error', … _removeFromPool())`).
+ * listener on a mysql2 pool would be unreachable code. What J-184 adds is one level down: its
+ * `PoolConnection` registers `once('error', () => this._removeFromPool())`
+ * (`lib/pool_connection.js:14-16`), so a FATAL on a pooled MySQL connection evicts it *silently* —
+ * no crash, but nothing in the output panel either, unlike pg and mssql after J-175. The gap is
+ * observability, not safety: `_notifyError` early-returns on `_fatalError`
+ * (`lib/base/connection.js:264`) and `protocolError` on `_closing` (`:452`), so a second error on
+ * the same dead connection does not reach an unlistened `emit` either.
  */
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import pg from 'pg';
 import mssql from 'mssql';
+import mysql from 'mysql2/promise';
 import type { ConnectionProfile } from '@joinery/shared';
 import { ConnectionPoolManager } from './connection-pool';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
@@ -72,6 +78,61 @@ class FakeMssqlPool extends EventEmitter {
   }
 }
 
+/**
+ * A mysql2 `PoolConnection`, in the shape the pool hands one out (J-184).
+ *
+ * The `once('error')` eviction listener is the real one, copied from
+ * `mysql2/lib/pool_connection.js:14-16` — it is what makes the gap under test a *silent* eviction
+ * rather than a throw, so the double must have it or the test would be proving a different bug
+ * from the one the ticket describes.
+ */
+class FakeMySQLPoolConnection extends EventEmitter {
+  evicted = 0;
+
+  constructor() {
+    super();
+    this.once('error', () => {
+      this.evicted += 1;
+    });
+  }
+
+  released = 0;
+
+  release(): void {
+    this.released += 1;
+  }
+}
+
+/**
+ * A mysql2 promise `Pool`, in the shape `connection-pool.ts` uses it. A real EventEmitter,
+ * deliberately, and it emits `'connection'` where the real pool does: after a *new* physical
+ * connection finishes connecting (`mysql2/lib/base/pool.js:92-104`), including the implicit
+ * acquire inside `pool.query()` (`:240-250`). `PromisePool` forwards that event through
+ * `inheritEvents` (`lib/promise/pool.js:18`, `lib/promise/inherit_events.js`), which re-emits the
+ * original arguments — so a listener on the promise pool receives the *core* `PoolConnection`, and
+ * `pool.getConnection()` resolving a `PromisePoolConnection` wrapper instead is beside the point
+ * here: `connection-pool.ts` only calls `release()` on what it gets back.
+ */
+class FakeMySQLPool extends EventEmitter {
+  readonly connections: FakeMySQLPoolConnection[] = [];
+
+  getConnection(): Promise<FakeMySQLPoolConnection> {
+    const conn = new FakeMySQLPoolConnection();
+    this.connections.push(conn);
+    this.emit('connection', conn);
+    return Promise.resolve(conn);
+  }
+
+  async query(): Promise<[Record<string, string>[], []]> {
+    await this.getConnection();
+    return [[{ version: '8.4.0', name: 'appdb' }], []];
+  }
+
+  end(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 // --- fixtures --------------------------------------------------------------
 
 const PG_PROFILE: ConnectionProfile = {
@@ -98,6 +159,14 @@ const MSSQL_PROFILE: ConnectionProfile = {
   database: 'master',
 };
 
+const MYSQL_PROFILE: ConnectionProfile = {
+  ...PG_PROFILE,
+  id: 'mysql-profile',
+  name: 'MySQL Profile',
+  engine: 'mysql',
+  port: 3306,
+};
+
 /** A FATAL of the shape pg-pool re-emits on the pool for a terminated idle backend. */
 function fatal(): Error & { code: string } {
   const err = new Error('terminating connection due to administrator command') as Error & {
@@ -109,12 +178,14 @@ function fatal(): Error & { code: string } {
 
 let pgPools: FakePgPool[] = [];
 let mssqlPools: FakeMssqlPool[] = [];
+let mysqlPools: FakeMySQLPool[] = [];
 let errorLog: string[] = [];
 let stopLogging: () => void;
 
 beforeEach(() => {
   pgPools = [];
   mssqlPools = [];
+  mysqlPools = [];
   errorLog = [];
   stopLogging = onLogEntry(entry => {
     if (entry.level === 'error') errorLog.push(entry.message);
@@ -138,10 +209,15 @@ beforeEach(() => {
     return pool;
   } as unknown as typeof mssql.ConnectionPool);
 
+  vi.spyOn(mysql, 'createPool').mockImplementation(function (): FakeMySQLPool {
+    const pool = new FakeMySQLPool();
+    mysqlPools.push(pool);
+    return pool;
+  } as unknown as typeof mysql.createPool);
+
   const store = ConnectionProfilesStore.getInstance();
-  vi.spyOn(store, 'getById').mockImplementation(id =>
-    id === PG_PROFILE.id ? PG_PROFILE : id === MSSQL_PROFILE.id ? MSSQL_PROFILE : undefined
-  );
+  const profiles = [PG_PROFILE, MSSQL_PROFILE, MYSQL_PROFILE];
+  vi.spyOn(store, 'getById').mockImplementation(id => profiles.find(p => p.id === id));
   vi.spyOn(store, 'getPassword').mockResolvedValue('secret');
 });
 
@@ -191,6 +267,39 @@ describe('pool error listeners (J-175)', () => {
     expect(mssqlPools).toHaveLength(1);
     expect(() => mssqlPools[0].emit('error', fatal())).not.toThrow();
     expect(errorLog.some(m => /Pool error/.test(m) && /57P01/.test(m))).toBe(true);
+  });
+
+  // J-184. mysql2's own `once('error', … _removeFromPool())` means the pool survives a FATAL on a
+  // pooled connection and quietly drops it — so nothing crashes, and nothing is said. These pin the
+  // missing line, not a crash: see the note at the top of this file on why the residual risk here
+  // is observability only.
+  it('logs a pooled MySQL connection dying under the pool (J-184)', async () => {
+    await ConnectionPoolManager.getInstance().getMySQLPool(MYSQL_PROFILE.id, 'appdb');
+
+    expect(mysqlPools).toHaveLength(1);
+    const [conn] = mysqlPools[0].connections;
+    expect(() => conn.emit('error', fatal())).not.toThrow();
+
+    // mysql2's own eviction listener still ran — this adds a log line, it does not replace it.
+    expect(conn.evicted).toBe(1);
+    const line = errorLog.find(m => /MySQL connection error/.test(m));
+    expect(line).toBeDefined();
+    expect(line).toContain('57P01');
+    expect(line).toContain('MySQL Profile');
+    expect(line).not.toContain('secret');
+  });
+
+  it('guards connections handed out by the throwaway MySQL probe pool', async () => {
+    const result = await ConnectionPoolManager.getInstance().testConnection(
+      MYSQL_PROFILE,
+      'secret'
+    );
+    expect(result.success).toBe(true);
+
+    expect(mysqlPools).toHaveLength(1);
+    const [conn] = mysqlPools[0].connections;
+    expect(() => conn.emit('error', fatal())).not.toThrow();
+    expect(errorLog.some(m => /MySQL connection error/.test(m) && /57P01/.test(m))).toBe(true);
   });
 
   it('names the pool in the log without leaking the password', async () => {
