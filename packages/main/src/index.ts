@@ -14,6 +14,7 @@ import { openExternalSafely } from './security/open-external';
 import { createMenu } from './menu';
 import { registerAllHandlers } from './ipc';
 import { createLogger } from './utils/logger';
+import { TEST_BUILD_WARNING, isTestCapableBuild } from './utils/test-build-capability';
 import { ConnectionPoolManager } from './services/sql/connection-pool';
 import { QueryExecutor } from './services/sql/query-executor';
 import { BackupRestoreService } from './services/sql/backup-restore';
@@ -37,6 +38,19 @@ import {
 } from './services/config/user-data-dir';
 
 const log = createLogger('App');
+
+/**
+ * Say so, loudly and first, when this bundle was built for testing (J-167).
+ *
+ * A test build honours environment hatches a release build refuses — `JOINERY_KEYCHAIN_SERVICE`
+ * above all — so which kind of build is running decides which Keychain vault the next few lines of
+ * startup touch. `pnpm run verify:package` fails on a release artifact carrying the marker, and
+ * this line is the same fact at runtime, in the log an operator can actually read (`log.warn` goes
+ * to the Output panel over `onLogEntry`).
+ */
+if (isTestCapableBuild()) {
+  log.warn(TEST_BUILD_WARNING);
+}
 
 /**
  * The invariant the case guard below assumes, stated out loud (J-142). Electron joins `app.name`

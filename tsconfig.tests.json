@@ -27,6 +27,11 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
+    // `scripts/release/*.ts` run under Node's type stripping, where a relative import must carry
+    // the real file's extension — `./test-build-marker` is an ERR_MODULE_NOT_FOUND at run time,
+    // measured, not assumed. Safe here because this config is `noEmit`, which is the condition TS
+    // attaches to the flag.
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,

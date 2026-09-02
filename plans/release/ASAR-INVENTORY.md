@@ -10,6 +10,7 @@ pnpm run build && node scripts/package.js --mac dir:arm64   # ~90s, no DMG
 pnpm run inventory:asar                                     # the table
 pnpm run inventory:asar -- --json                           # the same numbers, machine-readable
 pnpm run verify:package                                     # module probes + the never-ship guard
+pnpm run package:test                                       # the same bundle, stamped as a TEST build
 pnpm run smoke:package                                      # launch the bundle, wait for the shell, quit
 ```
 
@@ -155,37 +156,48 @@ and quits. Run against the trimmed archive: window created, renderer loaded from
 shell mounted, clean quit. Also proven non-vacuous — against a bundle whose `app.asar` was replaced
 with a stub archive it exits 1.
 
-> **While `JOINERY_KEYCHAIN_SERVICE` is honoured — i.e. before PR #113 (J-161) lands — this smoke
-> run uses the hermetic test namespace and is safe. Once a packaged app ignores the override, this
-> script must NOT be run against a packaged build until a build-time test-capability flag exists
-> (ticket to be filed; relates J-88), because the boot path can MIGRATE — write and delete —
-> production Keychain entries.**
+> **A smoke run needs a TEST bundle, and refuses anything else (J-167).** Build one with
+> `pnpm run package:test` — `package:dir` followed by
+> `node scripts/release/test-build-marker.ts --stamp`, which writes
+> `Contents/Resources/joinery-test-build` into the bundle. `assertBundleIsTestCapable` in
+> `smoke-packaged-app.ts` refuses to launch a bundle without that marker, before Electron starts.
 >
-> That corrects a weaker earlier claim on this page, that the run was read-only as long as nobody
-> saved a profile or ran a query. Those are operator actions and the script performs none of them,
-> but the boot does its own writing before any assertion runs: `packages/main/src/index.ts:137-139`
-> fires `CredentialStore.getInstance().loadAllIntoCache()` on every `whenReady`, unconditionally and
-> un-awaited, and `credential-store.ts:73-88` takes a legacy-migration branch when the vault key is
-> absent but other accounts exist under the same service — `saveVault()` writes a vault entry, then
-> `keytar.deletePassword` removes every legacy item it found. On a machine whose production vault is
-> still in that pre-migration shape, one run against a packaged build that ignored the override would
-> rewrite and then destroy those items with nobody touching the UI. The bundle is also unsigned
-> (`mac.identity: null`), so it is a different Keychain client than the installed app: reading a
-> production item raises macOS's "allow access?" prompt, and answering _Always Allow_ grants a
-> throwaway binary standing access.
+> Why the refusal exists: the boot is not read-only. `packages/main/src/index.ts` fires
+> `CredentialStore.getInstance().loadAllIntoCache()` on every `whenReady`, unconditionally and
+> un-awaited, and `credential-store.ts` takes a legacy-migration branch when the vault key is absent
+> but other accounts exist under the same service — `saveVault()` writes a vault entry, then
+> `keytar.deletePassword` removes every legacy item it found. J-161 (PR #113) makes a packaged
+> Joinery refuse `JOINERY_KEYCHAIN_SERVICE`, correctly, so without a capability the pin in this
+> launcher would be set, ignored, and the run would rewrite and then destroy a developer's real
+> Keychain items with nobody touching the UI. That corrects a weaker earlier claim on this page, that
+> the run was read-only as long as nobody saved a profile or ran a query: those are operator actions
+> and the script performs none of them, but the boot does its own writing before any assertion runs.
 >
-> `PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE` in the script is the gate. It is `true` today because
-> `service-name.ts` reads the override with no reference to `app.isPackaged`; when #113 flips that,
-> the constant must be set to `false` in the same change and the script then refuses to launch. That
-> is not left to memory — `smoke-packaged-app.spec.ts` asserts the resolver does not consult
-> `isPackaged`, so the unit tier goes red on the merged tree until the constant is flipped.
+> The marker is a file in `Contents/Resources`, not an `extraMetadata` key inside `app.asar`, so a
+> test bundle and a release bundle carry the SAME archive — the archive this page measures and J-88
+> exists to validate. They differ by one inert file.
 >
-> The env pin stays in the script regardless — it is what protects the run today and what J-96's
-> structural guard checks for. J-161 refuses it only in a packaged app, on purpose. J-161 also adds
-> a rule that a registered launch site must not name a packaged-bundle path, which this launcher
-> does by necessity, so the two changes have to be sequenced together. The reviewer recommends
-> landing the capability flag first rather than exempting this launcher from that rule; the decision
-> is the coordinator's and is not pre-empted here.
+> Nothing in the environment can produce it, which is the whole design: an environment variable that
+> re-opens what J-161 closed would be set by the same attacker who set the first one. And the release
+> path proves its own artifact lacks it — `pnpm run verify:package` chains
+> `node scripts/release/test-build-marker.ts --check`, which exits 1 on a bundle that carries the
+> marker. What the unit tier proves is the predicate the check is built on:
+> `test-build-marker.spec.ts` stamps a real bundle-shaped directory and asserts
+> `bundleCarriesTestCapability` flips to true on it, and that an absent bundle throws rather than
+> reporting clean. The exit code itself is not asserted — `run()` is unexported, the same gap
+> `asar-inventory.ts`'s `runCheck` has — so it was proven by hand against the real artifact:
+> `verify:package` exits 1 on a stamped bundle and 0 once the marker is removed (J-167 review, N1).
+>
+> The env pin stays in the launcher regardless — it is what J-96's structural guard checks for, and
+> what makes a test build's vault a throwaway one. That guard now splits its launch sites into
+> unpackaged and packaged: both must set the pin and must not name the production service, and a
+> packaged launcher must additionally refuse a bundle without the test capability
+> (`keychain-service-isolation.spec.ts`).
+>
+> The bundle is also unsigned (`mac.identity: null`), so it is a different Keychain client than the
+> installed app. With the marker in place it only ever asks for the test namespace, so there is
+> nothing of the developer's for macOS to prompt about — but if a prompt does appear, answering
+> _Always Allow_ grants a throwaway binary standing access, so do not.
 
 ## Still on the table
 
