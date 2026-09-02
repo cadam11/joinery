@@ -57,9 +57,10 @@ const INK = {
   /*
    * The app's `--color-syntax-comment` (#85887F, its `--color-fg-subtle`) measures 4.94:1 on ink
    * and 4.03:1 on charcoal — under AA. #95988F is the same hue (80°) and chroma lifted until it
-   * reproduces the app's own measured ratio on this canvas. It is the one value on this site that
-   * is not already a `brand.css` token; it is not declared there because no CSS rule reads it —
-   * a syntax colour never reaches the stylesheet at all.
+   * reproduces the app's own measured ratio on this canvas. It and `IVORY.comment` below are the
+   * two values on this site that are not already `brand.css` tokens; neither is declared there
+   * because no CSS rule reads it — a syntax colour never reaches the stylesheet at all. Both are
+   * listed, with that reason, in `scripts/verify-dist.mjs`, which fails the build on any third.
    */
   comment: '#95988f', //  4.95:1 on #272A27
   function: '#f2efe7', // 12.63:1 — --j-ivory, the app's value

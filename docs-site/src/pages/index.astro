@@ -31,8 +31,11 @@
  *    capability is described that the docs do not already document.
  *
  * Links are written root-absolute. `starlight-links-validator` does NOT see this file — it
- * collects links from the Markdown processor and from Starlight frontmatter only, so nothing
- * here is machine-checked and every href was resolved against the built `dist/` by hand.
+ * collects links from the Markdown processor and from Starlight frontmatter only, which is why
+ * every href on this route was resolved against the built `dist/` by hand three times over.
+ * `scripts/verify-dist.mjs` does that now (J-125): `pnpm run build` runs it after Astro, and it
+ * fails the build if any href here names a page the build did not emit, or a fragment no element
+ * in the target page declares.
  */
 import { Image } from 'astro:assets';
 

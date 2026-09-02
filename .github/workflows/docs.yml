@@ -106,8 +106,22 @@ jobs:
 
       # Builds AND validates links: starlight-links-validator runs in astro:build:done and
       # throws, so a broken internal link fails this step.
+      #
+      # `pnpm run build` also chains `scripts/verify-dist.mjs` after Astro (J-125), which asserts
+      # the two properties of the built output nothing else covers: that every inline syntax
+      # colour in `dist/` is one of the values `src/styles/expressive-code-themes.mjs` declares
+      # and clears AA on the canvas `brand.css` resolves, and that every internal href on the
+      # landing route resolves to a page the build emitted. The landing route is `.astro`, which
+      # `starlight-links-validator` cannot see, so its links have no other gate.
       - name: Build
         run: pnpm run build
+        working-directory: docs-site
+
+      # The guard's own tests, which break the real `dist/` one condition at a time and require
+      # each break to fail. They need the build above to have run. A guard that stopped matching
+      # would otherwise pass silently, and the step before it would go green on a regression.
+      - name: Test the built-output guard
+        run: pnpm test
         working-directory: docs-site
 
       # Uploaded unconditionally so a PR reviewer can download the built site; the deploy job
