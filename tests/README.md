@@ -194,8 +194,13 @@ so pinning them pins the surface, and the two Docker baselines need **no masks a
 - **Read-only.** `startContainer` / `stopContainer` / `createContainer` are untouched and still talk
   to the real daemon, so a pinned launch that presses Start reaches Docker with an id it does not
   have and fails loudly. Do not write a spec that drives the lifecycle under a fixture.
-- **Nothing sets it in a shipped app**, so an installed Joinery reads the daemon exactly as before —
-  pinned from both sides by `packages/main/src/services/docker/docker-fixture.spec.ts`.
+- **A shipped app refuses it** (J-180), on the same predicate as every other test-only hatch —
+  unpackaged, or a bundle stamped with the J-167 test-build marker. A packaged release Joinery logs
+  a warning and reads the real daemon. Pinned from both sides by
+  `packages/main/src/services/docker/docker-fixture.spec.ts` and by the `HATCH_BEHAVIOUR` table in
+  `packages/main/src/utils/env-hatch-gating.spec.ts`, which drives every hatch through all four
+  combinations of `isPackaged` x `isTestBuild`. The visual tier launches Electron unpackaged, so it
+  is unaffected.
 - **Unset, the functional tier is unaffected**: `tests/e2e-react/docker-panel.spec.ts` still asserts
   the panel against the real harness containers, which is the coverage a fixture cannot give.
 

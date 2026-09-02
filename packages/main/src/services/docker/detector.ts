@@ -14,6 +14,7 @@ import type {
   ContainerState,
 } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
+import { runtimeSignals } from '../../utils/runtime-mode';
 import { resolveDockerFixture } from './docker-fixture';
 
 export class DockerDetector extends BaseSingleton {
@@ -45,7 +46,7 @@ export class DockerDetector extends BaseSingleton {
    * "Docker is not running" result the catch below produces for a dead daemon.
    */
   async detect(): Promise<DockerDetectionResult> {
-    const fixture = resolveDockerFixture();
+    const fixture = resolveDockerFixture(runtimeSignals());
     if (fixture !== null) return fixture.detect;
 
     try {
@@ -140,7 +141,7 @@ export class DockerDetector extends BaseSingleton {
    * would leave the surface exactly as unbaselineable as before.
    */
   async listVolumes(): Promise<DockerVolume[]> {
-    const fixture = resolveDockerFixture();
+    const fixture = resolveDockerFixture(runtimeSignals());
     if (fixture !== null) return [...fixture.volumes];
 
     const [listed, containers] = await Promise.all([

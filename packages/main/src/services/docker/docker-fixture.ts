@@ -44,10 +44,17 @@
  * and environment (`tests/helpers/electron-app.ts`'s `envOverrides`) and nothing else. Constructor
  * injection would be the shape to reach for inside one process and cannot cross this boundary. The
  * precedent is `services/keychain/service-name.ts`, whose `JOINERY_KEYCHAIN_SERVICE` is the same
- * arrangement for the same reason, including its refusal to fall back on a blank value.
+ * arrangement for the same reason, including its refusal to fall back on a blank value — and,
+ * since J-180, including the shared build predicate that shuts both hatches in a shipped release
+ * bundle (`utils/runtime-mode.ts`'s `areTestHatchesHonoured`).
  */
 
 import type { DockerDetectionResult, DockerVolume } from '@joinery/shared';
+
+import { createLogger } from '../../utils/logger';
+import { areTestHatchesHonoured, type RuntimeSignals } from '../../utils/runtime-mode';
+
+const log = createLogger('DockerFixture');
 
 /**
  * Environment variable that pins Docker's answers for the life of the process.
@@ -68,16 +75,34 @@ export interface DockerFixture {
 /**
  * The pinned fixture, or `null` when the daemon is the source.
  *
- * @param env the environment to read; defaults to the process's own.
- * @throws when the variable is present but unusable — blank, not JSON, or the wrong shape. Never a
- *   fall-back to the daemon: a caller that set this believes the answer is pinned, and quietly
- *   handing it the host's real container inventory is the accident this module exists to prevent.
- *   `detect()` lets the throw out to `safeHandle`, which logs the channel and rejects, so a
- *   malformed fixture is a named failure in the Output panel rather than a mystery empty panel.
+ * @param signals the build asking — `runtimeSignals()` at every production call site. The
+ *   environment is a field of it rather than a separate argument so that the gate below and the
+ *   value it gates cannot come from different places (J-180).
+ * @throws when a build ALLOWED the hatch sets the variable to something unusable — blank, not
+ *   JSON, or the wrong shape. Never a fall-back to the daemon: a caller that set this believes the
+ *   answer is pinned, and quietly handing it the host's real container inventory is the accident
+ *   this module exists to prevent. `detect()` lets the throw out to `safeHandle`, which logs the
+ *   channel and rejects, so a malformed fixture is a named failure in the Output panel rather than
+ *   a mystery empty panel.
  */
-export function resolveDockerFixture(env: NodeJS.ProcessEnv = process.env): DockerFixture | null {
-  const raw = env[DOCKER_FIXTURE_ENV_VAR];
+export function resolveDockerFixture(signals: RuntimeSignals): DockerFixture | null {
+  const raw = signals.env[DOCKER_FIXTURE_ENV_VAR];
   if (raw === undefined) return null;
+
+  // J-180: a shipped release bundle refuses the hatch, on the same predicate as every other
+  // test-only hatch — unpackaged, or a bundle stamped with the J-167 build marker. Refused and
+  // warned rather than fatal, matching `service-name.ts`: a user whose shell happens to export
+  // this variable must still get a working Docker panel pointed at their own daemon. Checked
+  // before the value is parsed, so a malformed value cannot take a release build down either.
+  if (!areTestHatchesHonoured(signals)) {
+    log.warn(
+      `${DOCKER_FIXTURE_ENV_VAR} is set, but this Joinery ignores it and reads the real Docker ` +
+        `daemon. It is honoured only by a development build or a bundle built for testing. Unset ` +
+        `it to silence this warning.`
+    );
+    return null;
+  }
+
   if (raw.trim().length === 0) {
     throw new Error(
       `${DOCKER_FIXTURE_ENV_VAR} is set but blank. Unset it to read the real Docker daemon, or ` +

@@ -22,6 +22,8 @@
 
 import { APP_ID } from '@joinery/shared';
 
+import { areTestHatchesHonoured } from '../../utils/runtime-mode';
+
 /**
  * Environment variable that repoints the credential store at a throwaway Keychain service.
  *
@@ -94,7 +96,7 @@ export function resolveKeychainServiceName(
   const raw = runtime.env[KEYCHAIN_SERVICE_ENV_VAR];
   if (raw === undefined) return { serviceName: APP_ID };
 
-  if (runtime.isPackaged && runtime.isTestBuild !== true) {
+  if (!areTestHatchesHonoured(runtime)) {
     // Refused, not obeyed, and not fatal: a user whose shell exports this variable must still
     // get a working app pointed at their own vault. Blank or not makes no difference here —
     // nothing about the value is used.
