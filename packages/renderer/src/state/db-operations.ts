@@ -24,7 +24,7 @@
  * ── Why the record outlives the dialog ──────────────────────────────────────────────────────
  *
  * Neither operation can be cancelled. `BackupRestoreService.cancel`
- * (`packages/main/src/services/sql/backup-restore.ts:353-360`) sets a flag whose only effect is to
+ * (`packages/main/src/services/sql/backup-restore.ts:363-369`) sets a flag whose only effect is to
  * stop the progress *poll* — its own comment says so — and both the `BACKUP.CANCEL` and
  * `RESTORE.CANCEL` handlers route every engine there, so it never reaches the PG/MySQL services'
  * own operation maps. Closing the dialog therefore does not stop the work, which is why the record
