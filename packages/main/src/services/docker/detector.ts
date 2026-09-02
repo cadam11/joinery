@@ -14,6 +14,7 @@ import type {
   ContainerState,
 } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
+import { resolveDockerFixture } from './docker-fixture';
 
 export class DockerDetector extends BaseSingleton {
   private docker: Dockerode;
@@ -37,8 +38,16 @@ export class DockerDetector extends BaseSingleton {
 
   /**
    * Detect SQL Server containers
+   *
+   * A launch may pin the answer instead (J-76) — see `docker-fixture.ts` for why a screenshot of
+   * this panel is otherwise a screenshot of the host's `docker ps`. Read ABOVE the try, so a
+   * malformed fixture rejects the channel with its own message rather than being folded into the
+   * "Docker is not running" result the catch below produces for a dead daemon.
    */
   async detect(): Promise<DockerDetectionResult> {
+    const fixture = resolveDockerFixture();
+    if (fixture !== null) return fixture.detect;
+
     try {
       const isRunning = await this.isDockerRunning();
 
@@ -125,8 +134,15 @@ export class DockerDetector extends BaseSingleton {
    *
    * Rejects when the daemon does, rather than answering `[]`: the caller's channel logs and
    * re-throws, and the renderer only asks once `detect()` has said Docker is running.
+   *
+   * Pinned alongside `detect()` when a launch pins a fixture (J-76): the panel renders this list
+   * under the container rows, so a deterministic row set with a host-dependent Volumes section
+   * would leave the surface exactly as unbaselineable as before.
    */
   async listVolumes(): Promise<DockerVolume[]> {
+    const fixture = resolveDockerFixture();
+    if (fixture !== null) return [...fixture.volumes];
+
     const [listed, containers] = await Promise.all([
       this.docker.listVolumes(),
       this.docker.listContainers({ all: true }),
