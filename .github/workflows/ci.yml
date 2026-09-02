@@ -21,6 +21,14 @@ on:
       - 'vitest.config.ts'
       - 'tsconfig.tests.json'
       - 'playwright.config.ts'
+      # The two files that define the lint gate itself. `turbo.json` declares every task CI
+      # runs (including `lint` and its cache inputs) and `.eslintrc.json` decides what lint
+      # MEANS for main, preload and shared — yet a pull request touching only one of them
+      # matched nothing above and ran no CI, so the gate could be weakened or disabled by a
+      # change that was never gated. Same hole `scripts/**` and `electron-builder.yml` were
+      # added to close (J-34).
+      - 'turbo.json'
+      - '.eslintrc.json'
       # This file, so a change to CI runs the CI it changed — without it a pull request that
       # only edits a job (or adds one, as `docs-reference-drift` below was) never runs it, and
       # the first proof it works arrives after merge.
