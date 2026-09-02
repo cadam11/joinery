@@ -81,21 +81,10 @@ export function DockerPip({ controlClassName, open, onOpenChange }: DockerPipPro
         side="top"
         className="w-96 p-0"
         data-testid="docker-popover"
-        // Escape, explicitly.
-        //
-        // Radix's own `DismissableLayer` should do this and measurably does not for this popover: the
-        // e2e run shows an outside click dismissing it (the same layer, the same `onDismiss`) while
-        // Escape with focus on a button INSIDE the panel leaves it open. Rather than ship a panel a
-        // keyboard user cannot leave, the key is handled here — `stopPropagation`, so a panel-local
-        // Escape does not also reach the query editor's find widget three panes over.
-        //
-        // Local rather than added to `ui/popover.tsx`, because that primitive has four other consumers
-        // whose Escape behaviour is asserted elsewhere and this is a workaround, not a design. J-72.
-        onKeyDown={event => {
-          if (event.key !== 'Escape') return;
-          event.stopPropagation();
-          onOpenChange(false);
-        }}
+        // No Escape handler here any more. It used to be local, because Radix's own dismissal
+        // measurably did not fire for this panel; `ui/popover.tsx`'s header now carries the root cause
+        // (a Radix tooltip's content is a dismissable layer of its own, and every control in this panel
+        // is tooltipped, so the tip was taking the key) and the primitive handles it — J-72.
       >
         <DockerPanel />
       </PopoverContent>

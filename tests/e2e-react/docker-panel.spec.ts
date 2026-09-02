@@ -106,9 +106,11 @@ test.describe('Joinery (React) — the Docker panel', () => {
       await expect(panel.getByTestId('docker-empty')).toBeHidden();
       await expect(panel).not.toContainText('No SQL Server containers');
 
-      // Escape closes it from inside, which is the keyboard path. It has to be from INSIDE: the popover is
-      // non-modal, so it does not take focus on open — see `closeDockerPanel`. And the handler is the
-      // pip's own, not Radix's, which measurably does not fire here — see `docker-pip.tsx` (J-72).
+      // Escape closes it from inside, which is the keyboard path. It has to be from INSIDE, and
+      // `docker-refresh` in particular: that button carries a tooltip, a Radix tooltip's content is a
+      // dismissable layer of its own, and the layer stack is what used to swallow the key. J-72 moved
+      // the handling into `ui/popover.tsx` — its header has the root cause, and
+      // `ui/navigation.spec.tsx` plus `features/docker/docker-panel.spec.tsx` assert it without Docker.
       await panel.getByTestId('docker-refresh').focus();
       await window.keyboard.press('Escape');
       await expect(dockerPanel(window)).toBeHidden({ timeout: 10_000 });
