@@ -106,17 +106,33 @@ export function AppShell() {
   // Output panel and in the log file rather than in a devtools console nobody has open. A layout
   // effect for the ordering: it runs before the passive effect below, on the same commit.
   useLayoutEffect(() => {
-    const teardowns = [
-      installToastNotifier(),
-      installLogDiagnosticsSink(),
+    // Pushed one at a time, not built as an array literal: `registerExitFlush` throws on a
+    // duplicate name, and a throw part-way through a literal never assigns it — which would leak
+    // the toast notifier, the log sink, the unload listeners AND the registrations already made,
+    // with no cleanup and every later mount throwing too. "Know what you own, on the happy path and
+    // every error path."
+    const teardowns: (() => void)[] = [];
+    const install = (teardown: () => void): void => {
+      teardowns.push(teardown);
+    };
+
+    try {
+      install(installToastNotifier());
+      install(installLogDiagnosticsSink());
       // Every debounced persistence write in the renderer, named at the one call site that
       // installs the unload listeners (J-74). A writer missing from this list keeps its 250-500ms
       // hole: the timer dies with the page and main never sees the value at all.
-      installExitFlush(),
-      registerExitFlush('shell geometry', () => workbenchStore.getState().flushPendingWrites()),
-      registerExitFlush('open tabs', () => tabStore.getState().flushPendingSave()),
-      registerExitFlush('workspace layout', () => layoutPersistence.flushPendingSave()),
-    ];
+      install(installExitFlush());
+      install(
+        registerExitFlush('shell geometry', () => workbenchStore.getState().flushPendingWrites())
+      );
+      install(registerExitFlush('open tabs', () => tabStore.getState().flushPendingSave()));
+      install(registerExitFlush('workspace layout', () => layoutPersistence.flushPendingSave()));
+    } catch (error) {
+      for (const teardown of teardowns.splice(0)) teardown();
+      throw error;
+    }
+
     return () => {
       for (const teardown of teardowns) teardown();
     };

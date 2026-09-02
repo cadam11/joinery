@@ -123,23 +123,36 @@ describe('runShutdown', () => {
     expect(order.at(-1)).toBe('exit');
   });
 
-  it('writes to disk before the force-exit net fires, and exits once', async () => {
+  it('writes to disk from the force-exit net, which is the one path that used not to', async () => {
     vi.useFakeTimers();
     try {
-      const { steps, order } = createSteps({
-        // A shutdown that never finishes: the net is the only thing that can end it.
-        closeConnections: () => new Promise(() => undefined),
+      const { steps, order } = createSteps();
+
+      const pending = runShutdown({
+        ...steps,
+        // A renderer that never answers, so the `await` below the request never resumes and the
+        // NORMAL flush is unreachable. That is what makes this test bite: the net is now the only
+        // path that can write, so deleting its flush leaves `['…', 'exit']` with nothing written.
+        // Hanging `closeConnections` instead would not have caught it — the normal flush has
+        // already run by then, and the assertion passed either way.
+        requestRendererFlush: () =>
+          new Promise(() => {
+            order.push('request-renderer-flush');
+          }),
         forceExitTimeoutMs: 3_000,
       });
 
-      const pending = runShutdown(steps);
       await vi.advanceTimersByTimeAsync(3_000);
 
-      // The net used to exit with main's own pending writes still in memory. It now flushes first,
-      // and the flush is idempotent — `TrailingDebounce.flush()` is a no-op with nothing pending —
-      // so this cannot double-write.
-      expect(order.filter(step => step === 'exit')).toHaveLength(1);
-      expect(order.indexOf('flush-store-writes')).toBeLessThan(order.indexOf('exit'));
+      // Exactly this, in this order: the net flushes and then exits once. The flush is idempotent
+      // (`TrailingDebounce.flush()` is a no-op with nothing pending), so arriving here after a
+      // normal flush cannot double-write.
+      expect(order).toEqual([
+        'request-renderer-flush',
+        'cancel-in-flight-work',
+        'flush-store-writes',
+        'exit',
+      ]);
       void pending;
     } finally {
       vi.useRealTimers();

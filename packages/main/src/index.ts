@@ -3,7 +3,12 @@
  */
 
 import { app, ipcMain, shell, BrowserWindow } from 'electron';
-import { createMainWindow, installRendererSecurityPolicy, resolveAppEntry } from './window';
+import {
+  createMainWindow,
+  flushWindowState,
+  installRendererSecurityPolicy,
+  resolveAppEntry,
+} from './window';
 import { installNavigationGuardsForEveryWindow } from './security/harden';
 import { openExternalSafely } from './security/open-external';
 import { createMenu } from './menu';
@@ -235,10 +240,15 @@ function cancelInFlightWork(): void {
 }
 
 /**
- * Writes every debounced store to disk. Runs AFTER the renderer has flushed, so the values it just
- * sent are in `AppStateStore`'s cache by now. `electron-store` writes synchronously, so there is
- * nothing to await: when this returns, it is on disk. Idempotent — `TrailingDebounce.flush()` is a
- * no-op with nothing pending — which is what makes the force-exit net safe to flush from too.
+ * Writes the four debounced main-process stores to disk: the query history, `AppState`, the query
+ * results snapshot index, and the OS window's position and size. Those four are the whole of what
+ * main defers — a fifth would have to be added here by hand, which is why they are named rather
+ * than described.
+ *
+ * Runs AFTER the renderer has flushed, so the values it just sent are in `AppStateStore`'s cache by
+ * now. `electron-store` writes synchronously, so there is nothing to await: when this returns, it
+ * is on disk. Idempotent — `TrailingDebounce.flush()` is a no-op with nothing pending — which is
+ * what makes the force-exit net safe to flush from too.
  */
 function flushStoreWrites(): void {
   try {
@@ -259,6 +269,13 @@ function flushStoreWrites(): void {
     }
   } catch (err) {
     log.warn('Shutdown: snapshot index flush failed:', err);
+  }
+  try {
+    // The window's own position and size. Its debounce was flushed only from the window's `close`
+    // event, which a quit never emits — see `flushWindowState`.
+    flushWindowState();
+  } catch (err) {
+    log.warn('Shutdown: window bounds flush failed:', err);
   }
   log.info('Shutdown: flushed pending store writes');
 }

@@ -36,8 +36,15 @@ import { resizeHandle, resizeHandleValue } from '../helpers/react/workbench';
 /** `state/workbench.ts`'s `SAVE_DEBOUNCE_MS`. The window this spec has to stay inside. */
 const GEOMETRY_DEBOUNCE_MS = 250;
 
+/** `window.ts`'s bounds debounce. The window the second spec has to stay inside. */
+const WINDOW_BOUNDS_DEBOUNCE_MS = 500;
+
 interface PersistedAppState {
   appState: { sidebarWidth?: number };
+}
+
+interface PersistedWindowState {
+  windowState: { x?: number; y?: number; width?: number; height?: number };
 }
 
 test('a quit one keystroke after a resize still persists the width (J-74)', async () => {
@@ -51,6 +58,10 @@ test('a quit one keystroke after a resize still persists the width (J-74)', asyn
     const before = await resizeHandleValue(launched.window, 'sidebar');
     await handle.focus();
     await handle.press('ArrowRight');
+    // Stamped HERE, immediately after the keystroke that starts the debounce — not after the two
+    // round trips below. Stamping later would exclude the part of the elapsed time most likely to
+    // blow the budget and let a slow machine report a comfortable gap while passing vacuously.
+    const gestureAt = Date.now();
     await expect(handle).not.toHaveAttribute('aria-valuenow', String(before));
     const widened = await resizeHandleValue(launched.window, 'sidebar');
     expect(widened).toBeGreaterThan(before);
@@ -58,7 +69,6 @@ test('a quit one keystroke after a resize still persists the width (J-74)', asyn
     // ⌘Q, from the main process's point of view: the menu's Quit role and the keystroke both land
     // on `app.quit()`, and neither emits a `close` on the window — which is the whole reason the
     // renderer's own unload listeners cannot cover this path.
-    const gestureAt = Date.now();
     await launched.app.evaluate(({ app }) => {
       app.quit();
     });
@@ -75,6 +85,43 @@ test('a quit one keystroke after a resize still persists the width (J-74)', asyn
     const raw = readFileSync(join(launched.userDataDir, 'app-state.json'), 'utf8');
     const persisted = JSON.parse(raw) as PersistedAppState;
     expect(persisted.appState.sidebarWidth).toBe(widened);
+  } finally {
+    rmSync(launched.userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('a quit one move after a window resize still persists the bounds (J-74)', async () => {
+  // The main-process sibling of the bug above, found in review. `window.ts` debounces the OS
+  // window's position and size by 500ms into `window-state.json` and flushed them only from
+  // `mainWindow.on('close')` — an event `app.exit(0)` never emits, which is the same reasoning that
+  // put the renderer's flush on an IPC request rather than on `beforeunload`. So the "take the final
+  // bounds on close" fallback was dead code on every quit, and a resize inside the window was lost.
+  const launched = await launchJoinery();
+  try {
+    await waitForShell(launched.window);
+
+    const bounds = { x: 60, y: 70, width: 1111, height: 777 };
+    await launched.app.evaluate(async ({ BrowserWindow }, target) => {
+      const [window] = BrowserWindow.getAllWindows();
+      window?.setBounds(target);
+    }, bounds);
+
+    const resizedAt = Date.now();
+    await launched.app.evaluate(({ app }) => {
+      app.quit();
+    });
+    const gapMs = Date.now() - resizedAt;
+    await launched.app.waitForEvent('close');
+
+    expect(
+      gapMs,
+      `inconclusive: ${gapMs}ms elapsed between the resize and the quit, so the ordinary ` +
+        `${WINDOW_BOUNDS_DEBOUNCE_MS}ms debounce could have written the bounds on its own`
+    ).toBeLessThan(WINDOW_BOUNDS_DEBOUNCE_MS);
+
+    const raw = readFileSync(join(launched.userDataDir, 'window-state.json'), 'utf8');
+    const persisted = JSON.parse(raw) as PersistedWindowState;
+    expect(persisted.windowState).toMatchObject(bounds);
   } finally {
     rmSync(launched.userDataDir, { recursive: true, force: true });
   }
