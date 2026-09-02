@@ -14,9 +14,17 @@ import { DEFAULT_SETTINGS } from '@joinery/shared';
 import { createIpcQueryClient } from '../ipc/query-provider';
 import { installJoineryMock, recordSubscription, removeJoineryMock } from '../test/joinery-mock';
 import { createAppStateDouble } from '../test/app-state-double';
-import { createRendererStatePersistence } from '../persistence/renderer-state';
+import {
+  createRendererStatePersistence,
+  type PersistedSettings,
+} from '../persistence/renderer-state';
 import { THEME_MIRROR_KEY } from '../persistence/theme-mirror';
-import { createSettingsStore, nextThemePreference, useNativeThemeSync } from './settings';
+import {
+  createSettingsStore,
+  mergePersistedSettings,
+  nextThemePreference,
+  useNativeThemeSync,
+} from './settings';
 import { setDiagnosticsSink } from './diagnostics';
 
 /** Angular-owned, and the point of the first test below: this store must never write it. */
@@ -401,5 +409,49 @@ describe('useNativeThemeSync — browser fallback', () => {
     renderSync(store);
 
     await waitFor(() => expect(themeAttribute()).toBe('dark'));
+  });
+});
+
+/*
+ * J-56 deleted `QuerySettings.autoExecuteOnOpen`. Nothing ever read it — auto-execute is a per-tab
+ * fact (`tabStore.openQueryTab(…, autoExecute)`) — so it was a default with no consumer and no
+ * agreed meaning, and the Settings panel deliberately shipped no control for it.
+ *
+ * Deleting a persisted field is only safe if the read path survives one left on disk by an older
+ * build, which is what the second case pins: `validateSettings` keeps stray keys on purpose
+ * ("dropping a stray field would discard data the merge is capable of ignoring",
+ * `persistence/renderer-state.ts`), and the group spread copies them, so the stale key rides
+ * through as an inert passenger while every field the app still has resolves normally.
+ */
+describe('mergePersistedSettings — the deleted autoExecuteOnOpen field', () => {
+  it('is gone from the query defaults', () => {
+    // Exact rather than `toMatchObject`, for the same reason the editor defaults are pinned exactly
+    // in `settings.types.spec.ts`: a query preference must not be able to arrive, or linger, without
+    // a consumer.
+    expect(mergePersistedSettings(undefined).query).toEqual({
+      defaultTimeout: 30000,
+      maxRowsToDisplay: 10000,
+      showExecutionTime: true,
+      confirmBeforeExecute: false,
+      executeScope: 'all',
+    });
+  });
+
+  it('carries one left on disk through harmlessly, without disturbing the surviving fields', () => {
+    // `as` because the field is gone from the type: this object is what an older build wrote, read
+    // back off disk as JSON, not something today's code can construct.
+    const stale = {
+      query: { autoExecuteOnOpen: true, maxRowsToDisplay: 500 },
+    } as PersistedSettings;
+
+    expect(mergePersistedSettings(stale).query).toEqual({
+      defaultTimeout: 30000,
+      maxRowsToDisplay: 500,
+      showExecutionTime: true,
+      confirmBeforeExecute: false,
+      executeScope: 'all',
+      // The passenger. Inert: no reader, and it cannot shadow a real field because there is none.
+      autoExecuteOnOpen: true,
+    });
   });
 });
