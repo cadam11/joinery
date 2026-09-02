@@ -4,6 +4,7 @@
  */
 
 import * as keytar from 'keytar';
+import { app, type App } from 'electron';
 import { type KeychainStatus } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
@@ -22,11 +23,11 @@ export type KeychainStatusListener = (status: KeychainStatus) => void;
 
 export class CredentialStore extends BaseSingleton {
   /**
-   * The Keychain service every entry below lives under, resolved once per instance from the
-   * environment (J-96). Read here and nowhere else, so a test launcher can repoint the whole
-   * store at a throwaway namespace by setting one variable before Electron starts.
+   * The Keychain service every entry below lives under, resolved once per instance in the
+   * constructor (J-96, J-161). Read here and nowhere else, so a test launcher can repoint the
+   * whole store at a throwaway namespace by setting one variable before Electron starts.
    */
-  private readonly serviceName: string = resolveKeychainServiceName();
+  private readonly serviceName: string;
   // In-memory cache - all credentials loaded from single keychain entry
   private cache: Map<string, string> = new Map();
   private cacheLoaded = false;
@@ -38,6 +39,26 @@ export class CredentialStore extends BaseSingleton {
    * rather than polling or reaching into this class's fields (J-118).
    */
   private statusListeners: Set<KeychainStatusListener> = new Set();
+
+  constructor() {
+    super();
+    // Both ambient reads that decide which vault this process touches are here, at the call
+    // site, and the decision itself is a pure function (J-161) — the packaged branch is
+    // unreachable from a unit test, so it has to be provable somewhere.
+    //
+    // `app` is typed non-optional and inside Electron it is. Under vitest the `electron`
+    // specifier resolves to the npm shim, whose export is the binary's PATH rather than the API,
+    // so the binding really is undefined; a bare `app.isPackaged` here fails 63 unit tests
+    // across 8 files, because the setup file pulls this class in through the connection pool.
+    // Absent Electron means not a shipped app, which is the same answer `isPackaged: false` is.
+    const electronApp: App | undefined = app;
+    const resolution = resolveKeychainServiceName({
+      isPackaged: electronApp?.isPackaged === true,
+      env: process.env,
+    });
+    if (resolution.warning !== undefined) log.warn(resolution.warning);
+    this.serviceName = resolution.serviceName;
+  }
 
   /**
    * Load all credentials from keychain into memory cache. Startup kicks this
