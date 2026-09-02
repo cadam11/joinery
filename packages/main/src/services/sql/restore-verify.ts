@@ -21,7 +21,10 @@ import mysql from 'mysql2/promise';
 import type { RowDataPacket } from 'mysql2/promise';
 import pg from 'pg';
 import type { ConnectionProfile } from '@joinery/shared';
+import { createLogger } from '../../utils/logger';
 import { mysqlVerifyConnectionOptions } from './mysql-pool-options';
+
+const log = createLogger('RestoreVerify');
 
 /**
  * Does `name` exist as a schema on the profile's MySQL server?
@@ -83,6 +86,21 @@ export async function pgDatabaseExists(
     database: 'postgres',
     ssl: profile.encrypt ? { rejectUnauthorized: !profile.trustServerCertificate } : false,
     connectionTimeoutMillis: profile.connectionTimeout * 1000,
+  });
+  // A pg `Client` is an `EventEmitter`, and an `EventEmitter` with no `'error'`
+  // listener *rethrows* from inside `emit()`. Once connected,
+  // `_handleErrorEvent` emits unconditionally (`pg/lib/client.js:416-423`), and
+  // a backend error arriving with no query in flight routes there too
+  // (`_handleErrorMessage`, `:425-434`). That emit is on a socket callback, not
+  // on the awaited promise, so with no listener the throw lands in the event
+  // loop as an uncaught exception — in the main process, a crash of the app.
+  // Logging is the whole job: pg has already failed every in-flight query and
+  // marked the client unqueryable by the time it emits, and the `finally` below
+  // still closes it (J-183, same shape as J-175's pool guards).
+  client.on('error', (err: unknown) => {
+    const code = (err as { code?: string } | null)?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    log.error(`Restore-verify PostgreSQL client error${code ? ` [${code}]` : ''}: ${message}`);
   });
   await client.connect();
   try {
