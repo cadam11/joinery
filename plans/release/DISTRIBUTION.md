@@ -140,6 +140,17 @@ absent or null field warns instead of blocking, because GitHub does not document
 behaviour for fine-grained tokens and a false alarm here costs a delete-and-re-tag. A wrongly
 scoped token that gets past both still fails in `homebrew`, which is re-runnable on its own.
 
+## What is inside the archive
+
+`pnpm run verify:package` — the `build` job's acceptance check — is two things chained. The first,
+`scripts/verify-package.js`, extracts `app.asar` and `require()`s every module the main process
+depends on, so a missing transitive dependency fails the release rather than the user's first
+connection. The second, `scripts/release/asar-inventory.ts --check`, fails if a build-time or
+known-dead package is inside the archive.
+
+The measurement behind that second check, and the 121 MB it took out of a release, is
+[ASAR-INVENTORY.md](./ASAR-INVENTORY.md).
+
 ## Checksums
 
 The `release` job is the only job that touches the GitHub Release. It downloads every artifact from
