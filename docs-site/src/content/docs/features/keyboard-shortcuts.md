@@ -32,15 +32,34 @@ It answers "why does this key work here but not there?".
 | Source     | Bound by                                                                 | Consequence                                                                                        |
 | ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | **Menu**   | An Electron menu item (23 commands)                                      | The keystroke never reaches the page at all — the menu fires and sends the command                 |
-| **App**    | A key listener in the window (3 commands, plus the palette's own opener) | ⌘J, ⌘P and ⌥⌘S, and ⌘K / ⇧⌘P. These must avoid every registered menu accelerator, or the menu wins |
+| **App**    | A key listener in the window (3 commands, plus the palette's own opener) | ⌘J, ⌘P and ⌥⌘S, and ⌘K / ⇧⌘P. These must dodge two other claimants — see below                     |
 | **Editor** | Monaco itself (1 command, plus ⌃M)                                       | ⌘E, which the menu shows but deliberately does not bind; and ⌃M, which no menu item carries at all |
 
 Those are command counts, not keystroke counts: the 23 menu commands carry **24** bindings, because
 _New connection_ has two. Two rows belong to no command at all: the palette's opener is a fourth
 **App** row, and ⌃M is a second **Editor** row.
 
-The Menu-beats-App rule is why the [snippet library](../snippets/) is on ⌥⌘S and not ⇧⌘S: ⇧⌘S is
-File ▸ Save Query As, so a window-level listener on it would never have run.
+### What an App binding has to dodge
+
+Two things, and both of them win a keystroke outright.
+
+**A registered menu accelerator.** Electron fires the menu item and the page never sees the keydown.
+This is why the [snippet library](../snippets/) is on ⌥⌘S and not ⇧⌘S: ⇧⌘S is File ▸ Save Query As, so
+a window-level listener on it would never have run.
+
+**A Monaco binding, while the caret is in a SQL editor.** Monaco listens on each editor's own
+container element, which sits below the window listener, and it calls `stopPropagation()` on any
+keystroke it claims. So a key Monaco binds is a key the window cannot see from inside the editor —
+including keys Monaco only claims as the first half of a two-key sequence.
+
+**⌘K was exactly that.** Monaco registers it as the opening keystroke of a family of two-key
+commands — folding, peek definition, format selection — none of which Joinery offers, so while you
+were typing SQL the editor swallowed ⌘K and the command palette never opened. It now works
+everywhere: the editor hands ⌘K back to the window and takes nothing in its place. ⇧⌘K, ⌃K and ⌘D
+keep Monaco's own behaviour — those are different keystrokes.
+
+⌘J, ⌘P and ⌥⌘S never collided with Monaco, and a test now compares every keystroke the app advertises
+against Monaco's real keybinding registry, so the next collision fails the build rather than shipping.
 
 **Editor keys need the editor.** The four keystrokes Monaco carries for this app — ⌘E, ⌘↩ and F5 to
 execute, and ⌃M below — reach it only while the caret is in a SQL editor, and with several query
@@ -100,9 +119,9 @@ press: a binding written `CmdOrCtrl+N` reads as `Ctrl+N`. The
 
 | Claim                                                                                                   | Source                                                                                                                                                                            |
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⌃M toggles tab-focus mode, through the command path rather than `getAction`                             | `packages/renderer/src/editor/sql-editor.tsx:465-507`                                                                                                                             |
+| ⌃M toggles tab-focus mode, through the command path rather than `getAction`                             | `packages/renderer/src/editor/sql-editor.tsx:508-550`                                                                                                                             |
 | On Windows the same keystroke is Window ▸ Minimize's registered accelerator, so it never reaches Monaco | `packages/main/src/menu.ts:402` (`role: 'minimize'`, every platform); Electron's `minimize` role declares `accelerator: 'CommandOrControl+M'`                                     |
-| The editor's four keys are scoped to the editor holding focus, and released when its tab closes         | `packages/renderer/src/editor/sql-editor.tsx:104-139, 395-438, 507-510`, `editor/sql-editor.spec.tsx` — 'keybinding lifetime'                                                     |
+| The editor's four keys are scoped to the editor holding focus, and released when its tab closes         | `packages/renderer/src/editor/sql-editor.tsx:104-139, 441-450, 561-565`, `editor/sql-editor.spec.tsx` — 'keybinding lifetime'                                                     |
 | Pressing it frees Tab from the editor, verified by driving the real app                                 | `tests/e2e-react/a11y.spec.ts` — '⌃M frees Tab from the SQL editor'                                                                                                               |
 | The sheet is built from the command table PLUS the surface-shortcut list, and ⌃M is in the second       | `packages/renderer/src/features/shortcuts-dialog/shortcuts-dialog.tsx:79, 95`, `features/command-palette/palette-actions.ts:121-146`                                              |
 | ⌃M is listed under Editor, next to ⌘E, and the sheet says Monaco binds it                               | `packages/renderer/src/features/command-palette/palette-actions.ts:131-145`, `features/shortcuts-dialog/shortcuts-dialog.spec.tsx` — 'lists the editor’s way out of the Tab trap' |
@@ -119,12 +138,18 @@ press: a binding written `CmdOrCtrl+N` reads as `Ctrl+N`. The
 | Those 23 commands carry 24 bindings, because New connection has an alternate                            | `packages/renderer/src/commands/catalogue.ts:274-283`, `features/shortcuts-dialog/shortcuts-dialog.tsx:79-93`                                                                     |
 | The renderer-sourced three are ⌘J, ⌘P and ⌥⌘S                                                           | `packages/renderer/src/commands/catalogue.ts:559-568, 623-631, 632-642`                                                                                                           |
 | The palette's opener is rendered under App as well, as a fourth row                                     | `packages/renderer/src/features/shortcuts-dialog/shortcuts-dialog.tsx:95-108`, `features/command-palette/palette-actions.ts:121-129`                                              |
-| ⌘E is declared in the menu with `registerAccelerator: false` and bound by Monaco                        | `packages/main/src/menu.ts:210-213`, `packages/renderer/src/editor/sql-editor.tsx:440-444`                                                                                        |
+| ⌘E is declared in the menu with `registerAccelerator: false` and bound by Monaco                        | `packages/main/src/menu.ts:238-239`, `packages/renderer/src/editor/sql-editor.tsx:495-499`                                                                                        |
 | ⌥⌘S rather than ⇧⌘S, because ⇧⌘S is Save Query As                                                       | `packages/renderer/src/commands/catalogue.ts:637-639`, `packages/main/src/menu.ts:101`                                                                                            |
 | The five commands with a genuinely different non-macOS binding                                          | `packages/renderer/src/commands/catalogue.ts:349, 413, 421, 574, 582`                                                                                                             |
 | The sixth per-platform binding is the same key: `Cmd+Option+S` / `Ctrl+Alt+S`                           | `packages/renderer/src/commands/catalogue.ts:639`                                                                                                                                 |
 | Accelerators are formatted for the running platform, with macOS modifier order                          | `packages/renderer/src/commands/catalogue.ts:849-902`                                                                                                                             |
 | Off macOS the formatter prints `Ctrl` for the cross-platform spellings                                  | `packages/renderer/src/commands/catalogue.ts:852-863, 884-891`                                                                                                                    |
 | Electron maps `CmdOrCtrl` to Command on macOS and Control elsewhere                                     | [Electron accelerator reference](https://www.electronjs.org/docs/latest/api/accelerator)                                                                                          |
+| Monaco listens on each editor's container and stops propagation on a key it claims                      | `monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js:260-269, 293`                                                                                               |
+| A keystroke Monaco claims only as a chord prefix still consumes the keydown                             | `monaco-editor/esm/vs/platform/keybinding/common/keybindingResolver.js:271-277`, `platform/keybinding/common/abstractKeybindingService.js:206-212`                                |
+| ⌘K opens a family of two-key Monaco commands, so the editor used to swallow it                          | `packages/renderer/src/editor/monaco-default-keybindings.spec.ts` — '⌘K is a chord prefix in Monaco, which is the whole of J-73'                                                  |
+| The editor hands ⌘K back with a null-command keybinding rule, and ⇧⌘K, ⌃K and ⌘D are untouched          | `packages/renderer/src/editor/sql-editor.tsx:452-493`, `editor/sql-editor.spec.tsx` — 'releases ⌘K, so the palette’s own shortcut reaches the window'                             |
+| ⌘K opens the palette with the caret in a SQL editor, verified by driving the real app                   | `tests/e2e-react/query-keybindings.spec.ts` — '⌘K opens the palette with the caret in a SQL editor'                                                                               |
+| Every advertised keystroke is compared against Monaco's real registry                                   | `packages/renderer/src/editor/monaco-default-keybindings.spec.ts` — 'no shortcut the app owns is swallowed by Monaco'                                                             |
 
 </details>

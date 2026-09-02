@@ -60,11 +60,11 @@ for (const theme of VISUAL_THEMES) {
         await connectFromSidebar(window, PROFILE);
         await selectDatabase(window, DATABASE);
         await dismissToasts(window);
-        // ⌘K does not reach the renderer while Monaco has focus — Monaco binds it as a chord prefix
-        // and swallows it (J-73, and why `openPaletteFromEditor` exists). Connecting can open a query
-        // tab on its own (`sidebar.tsx`'s `openQueryForConnection`), so whether focus is in an editor
-        // by this point is not something this spec controls. Dropping focus first makes the ⌘K path —
-        // the one the palette advertises — the one that is actually exercised, every run.
+        // Connecting can open a query tab on its own (`sidebar.tsx`'s `openQueryForConnection`), so
+        // whether focus is in an editor by this point is not something this spec controls. J-73 made
+        // ⌘K work from inside Monaco — the editor releases the keystroke back to the window — so this
+        // is no longer a workaround for a swallowed key. It stays because a focused editor draws a
+        // caret and a focus ring behind the overlay, and a baseline must not depend on that.
         await blurFocus(window);
 
         const palette = await openPalette(window);

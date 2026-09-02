@@ -449,6 +449,49 @@ export function SqlEditor({
       keybindings.push(rule, command);
     };
 
+    /**
+     * The other direction: a keystroke this editor gives BACK to the window (J-73).
+     *
+     * A rule with a **null command** is how Monaco removes a binding — `IKeybindingRule.command` is
+     * `string | null` (`editor.api.d.ts:1011-1016`), a null one survives `handleRemovals`
+     * (`keybindingResolver.js:100-103`), and it resolves like any other rule: newest wins, so this
+     * one beats every default on the same first chord. `_doDispatch` then reaches
+     * `KbFound(commandId === null)` and, outside chord mode, returns WITHOUT setting
+     * `shouldPreventDefault` (`abstractKeybindingService.js:213-222`) — so the container listener
+     * calls neither `preventDefault()` nor `stopPropagation()` (`standaloneServices.js:260-269`) and
+     * the keydown carries on up to `document`.
+     *
+     * That last step is the point. Anything the window owns — the palette's ⌘K, the shell's ⌘J —
+     * listens on `document`, which sits ABOVE Monaco's listener, so a keystroke Monaco consumes is a
+     * keystroke the window never sees.
+     *
+     * Deliberately not the alternative fix, which was to bind ⌘K here to a command that opens the
+     * palette: that would put a second owner on a keystroke the palette already owns, and it would
+     * only work for the surfaces the editor knows about. Releasing the key means every window-level
+     * listener works from inside the editor, now and later, with nothing to keep in sync.
+     *
+     * Every `releaseKey` call in this file is read back out of this source by
+     * `monaco-default-keybindings.spec.ts`, which is the audit that knows which keystrokes the app
+     * advertises and which of them Monaco claims. So this is the only declaration of the set, and
+     * deleting a call here brings the collision back as a test failure rather than as a bug report.
+     */
+    const releaseKey = (keybinding: number): void => {
+      keybindings.push(monaco.editor.addKeybindingRule({ keybinding, command: null, when: scope }));
+    };
+
+    // ⌘K — released, not bound.
+    //
+    // Monaco registers it as the first chord of thirty-one two-chord bindings (fold, unfold,
+    // comment, format selection, peek definition…), so it resolved to `MoreChordsNeeded` and the
+    // editor ate the keystroke while waiting for a second one that the app has no bindings for. The
+    // command palette advertises ⌘K, owns it as a `document` keydown, and therefore could not be
+    // opened with it from the one surface a SQL user is in most of the time.
+    //
+    // What is lost: the ⌘K chords themselves, all of which are folding, peek and multi-cursor
+    // actions with no surface in this app — none is advertised anywhere in `commands/catalogue.ts`
+    // or the cheat sheet, and ⇧⌘K, ⌃K and ⌘D are untouched because they are different keystrokes.
+    releaseKey(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK);
+
     // ⌘E / ⌃E. `menu.ts` registers Query ▸ Execute with `registerAccelerator: false` precisely so
     // this keybinding is the renderer's, which is why it is here and not a menu channel.
     bindKey('executeShortcut', monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE, () =>

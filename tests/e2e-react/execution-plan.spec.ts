@@ -130,7 +130,8 @@ test.describe('Joinery (React) — the execution plan', () => {
       await openQueryTab(window);
       await typeSql(window, 'SELECT 1');
 
-      // ⇧⌘P, not ⌘K: Monaco has focus after `typeSql` and swallows ⌘K as a chord prefix (J-73).
+      // ⇧⌘P, the palette's second binding. ⌘K works from inside Monaco too since J-73 released it
+      // (`query-keybindings.spec.ts` presses it there); this stays as the ⇧⌘P path's coverage.
       await openPaletteFromEditor(window);
       expect(await paletteRowState(window, 'command:show-execution-plan')).toBe('ready');
       await runPaletteCommand(window, 'command:show-execution-plan');
