@@ -6,6 +6,12 @@ import { BrowserWindow, screen, nativeTheme, session } from 'electron';
 import * as path from 'path';
 import Store from 'electron-store';
 import { createTrailingDebounce, type TrailingDebounce } from './utils/trailing-debounce';
+import {
+  isDevelopmentHatchOpen,
+  isPackagedApp,
+  isTestHatchOpen,
+  type RuntimeSignals,
+} from './utils/runtime-mode';
 import { buildContentSecurityPolicy } from './security/content-security-policy';
 import { installContentSecurityPolicy } from './security/harden';
 import type { AppEntry } from './security/navigation-guard';
@@ -21,8 +27,22 @@ import type { AppEntry } from './security/navigation-guard';
 const DEV_SERVER_URL = 'http://localhost:4200';
 const RENDERER_INDEX = path.join(__dirname, '../../renderer/dist/browser/index.html');
 
+/**
+ * This process's mode signals: the two ambient reads behind every hatch decision in this file,
+ * taken here so the predicates they feed stay pure and testable (J-161).
+ */
+function runtimeSignals(): RuntimeSignals {
+  return { isPackaged: isPackagedApp(), env: process.env };
+}
+
+/**
+ * Dev-server mode. Gated on the app being unpackaged (J-161): this decides whether the window
+ * loads `http://localhost:4200` instead of the bundled renderer, opens devtools, and takes the
+ * relaxed CSP, so a packaged app honouring it would serve whoever set `NODE_ENV` into the signed
+ * app. A packaged build has no dev server to reach anyway.
+ */
 function isDevelopment(): boolean {
-  return process.env.NODE_ENV === 'development';
+  return isDevelopmentHatchOpen(runtimeSignals());
 }
 
 interface WindowState {
@@ -140,13 +160,16 @@ export function createMainWindow(): BrowserWindow {
   });
 
   // Show when ready — unless we're under Playwright test, in which case
-  // the launcher (tests/helpers/electron-app.ts) sets JOINERY_TEST=1 and we
+  // the launcher (tests/helpers/electron-app.ts) opens the test hatch and we
   // keep the window hidden. The renderer still paints into Chromium's
   // off-screen surface, so Playwright can interact with it and capture
   // screenshots via the devtools protocol; the user just doesn't see a
   // window flashing in/out on every test.
+  //
+  // The hatch is shut in a packaged app (J-161), so nobody can start a shipped, signed Joinery
+  // with no visible window by setting one variable.
   mainWindow.once('ready-to-show', () => {
-    if (process.env.JOINERY_TEST !== '1') {
+    if (!isTestHatchOpen(runtimeSignals())) {
       mainWindow?.show();
     }
   });

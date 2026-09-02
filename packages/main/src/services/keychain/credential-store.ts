@@ -4,10 +4,13 @@
  */
 
 import * as keytar from 'keytar';
-import { app, type App } from 'electron';
 import { type KeychainStatus } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
+// Namespace import on purpose: `isPackagedApp()` is read through this module object at
+// construction time, which is what lets a spec drive the packaged branch of the wiring below
+// (`vi.spyOn(runtimeMode, 'isPackagedApp')`) — see credential-store.spec.ts (J-161).
+import * as runtimeMode from '../../utils/runtime-mode';
 import { resolveKeychainServiceName } from './service-name';
 
 const log = createLogger('CredentialStore');
@@ -43,17 +46,11 @@ export class CredentialStore extends BaseSingleton {
   constructor() {
     super();
     // Both ambient reads that decide which vault this process touches are here, at the call
-    // site, and the decision itself is a pure function (J-161) — the packaged branch is
-    // unreachable from a unit test, so it has to be provable somewhere.
-    //
-    // `app` is typed non-optional and inside Electron it is. Under vitest the `electron`
-    // specifier resolves to the npm shim, whose export is the binary's PATH rather than the API,
-    // so the binding really is undefined; a bare `app.isPackaged` here fails 63 unit tests
-    // across 8 files, because the setup file pulls this class in through the connection pool.
-    // Absent Electron means not a shipped app, which is the same answer `isPackaged: false` is.
-    const electronApp: App | undefined = app;
+    // site, and the decision itself is a pure function (J-161) — one is a named accessor
+    // (`utils/runtime-mode.ts`, the one place Electron's `app.isPackaged` is read and gated) and
+    // the other is `process.env`.
     const resolution = resolveKeychainServiceName({
-      isPackaged: electronApp?.isPackaged === true,
+      isPackaged: runtimeMode.isPackagedApp(),
       env: process.env,
     });
     if (resolution.warning !== undefined) log.warn(resolution.warning);
