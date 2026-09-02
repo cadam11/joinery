@@ -49,7 +49,7 @@
  * than nothing.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -332,8 +332,9 @@ async function siteOrigin() {
 /**
  * The built file a site-root path names, or `null`. Astro is configured
  * `trailingSlash: 'always'` with `build.format: 'directory'`, so a page path ends in `/` and maps
- * to `index.html`; the extensionless and `.html` forms are tried anyway so a hand-written href
- * that omits the slash reports as missing rather than as a false pass.
+ * to `index.html`. A path without the slash is still tried three ways — as a file (`/favicon.svg`),
+ * as a directory index, and as `<path>.html` — so an href that merely omits the trailing slash
+ * resolves to the page it obviously means instead of being reported as a phantom break.
  */
 function builtFileFor(distDir, pathname) {
   const candidates = pathname.endsWith('/')
@@ -343,7 +344,11 @@ function builtFileFor(distDir, pathname) {
         join(distDir, pathname, 'index.html'),
         join(distDir, `${pathname}.html`),
       ];
-  return candidates.find(candidate => existsSync(candidate)) ?? null;
+  // `isFile`, not `existsSync`: an extensionless href such as `/features` would otherwise match
+  // the DIRECTORY `dist/features` and report as resolved, and the fragment read below would then
+  // fail on it.
+  const isFile = path => statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+  return candidates.find(isFile) ?? null;
 }
 
 /** Does `file` carry an element with this id? */
