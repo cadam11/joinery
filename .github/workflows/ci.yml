@@ -13,6 +13,11 @@ on:
       # tsconfig.tests.json, and neither ran on a pull request that touched only this
       # directory until it was named here.
       - 'scripts/**'
+      # The packaging config, because `scripts/release/asar-inventory.spec.ts` asserts about THIS
+      # file — that every `excluded-by-config` rule still has a live exclusion line in it. Without
+      # it named here, a pull request editing only this file ran no CI and that guard never fired,
+      # which is the same gap `scripts/**` above was added to close (J-90 review, finding 1).
+      - 'electron-builder.yml'
       - 'vitest.config.ts'
       - 'tsconfig.tests.json'
       - 'playwright.config.ts'

@@ -137,12 +137,33 @@ and quits. Run against the trimmed archive: window created, renderer loaded from
 shell mounted, clean quit. Also proven non-vacuous — against a bundle whose `app.asar` was replaced
 with a stub archive it exits 1.
 
+> **Once PR #113 (J-161) lands, a packaged app ignores `JOINERY_KEYCHAIN_SERVICE`, so this smoke
+> run boots against the developer's production Keychain namespace. It is therefore READ-ONLY: it
+> must never save a profile, run a query, or otherwise write. A build-time test-capability flag is
+> the planned fix (ticket to be filed; relates J-88).**
+>
+> The env pin stays in the script regardless — it is what protects the run today and what J-96's
+> structural guard checks for. J-161 refuses it only in a packaged app, on purpose. J-161 also adds
+> a rule that a registered launch site must not name a packaged-bundle path, which this launcher
+> does by necessity, so the two changes have to be sequenced together; that is the coordinator's
+> call and is not pre-empted here.
+
 ## Still on the table
 
 - **Delete `devicon` from root `dependencies`.** The exclusion keeps 121 MB out of the download;
   the dependency is still installed, still in the lockfile and still 121 MB in every developer's and
   CI runner's `node_modules`. Removing it is the real fix and belongs in its own change with its own
   lockfile diff.
+- **Test doubles and source maps are still in the archive.** `packages/main/dist/__mocks__/keytar.js`
+  and `.../ssh2.js` — the vitest doubles for the Keychain and SSH modules — plus `.js.map` and
+  `.d.ts.map` across every package's `dist`. Small in bytes, wrong in principle, and a shipped file
+  named `__mocks__/keytar.js` invites the wrong question in a security review. The fix is a
+  `tsconfig` `exclude` for `__mocks__` or an `electron-builder.yml` exclusion, plus no source maps
+  in the packaged build. Raised in the J-90 review (finding 7) and left for its own change because
+  it touches what the TypeScript build emits, not what the packager collects.
+- **Only the arm64 archive is ever checked.** `scripts/verify-package.js` and this script both
+  default to `release/mac-arm64/…`, while `mac.target` builds x64 as well. Pre-existing; the new
+  check inherits it rather than making it worse.
 - **`@azure/msal-browser` at 11.6 MB** is a browser-targeted bundle reached from `@azure/identity`
   through `mssql`'s Entra ID support, in a Node main process that never runs it. Unpicking that
   means changing which `@azure` entry points the SQL Server driver pulls, which is a behaviour

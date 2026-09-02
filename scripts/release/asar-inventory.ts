@@ -175,6 +175,7 @@ export interface AsarSummary {
 
 export interface NeverShipFinding extends PackageUsage {
   readonly pattern: string;
+  readonly group: NeverShipGroup;
   readonly reason: string;
 }
 
@@ -239,7 +240,7 @@ export function findNeverShipPackages(
   for (const usage of packages) {
     const rule = rules.find(candidate => matchesPackagePattern(usage.name, candidate.pattern));
     if (rule === undefined) continue;
-    findings.push({ ...usage, pattern: rule.pattern, reason: rule.reason });
+    findings.push({ ...usage, pattern: rule.pattern, group: rule.group, reason: rule.reason });
   }
   return findings;
 }
@@ -253,18 +254,52 @@ export function exclusionGlobFor(pattern: string): string {
 /**
  * The `excluded-by-config` patterns whose exclusion line is missing from the given config source.
  *
- * A substring test on the raw YAML, not a parse: `files` is a list of strings whose ORDER matters
- * to electron-builder, and every candidate here is a whole quoted list item, so there is nothing a
- * parse would disambiguate.
+ * Line-level rather than a substring test over the whole file, and that distinction is the point
+ * (review finding 2): a commented-out list item still CONTAINS its glob while excluding nothing,
+ * so a substring test would stay green over a dead exclusion — the exact class of lie this whole
+ * change removed from that file. A YAML comment line is not a list item, so it does not count.
+ *
+ * Still string matching rather than a parse: `files` is a list whose ORDER matters to
+ * electron-builder, and every candidate is a whole quoted list item, so there is nothing a parse
+ * would disambiguate that this does not.
  */
 export function missingExclusions(
   configSource: string,
   rules: readonly NeverShipRule[] = NEVER_SHIP
 ): string[] {
+  const listItems = configSource
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('- '));
+
   return rules
     .filter(rule => rule.group === 'excluded-by-config')
     .map(rule => exclusionGlobFor(rule.pattern))
-    .filter(glob => !configSource.includes(glob));
+    .filter(glob => !listItems.some(item => item.includes(glob)));
+}
+
+/**
+ * What to do about a never-ship rule whose package turned up in the archive.
+ *
+ * Group-dependent, because the two groups have opposite fixes and a single message got one of them
+ * wrong (review finding 4). For an `excluded-by-config` rule the answer is the missing exclusion
+ * line; for an `absent-from-production-tree` rule it is NOT, because `missingExclusions` above
+ * asserts that line's absence — adding it would turn a release failure into a PR failure. Such a
+ * package appearing means something in `dependencies` started depending on it, which is a decision
+ * to make, not a line to add.
+ */
+export function remediationFor(rule: NeverShipRule): string {
+  if (rule.group === 'excluded-by-config') {
+    return (
+      `restore \`${exclusionGlobFor(rule.pattern)}\` to electron-builder.yml's \`files\` list, ` +
+      `or drop the rule from NEVER_SHIP if the package is genuinely needed at runtime`
+    );
+  }
+  return (
+    `a production dependency has started depending on it. Decide which: move the rule's group to ` +
+    `\`excluded-by-config\` and add the exclusion, or remove the rule and say why the package now ` +
+    `belongs in a user's download`
+  );
 }
 
 /** Bytes as MB to one decimal — the unit every number in `plans/release/ASAR-INVENTORY.md` uses. */
@@ -363,6 +398,12 @@ export function parseArgs(args: readonly string[]): Args {
     else asarPath = arg;
   }
 
+  // Rejected rather than resolved by precedence (review finding 3): `--json` used to return before
+  // the check ran, so `--check --json` exited 0 having checked nothing. A guard that passes when it
+  // did not run is the vacuity this whole script exists to avoid, and silently ignoring one of two
+  // flags a caller passed on purpose is its own trap.
+  if (check && json) throw new Error('--check and --json are mutually exclusive');
+
   return { asarPath, json, check, top };
 }
 
@@ -372,12 +413,13 @@ function runCheck(summary: AsarSummary, configSource: string): number {
   const missing = missingExclusions(configSource);
 
   for (const glob of missing) {
-    stdout.write(`  FAIL  electron-builder.yml no longer excludes ${glob}\n`);
+    stdout.write(`  FAIL  electron-builder.yml has no live \`${glob}\` list item\n`);
   }
   for (const finding of findings) {
     stdout.write(
       `  FAIL  ${finding.name.padEnd(28)} ${formatMegabytes(finding.bytes)} MB in ` +
-        `${finding.files} file(s) — ${finding.reason}\n`
+        `${finding.files} file(s) — ${finding.reason}\n` +
+        `        fix: ${remediationFor(finding)}\n`
     );
   }
 
@@ -385,9 +427,8 @@ function runCheck(summary: AsarSummary, configSource: string): number {
   stdout.write(
     problems === 0
       ? `  ok    no build-time or dead package in the archive (${summary.packages.length} checked)\n`
-      : `\n${problems} problem(s). Add the missing exclusion to electron-builder.yml's \`files\`, ` +
-          `or — if the package is genuinely needed at runtime — drop its rule from NEVER_SHIP in ` +
-          `scripts/release/asar-inventory.ts and say why.\n`
+      : `\n${problems} problem(s) — see the fix on each line above, and NEVER_SHIP in ` +
+          `scripts/release/asar-inventory.ts for what each rule is for.\n`
   );
   return problems;
 }
@@ -404,6 +445,8 @@ function main(args: readonly string[]): number {
     stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
     return 0;
   }
+  // Unreachable with --json (parseArgs rejects the pair), so the order of these two is not a
+  // precedence decision hiding in the control flow.
   if (parsed.check) {
     return runCheck(summary, readFileSync(join(REPO_ROOT, 'electron-builder.yml'), 'utf8')) === 0
       ? 0

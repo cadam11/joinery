@@ -31,12 +31,23 @@ import { KEYCHAIN_SERVICE_ENV_VAR } from './service-name';
  */
 const REPO_ROOT = process.cwd();
 
-/** Every file in the repo that starts a real Electron process. */
+/**
+ * Every file in the repo that starts a real Electron process.
+ *
+ * Kept honest by grepping for the launch APIs rather than by memory: `_electron`,
+ * `electron.launch` and `executablePath` appear in exactly these files and nowhere else. A new
+ * launcher that is not listed here is invisible to this guard, which is the one failure mode the
+ * guard cannot catch itself — so adding one means adding a line here.
+ */
 const LAUNCH_SITES = [
   // The one launcher behind all five Playwright projects (e2e, perf, visual, docs-shots).
   'tests/helpers/electron-app.ts',
   // The manual cold-start benchmark. Not a Playwright tier, but it boots the same app.
   'tests/scripts/perf-baseline.mjs',
+  // The packaged-bundle boot smoke (J-90). The only launcher that starts the SHIPPED app rather
+  // than `packages/main/dist`, which makes it the one where the production default is exactly what
+  // the app would otherwise resolve — so it is the launcher this guard matters most for.
+  'scripts/release/smoke-packaged-app.ts',
 ] as const;
 
 /** The production service name, as a source-code string literal in each of the three quote styles. */

@@ -24,6 +24,8 @@ import {
   matchesPackagePattern,
   missingExclusions,
   owningPackage,
+  parseArgs,
+  remediationFor,
   summarizeAsarEntries,
   type AsarEntry,
 } from './asar-inventory';
@@ -153,6 +155,64 @@ describe('exclusionGlobFor', () => {
   });
 });
 
+describe('missingExclusions', () => {
+  it('accepts an exclusion that is a live list item', () => {
+    expect(missingExclusions('files:\n  - "!**/node_modules/devicon/**"\n')).not.toContain(
+      '!**/node_modules/devicon/**'
+    );
+  });
+
+  it('rejects an exclusion that has been commented out', () => {
+    // Review finding 2. A substring test cannot tell a list item from a note about one, and this
+    // whole change exists because a config line that looks load-bearing and is not costs someone
+    // an afternoon. A commented-out exclusion excludes nothing.
+    expect(missingExclusions('files:\n  # - "!**/node_modules/devicon/**"\n')).toContain(
+      '!**/node_modules/devicon/**'
+    );
+  });
+
+  it('rejects an exclusion mentioned only in prose', () => {
+    expect(
+      missingExclusions('files:\n  # devicon is excluded by !**/node_modules/devicon/** below\n')
+    ).toContain('!**/node_modules/devicon/**');
+  });
+});
+
+describe('remediationFor', () => {
+  it('tells you to restore the exclusion line for a package the config is meant to exclude', () => {
+    const rule = NEVER_SHIP.find(candidate => candidate.pattern === 'devicon');
+    expect(rule).toBeDefined();
+    expect(remediationFor(rule!)).toContain('electron-builder.yml');
+  });
+
+  it('does not send you to add an exclusion the unit tier asserts must not exist', () => {
+    // Review finding 4. The two guards contradicted each other: for a build-time rule, `--check`
+    // said "add the exclusion to electron-builder.yml's files", while the spec above asserts that
+    // exclusion's ABSENCE — so following the advice turned a release failure into a PR failure.
+    const rule = NEVER_SHIP.find(candidate => candidate.pattern === 'vitest');
+    expect(rule).toBeDefined();
+    const advice = remediationFor(rule!);
+    expect(advice).not.toContain('electron-builder.yml');
+    expect(advice).toContain('excluded-by-config');
+  });
+});
+
+describe('parseArgs', () => {
+  it('defaults to the archive package:mac writes, with no flags set', () => {
+    const parsed = parseArgs([]);
+    expect(parsed.asarPath).toMatch(/release\/mac-arm64\/Joinery\.app/);
+    expect(parsed.check).toBe(false);
+    expect(parsed.json).toBe(false);
+  });
+
+  it('refuses --check together with --json rather than silently skipping the check', () => {
+    // Review finding 3: `--json` returned early, so `--check --json` exited 0 having checked
+    // nothing — a guard that passes when it did not run is the exact vacuity this file guards.
+    expect(() => parseArgs(['--check', '--json'])).toThrow(/--check/);
+    expect(() => parseArgs(['--json', '--check'])).toThrow(/--check/);
+  });
+});
+
 describe('electron-builder.yml', () => {
   const config = readFileSync(join(REPO_ROOT, 'electron-builder.yml'), 'utf8');
 
@@ -174,5 +234,16 @@ describe('electron-builder.yml', () => {
 
     expect(absentFromTree.length).toBeGreaterThan(0);
     expect(absentFromTree.filter(glob => config.includes(glob))).toEqual([]);
+  });
+});
+
+describe('.github/workflows/ci.yml', () => {
+  it('runs on a change to electron-builder.yml, so the config guard above can fire', () => {
+    // Review finding 1. `missingExclusions` exists to catch a deleted exclusion line in
+    // electron-builder.yml — but CI's `paths` filter did not name that file, so a pull request
+    // editing only it ran no CI at all and the guard never executed. `scripts/**` is in the filter
+    // for exactly this reason; the file the script asserts about has to be too.
+    const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
+    expect(workflow).toContain("- 'electron-builder.yml'");
   });
 });
