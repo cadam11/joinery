@@ -20,3 +20,24 @@ allowBuilds:
   # esbuild links its platform binary; Vite (and therefore `astro build`) needs it.
   esbuild: true
 
+# satteri 0.10.4 is a partial release: `@bruits/satteri-darwin-arm64` and
+# `@bruits/satteri-linux-x64-musl` were never published at that version (the registry jumps
+# 0.10.3 -> 0.10.5 for both), while satteri's own package.json still lists them as optional
+# dependencies. pnpm therefore installs satteri 0.10.4 on Apple Silicon with NO binding of its
+# own, and the NAPI loader's `require('@bruits/satteri-darwin-arm64')` resolves through pnpm's
+# hoisted fallback to the 0.9.5 binding that `@astrojs/starlight` brought in for its own
+# satteri copy. The version guard that would have caught that is inert unless
+# NAPI_RS_ENFORCE_VERSION_CHECK is set, so the mismatch is silent: 0.10.4's JS drives a 0.9.5
+# native parser, container directives never fire, and every `:::note` ships to the page as
+# literal ":::note" body text (J-103).
+#
+# `@astrojs/markdown-satteri@0.3.7` asks for `^0.10.3`, so pinning that range to 0.10.5 — the
+# next release, and one that DOES publish all nine bindings — gives Apple Silicon a matching
+# binary. Linux x64 glibc, which is what the Pages workflow runs, had a valid 0.10.4 binding
+# and was never affected; 0.10.5 is a same-minor bump there.
+#
+# `scripts/check-markdown-directives.mjs` fails the build if this ever regresses. Drop the
+# override once `@astrojs/markdown-satteri` resolves a satteri version whose bindings are
+# complete on their own.
+overrides:
+  'satteri@^0.10.3': 0.10.5

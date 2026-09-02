@@ -28,29 +28,30 @@ export default defineConfig({
   trailingSlash: 'always',
   build: { format: 'directory' },
   /*
-   * NO container directives on this site — no `:::note`, no `:::caution`. Callouts are written
-   * as blockquotes with a bold lead word, and `src/styles/brand.css` styles them. The reason is
-   * measured, not stylistic:
+   * Container directives (`:::note`, `:::caution`) DO work here as of J-103. Starlight enables
+   * the feature by mutating `config.markdown.processor.options.features` from its
+   * `astro:config:setup` hook, and no declaration is needed in this file for that to take
+   * effect — `scripts/check-markdown-directives.mjs` proves it on every `check` and `build`.
    *
-   * Astro 7's default Markdown processor is Sätteri, which disables container directives by
-   * default; Starlight switches the feature on by mutating
-   * `config.markdown.processor.options.features` from its `astro:config:setup` hook. On this
-   * machine that flag does not take effect. `pnpm run build` emitted zero `starlight-aside`
-   * elements and shipped the literal text ":::note … :::" into the HTML, while Starlight's other
-   * transforms from the same plugin set (the `sl-anchor-link` heading anchors) rendered fine.
-   * Declaring `markdown.processor: satteri({ features: { directive: true } })` here did not fix
-   * it either — a probe plugin proved the declared processor WAS in use (161 paragraph visits)
-   * while `containerDirective` never fired once.
+   * They did not work before, and the reason is worth keeping because it was silent. Astro 7's
+   * Markdown processor is Sätteri, a Rust parser reached through a NAPI native binding.
+   * `@astrojs/markdown-satteri@0.3.7` asks for satteri `^0.10.3` and got 0.10.4 — a partial
+   * release whose `@bruits/satteri-darwin-arm64` and `@bruits/satteri-linux-x64-musl` packages
+   * were never published (the registry jumps 0.10.3 to 0.10.5 for both). satteri's loader then
+   * resolved `@bruits/satteri-darwin-arm64` through pnpm's hoisted fallback and got the 0.9.5
+   * binding that `@astrojs/starlight` had installed for its own satteri copy. The NAPI version
+   * guard that would have caught that is inert unless `NAPI_RS_ENFORCE_VERSION_CHECK` is set —
+   * and it is unusable here anyway, because satteri's generated loader compares against a stale
+   * hard-coded "0.10.1" and so rejects the correct binding too. So 0.10.4's JavaScript drove a
+   * 0.9.5 native parser on Apple Silicon, `containerDirective` never fired, and every aside
+   * shipped as literal ":::note" body text. CI (linux-x64-gnu) had a valid 0.10.4 binding and
+   * was never affected, which is the platform split that made this hard to see.
    *
-   * The likely cause is a platform split rather than a config error: the lockfile carries
-   * `@bruits/satteri-darwin-arm64` at 0.9.5 only, so satteri 0.10.4 — the version
-   * `@astrojs/markdown-satteri` resolves — has no native binding for Apple Silicon and runs a
-   * fallback path here. CI is linux-x64, which DOES have the 0.10.4 binding, so asides might
-   * well work there. "Might well work on the machine I cannot see" is not a standard these docs
-   * are held to, and a callout that silently degrades to `:::note` in body text is worse than no
-   * callout at all. Blockquotes render identically on every platform and every processor.
+   * The fix is the `overrides` block in `pnpm-workspace.yaml`, pinning that range to 0.10.5.
    *
-   * Tracked for a follow-up: if the upstream flag becomes reliable, asides can come back.
+   * The site's callouts are still blockquotes with a bold lead word, styled by
+   * `src/styles/brand.css` — that is the house style across every page now, not a workaround,
+   * and converting roughly sixty of them to asides is a separate content decision.
    */
   integrations: [
     starlight({
