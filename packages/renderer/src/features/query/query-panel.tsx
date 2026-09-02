@@ -58,6 +58,7 @@ import { PlaceholderDialog } from './placeholder-dialog';
 import { QueryCommands } from './query-commands';
 import { QueryResults } from './query-results';
 import { QueryToolbar } from './query-toolbar';
+import { watchQueryTabs } from './query-tab-cleanup';
 import { editorPrefsStore, useEditorPrefsStore } from '../../state/editor-prefs';
 import { adoptOpenedFile, openQueryFile, rememberedFilePath, saveQueryToFile } from './query-files';
 import { PLAN_KIND, planFromResult, planRequestFor } from './execution-plan';
@@ -497,17 +498,18 @@ export function QueryPanel(props: IDockviewPanelProps) {
     return () => subscription.dispose();
   }, [props.api]);
 
-  /** Forget the tab's result when the panel goes away for good, so the store does not grow forever. */
-  useEffect(
-    () => () => {
-      if (tabStore.getState().tabs.some(candidate => candidate.id === tabId)) return;
-      queryExecutionStore.getState().forgetTab(tabId);
-      // The plan is per-tab state in a second store, so it needs the same teardown or a closed tab's
-      // plan tree stays in memory for the session.
-      queryPlanStore.getState().forgetTab(tabId);
-    },
-    [tabId]
-  );
+  /**
+   * Start the watcher that forgets a closed tab's result and plan, so the two stores do not grow
+   * forever.
+   *
+   * Not an unmount cleanup, which is what this was until J-62: Dockview unmounts a DEACTIVATED panel,
+   * so a tab closed while it is not in front never gets another unmount and nothing would run. The
+   * watcher lives in `query-tab-cleanup.ts` and keys off `tabStore.tabs`, the event that actually ends
+   * a tab — the same fix `features/chat/chat-store-host.ts` made for the chat stores.
+   */
+  useEffect(() => {
+    watchQueryTabs();
+  }, []);
 
   // Read once, for the editor's uncontrolled initial value. The tab store is the source of truth for the
   // text from then on; see `<SqlEditor>`'s header for why the editor is not a controlled component.
