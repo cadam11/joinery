@@ -245,6 +245,24 @@ export async function applyFixture(
   }
 }
 
+/**
+ * Run arbitrary SQL inside an existing test database, on a connection of the caller's own.
+ *
+ * `applyFixture` only knows the two canned fixture files; a test that needs to stand up extra
+ * objects (a view, a routine, a trigger) needs this. Statements are separated by `;` on MySQL —
+ * the connection is opened with `multipleStatements`, so keep routine bodies single-statement.
+ */
+export async function execInDatabase(engine: Engine, dbName: string, sql: string): Promise<void> {
+  switch (engine) {
+    case 'mssql':
+      return execMssqlInDb(dbName, sql);
+    case 'postgres':
+      return execPostgresInDb(dbName, sql);
+    case 'mysql':
+      return execMysqlInDb(dbName, sql);
+  }
+}
+
 // --- public API ---
 
 export interface FreshDatabase {

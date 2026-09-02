@@ -339,6 +339,15 @@ ORDER BY tc.constraint_type, tc.constraint_name;`);
    * every call, so the PostgreSQL trigger list — and the table-properties dialog that fans out to
    * it — has never worked. Verified against the harness PostgreSQL 16.15. The values are 'O'
    * origin, 'D' disabled, 'R' replica, 'A' always; only 'D' means disabled.
+   *
+   * The event bits were wrong too, and in a way the parse error hid (J-147). `tgtype` bit 1 is
+   * ROW, not INSERT — `src/include/catalog/pg_trigger.h` numbers them ROW 1, BEFORE 2, INSERT 4,
+   * DELETE 8, UPDATE 16, TRUNCATE 32, INSTEAD 64 — so testing bit 1 first labelled *every*
+   * row-level trigger 'insert', whatever it fired on, and only a statement-level trigger ever
+   * reached another arm. Verified against the harness PostgreSQL 16: a `BEFORE UPDATE … FOR EACH
+   * ROW` trigger has `tgtype = 19`. The arms are ordered as `TsqlBuilder.listTriggers` orders
+   * them — INSTEAD OF first, then insert/update/delete — so a trigger on several events reports
+   * the same event on both engines.
    */
   listTriggersQuery(_database: string, schema: string, table: string): ParameterisedQuery {
     const values = this.bindings();
@@ -347,10 +356,10 @@ SELECT
   t.tgname AS name,
   (t.tgenabled = 'D') AS "isDisabled",
   CASE
-    WHEN t.tgtype & 1 = 1 THEN 'insert'
-    WHEN t.tgtype & 4 = 4 THEN 'update'
-    WHEN t.tgtype & 8 = 8 THEN 'delete'
     WHEN t.tgtype & 64 = 64 THEN 'instead_of'
+    WHEN t.tgtype & 4 = 4 THEN 'insert'
+    WHEN t.tgtype & 16 = 16 THEN 'update'
+    WHEN t.tgtype & 8 = 8 THEN 'delete'
     ELSE 'unknown'
   END AS "triggerType",
   NULL AS "createdAt"
