@@ -19,7 +19,12 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { executableInBundle, parseArgs, productNameFromConfig } from './smoke-packaged-app';
+import {
+  assertKeychainIsolationHolds,
+  executableInBundle,
+  parseArgs,
+  productNameFromConfig,
+} from './smoke-packaged-app';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
 
@@ -69,5 +74,31 @@ describe('parseArgs', () => {
 
   it('rejects an unknown flag rather than treating it as a path', () => {
     expect(() => parseArgs(['--visible'])).toThrow(/--visible/);
+  });
+});
+
+describe('assertKeychainIsolationHolds', () => {
+  it('lets the launch proceed while a packaged app still honours the override', () => {
+    expect(() => assertKeychainIsolationHolds(true)).not.toThrow();
+  });
+
+  it('refuses to launch once a packaged app would ignore the override', () => {
+    // The refusal has to happen BEFORE the launch: the writes it prevents happen during
+    // `whenReady`, so a check that ran once a window existed would be too late.
+    expect(() => assertKeychainIsolationHolds(false)).toThrow(/production Keychain/);
+  });
+
+  it('does not refuse today, because nothing in the current resolver consults isPackaged', () => {
+    // This is the assertion that keeps `PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE` honest, and it is
+    // deliberately pointed at the OTHER process's resolver rather than at a comment. J-161 (PR
+    // #113) makes `resolveKeychainServiceName` branch on `runtime.isPackaged` and refuse the
+    // override in a packaged app; on the merged tree this test goes red, which is what forces
+    // whoever lands it to flip the constant instead of remembering to.
+    const resolver = readFileSync(
+      join(REPO_ROOT, 'packages/main/src/services/keychain/service-name.ts'),
+      'utf8'
+    );
+    expect(resolver).not.toContain('isPackaged');
+    expect(() => assertKeychainIsolationHolds()).not.toThrow();
   });
 });

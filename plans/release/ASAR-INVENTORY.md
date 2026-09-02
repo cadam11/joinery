@@ -145,16 +145,37 @@ and quits. Run against the trimmed archive: window created, renderer loaded from
 shell mounted, clean quit. Also proven non-vacuous — against a bundle whose `app.asar` was replaced
 with a stub archive it exits 1.
 
-> **Once PR #113 (J-161) lands, a packaged app ignores `JOINERY_KEYCHAIN_SERVICE`, so this smoke
-> run boots against the developer's production Keychain namespace. It is therefore READ-ONLY: it
-> must never save a profile, run a query, or otherwise write. A build-time test-capability flag is
-> the planned fix (ticket to be filed; relates J-88).**
+> **While `JOINERY_KEYCHAIN_SERVICE` is honoured — i.e. before PR #113 (J-161) lands — this smoke
+> run uses the hermetic test namespace and is safe. Once a packaged app ignores the override, this
+> script must NOT be run against a packaged build until a build-time test-capability flag exists
+> (ticket to be filed; relates J-88), because the boot path can MIGRATE — write and delete —
+> production Keychain entries.**
+>
+> That corrects a weaker earlier claim on this page, that the run was read-only as long as nobody
+> saved a profile or ran a query. Those are operator actions and the script performs none of them,
+> but the boot does its own writing before any assertion runs: `packages/main/src/index.ts:137-139`
+> fires `CredentialStore.getInstance().loadAllIntoCache()` on every `whenReady`, unconditionally and
+> un-awaited, and `credential-store.ts:73-88` takes a legacy-migration branch when the vault key is
+> absent but other accounts exist under the same service — `saveVault()` writes a vault entry, then
+> `keytar.deletePassword` removes every legacy item it found. On a machine whose production vault is
+> still in that pre-migration shape, one run against a packaged build that ignored the override would
+> rewrite and then destroy those items with nobody touching the UI. The bundle is also unsigned
+> (`mac.identity: null`), so it is a different Keychain client than the installed app: reading a
+> production item raises macOS's "allow access?" prompt, and answering _Always Allow_ grants a
+> throwaway binary standing access.
+>
+> `PACKAGED_APP_HONOURS_KEYCHAIN_OVERRIDE` in the script is the gate. It is `true` today because
+> `service-name.ts` reads the override with no reference to `app.isPackaged`; when #113 flips that,
+> the constant must be set to `false` in the same change and the script then refuses to launch. That
+> is not left to memory — `smoke-packaged-app.spec.ts` asserts the resolver does not consult
+> `isPackaged`, so the unit tier goes red on the merged tree until the constant is flipped.
 >
 > The env pin stays in the script regardless — it is what protects the run today and what J-96's
 > structural guard checks for. J-161 refuses it only in a packaged app, on purpose. J-161 also adds
 > a rule that a registered launch site must not name a packaged-bundle path, which this launcher
-> does by necessity, so the two changes have to be sequenced together; that is the coordinator's
-> call and is not pre-empted here.
+> does by necessity, so the two changes have to be sequenced together. The reviewer recommends
+> landing the capability flag first rather than exempting this launcher from that rule; the decision
+> is the coordinator's and is not pre-empted here.
 
 ## Still on the table
 
