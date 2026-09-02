@@ -20,7 +20,7 @@
  * `ColumnMetadata` (`type`, nullable numbers), which is the shape an enriched column converts to.
  */
 
-import type { ColumnMetadata, ForeignKeyInfo, IndexInfo } from '@joinery/shared';
+import type { ColumnMetadata, ForeignKeyAction, ForeignKeyInfo, IndexInfo } from '@joinery/shared';
 
 import type { EnrichedColumn } from '../query/fk-lookup';
 import { formatColumnType } from '../query/row-detail';
@@ -126,14 +126,11 @@ export function keyRows(keys: readonly ForeignKeyInfo[]): readonly KeyRow[] {
 /**
  * The referential actions, as SQL words. `NO ACTION` is the default and says nothing, so it is dropped.
  *
- * **The suppression normalises before it compares**, and that is not defensive dressing:
- * `ForeignKeyInfo.onDelete` is DECLARED as `'no_action' | 'cascade' | 'set_null' | 'set_default'`, and
- * PostgreSQL's catalogue reaches this renderer as `'no action'` — with a space. Comparing against the
- * declared spelling alone let the default through, and the browser gate caught it: every seeded key
- * rendered `ON UPDATE NO ACTION`, which is a column full of the word "default".
- *
- * The declared type being narrower than the values that arrive is a `packages/shared` wart, filed rather
- * than fixed here (that package is out of scope for the rewrite).
+ * Exactly one spelling arrives: `MetadataService.listForeignKeys` normalises every engine's catalogue
+ * onto `ForeignKeyAction` before the row crosses the bridge (J-66). This renderer once had to normalise
+ * for itself, because PostgreSQL reached it as `'no action'` — with a space — while the declared type
+ * said `'no_action'`, and the comparison let the default straight through: every seeded key rendered
+ * `ON UPDATE NO ACTION`. What is left here is display formatting, not defence.
  */
 function referentialRules(key: ForeignKeyInfo): string | null {
   const parts: string[] = [];
@@ -144,10 +141,10 @@ function referentialRules(key: ForeignKeyInfo): string | null {
   return parts.length === 0 ? null : parts.join(' · ');
 }
 
-/** One action as SQL, or `null` for absent and for either spelling of the default. */
-function sqlAction(action: string | undefined): string | null {
-  if (action === undefined || action === '') return null;
-  const words = action.replace(/_/g, ' ').trim().toUpperCase();
+/** One action as SQL words, or `null` when absent and for the default. */
+function sqlAction(action: ForeignKeyAction | undefined): string | null {
+  if (action === undefined) return null;
+  const words = action.replace(/_/g, ' ').toUpperCase();
   return words === 'NO ACTION' ? null : words;
 }
 

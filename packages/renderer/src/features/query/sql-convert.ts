@@ -1,21 +1,14 @@
 /**
- * The SQL dialect converter's one adapter over `query.convertSql` — and the only place in this renderer
- * that touches PLAN.md §7.3's wart.
+ * The SQL dialect converter's one adapter over `query.convertSql`, and the only place in this renderer
+ * that calls it.
  *
- * ── The wart, and why it is contained rather than fixed ─────────────────────────────────────
+ * ── Why the adapter still earns its place ───────────────────────────────────────────────────
  *
- * `query.convertSql(sql, fromEngine: string, toEngine: string)`
- * (`packages/preload/src/index.ts:249-253`) takes **bare strings** for two parameters that have a
- * `DatabaseEngine` union sitting right there in `@joinery/shared`. Two adjacent strings of the same type
- * transpose silently: `convertSql(sql, target, source)` compiles, runs, and converts backwards.
- *
- * PLAN.md §8 puts `packages/preload` out of scope for the rewrite, so the signature stays. What this
- * module does is make the transposition unrepresentable **on this side** of the boundary: the exported
- * function takes a named object, so `from` and `to` cannot swap places, and the widening to `string`
- * happens once, on the line below the comment that says why. Nothing else in the renderer may call
- * `convertSql`.
- *
- * A follow-up ticket for the signature is the right fix; this is the fence until then.
+ * The bridge no longer takes bare strings: J-66 typed both engine parameters as `DatabaseEngine`
+ * (PLAN.md §7.3), so a misspelled dialect name is now a compile error. What a shared union cannot
+ * catch is a **transposition** — `convertSql(sql, target, source)` still type-checks and converts
+ * backwards. This module makes that unrepresentable by taking a named object, so `from` and `to`
+ * cannot swap places. Nothing else in the renderer may call `convertSql`.
  *
  * ── Why the engines are checked here and not by the caller ──────────────────────────────────
  *
@@ -77,9 +70,9 @@ export async function convertSql(request: ConvertRequest): Promise<ConvertOutcom
   }
 
   try {
-    // THE one widening to `string`, and the reason the rest of the renderer goes through this function:
-    // the bridge takes two adjacent bare strings, so passing them positionally anywhere else is a
-    // transposition waiting to happen (PLAN.md §7.3).
+    // THE one positional call, and the reason the rest of the renderer goes through this function:
+    // the bridge's two engine parameters are adjacent and the same type, so passing them
+    // positionally anywhere else is a transposition waiting to happen (PLAN.md §7.3).
     const result = await ipc().query.convertSql(request.sql, request.from, request.to);
     if (!result.success) {
       return {

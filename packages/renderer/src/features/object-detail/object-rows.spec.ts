@@ -132,22 +132,12 @@ describe('keyRows', () => {
     expect(keyRows([key()])[0]?.rules).toBeNull();
   });
 
-  it('suppresses PostgreSQL’s spelling of the default too', () => {
-    // The declared type says `'no_action'`; PostgreSQL's catalogue reaches the renderer as `'no action'`,
-    // with a space. The browser gate caught this — every seeded key rendered `ON UPDATE NO ACTION`.
-    const pgSpelling = {
-      onDelete: 'cascade',
-      onUpdate: 'no action',
-    } as unknown as Partial<ForeignKeyInfo>;
-    expect(keyRows([key(pgSpelling)])[0]?.rules).toBe('ON DELETE CASCADE');
-    const bothDefault = {
-      onDelete: 'no action',
-      onUpdate: 'no action',
-    } as unknown as Partial<ForeignKeyInfo>;
-    expect(keyRows([key(bothDefault)])[0]?.rules).toBeNull();
-    // And an empty string — a provider that reported the field without a value.
-    expect(
-      keyRows([key({ onDelete: '' } as unknown as Partial<ForeignKeyInfo>)])[0]?.rules
-    ).toBeNull();
+  it('renders the two actions the first case does not cover', () => {
+    // `MetadataService.listForeignKeys` normalises each engine's spelling onto `ForeignKeyAction`
+    // before the row crosses the bridge (J-66), so the five members of that union are the whole
+    // input domain — this renderer used to receive PostgreSQL's `'no action'`, with a space, and
+    // had to suppress it here. `restrict` is the member the declared type omitted altogether.
+    expect(keyRows([key({ onDelete: 'restrict' })])[0]?.rules).toBe('ON DELETE RESTRICT');
+    expect(keyRows([key({ onUpdate: 'set_default' })])[0]?.rules).toBe('ON UPDATE SET DEFAULT');
   });
 });

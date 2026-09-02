@@ -19,7 +19,10 @@ import type {
   TriggerInfo,
   ExtendedProperty,
   TableProperties,
+  ForeignKeyAction,
 } from '@joinery/shared';
+import { FOREIGN_KEY_ACTIONS } from '@joinery/shared';
+import { createLogger } from '../../utils/logger';
 import { BaseSingleton } from '../../utils/singleton';
 import { ObjectCache } from '../../utils/object-cache';
 import { TsqlBuilder } from '../../utils/tsql-builder';
@@ -28,6 +31,30 @@ import { runBoundQuery } from './bound-query';
 import type { SQLDialect } from './dialect';
 import type { ParameterisedQuery } from './dialect/parameterised-query';
 import { tablePropertiesPgDsqlQuery, tablePropertiesPgStandardQuery } from './pg-table-properties';
+
+const logger = createLogger('MetadataService');
+
+/**
+ * One spelling of a referential action, whatever the engine called it.
+ *
+ * SQL Server arrives already underscored (`TsqlBuilder.listForeignKeys` maps the enumerated
+ * `sys.foreign_keys.delete_referential_action`). PostgreSQL and MySQL arrive as
+ * `information_schema`'s prose, lower-cased by their dialects: `no action`, `set null`, `restrict`.
+ * Both spellings reached the renderer before J-66, so every consumer had to normalise before it
+ * could compare — and the one that forgot rendered `ON UPDATE NO ACTION` on every PostgreSQL key.
+ *
+ * SQL:2003 defines exactly the five actions in `FOREIGN_KEY_ACTIONS`, so anything else is a driver
+ * or engine change rather than user data: it is logged and reported absent, never cast through.
+ */
+function foreignKeyAction(raw: unknown): ForeignKeyAction | undefined {
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  const action = raw.trim().toLowerCase().replace(/\s+/g, '_');
+  if ((FOREIGN_KEY_ACTIONS as readonly string[]).includes(action)) {
+    return action as ForeignKeyAction;
+  }
+  logger.warn(`Unrecognised foreign-key referential action from the catalogue: ${action}`);
+  return undefined;
+}
 
 /**
  * A MySQL statement with the values its `?` placeholders bind, in order.
@@ -347,8 +374,8 @@ export class MetadataService extends BaseSingleton {
       referencedSchema: row.referencedSchema,
       referencedTable: row.referencedTable,
       referencedColumns: row.referencedColumns ? row.referencedColumns.split(', ') : [],
-      onDelete: row.onDelete as ForeignKeyInfo['onDelete'],
-      onUpdate: row.onUpdate as ForeignKeyInfo['onUpdate'],
+      onDelete: foreignKeyAction(row.onDelete),
+      onUpdate: foreignKeyAction(row.onUpdate),
     }));
   }
 
