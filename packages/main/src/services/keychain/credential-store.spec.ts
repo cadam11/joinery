@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { APP_ID, type KeychainStatus } from '@joinery/shared';
+import { APP_ID, type KeychainStatus, type LogEntry } from '@joinery/shared';
 // Resolved to packages/main/src/__mocks__/keytar.ts via the vitest alias.
 import * as keytar from 'keytar';
+// Namespace import because `vi.spyOn` needs an object to patch; the store's own import style does
+// not matter (CommonJS makes a named import the same property read), so the seam this drives is
+// the call itself, not the import form (J-161).
+import * as runtimeMode from '../../utils/runtime-mode';
+// Same seam, same reason, for the other half of the packaged decision (J-167): whether the BUNDLE
+// was stamped as a test build. Real production module — `isTestCapableBuild` reads
+// `process.resourcesPath`, which is undefined in a vitest process, so it answers `false` here
+// unless a spec says otherwise.
+import * as testBuildCapability from '../../utils/test-build-capability';
+import { onLogEntry } from '../../utils/logger';
 import { CredentialStore } from './credential-store';
 import { KEYCHAIN_SERVICE_ENV_VAR } from './service-name';
 
@@ -177,6 +187,8 @@ describe('CredentialStore keychain degradation', () => {
  */
 describe('CredentialStore keychain service name', () => {
   const spies: ReturnType<typeof vi.spyOn>[] = [];
+  /** Spies whose signatures differ from the keytar ones above, restored the same way. */
+  const otherSpies: { mockRestore(): void }[] = [];
   let previousOverride: string | undefined;
 
   beforeEach(() => {
@@ -187,6 +199,7 @@ describe('CredentialStore keychain service name', () => {
 
   afterEach(() => {
     while (spies.length > 0) spies.pop()?.mockRestore();
+    while (otherSpies.length > 0) otherSpies.pop()?.mockRestore();
     if (previousOverride === undefined) delete process.env[KEYCHAIN_SERVICE_ENV_VAR];
     else process.env[KEYCHAIN_SERVICE_ENV_VAR] = previousOverride;
   });
@@ -221,5 +234,108 @@ describe('CredentialStore keychain service name', () => {
 
     expect(services.length).toBeGreaterThan(0);
     expect(new Set(services)).toEqual(new Set(['ca.adam11.joinery.tests']));
+  });
+
+  /**
+   * The packaged half of the same wiring (J-161).
+   *
+   * These exist because hard-coding `isPackaged: false` at the call site — i.e. turning the whole
+   * security fix off — left all 3502 tests green: `app.isPackaged` cannot be faked in a vitest
+   * process (there is no electron in one), so the resolver's proven packaged branch was reachable
+   * by nothing. Making the signal a call through `runtimeMode` gives the spec the same seam the
+   * repo already uses for `mysql.createPool` — a property read at call time — so the packaged
+   * branch of the WIRING is now asserted rather than described in a report.
+   */
+  function pretendPackaged(): void {
+    otherSpies.push(vi.spyOn(runtimeMode, 'isPackagedApp').mockReturnValue(true));
+    CredentialStore.resetInstance();
+  }
+
+  /**
+   * A packaged bundle stamped as a test build (J-167). Both signals are spied, because the store
+   * must read BOTH at the call site: `isTestCapableBuild` alone would leave a release build
+   * honouring nothing, and `isPackagedApp` alone is what J-161 already covers.
+   */
+  function pretendPackagedTestBuild(): void {
+    otherSpies.push(vi.spyOn(runtimeMode, 'isPackagedApp').mockReturnValue(true));
+    otherSpies.push(vi.spyOn(testBuildCapability, 'isTestCapableBuild').mockReturnValue(true));
+    CredentialStore.resetInstance();
+  }
+
+  it('refuses the override and keeps the application id when the app is packaged', async () => {
+    process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+    pretendPackaged();
+
+    const services = await servicesTouchedByASet();
+
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set([APP_ID]));
+  });
+
+  it('says so through the main logger, naming neither service', async () => {
+    const entries: LogEntry[] = [];
+    const stopListening = onLogEntry(entry => entries.push(entry));
+    try {
+      process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+      pretendPackaged();
+      await servicesTouchedByASet();
+    } finally {
+      stopListening();
+    }
+
+    const refusals = entries.filter(
+      entry =>
+        entry.level === 'warn' &&
+        entry.tag === 'CredentialStore' &&
+        entry.message.includes(KEYCHAIN_SERVICE_ENV_VAR)
+    );
+
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].message).not.toContain(APP_ID);
+    expect(refusals[0].message).not.toContain('ca.adam11.joinery.tests');
+  });
+
+  /**
+   * The J-167 half of the wiring, and the mutation that makes it non-vacuous: hard-coding
+   * `isTestBuild: true` at the call site passes this test and fails the release one above, while
+   * hard-coding `false` passes that one and fails this. Only a real read of both signals satisfies
+   * both, which is the property `scripts/release/smoke-packaged-app.ts` depends on to boot a real
+   * bundle without touching the developer's production vault.
+   */
+  it('honours the override in a packaged bundle stamped as a test build', async () => {
+    process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+    pretendPackagedTestBuild();
+
+    const services = await servicesTouchedByASet();
+
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set(['ca.adam11.joinery.tests']));
+  });
+
+  it('logs no refusal when a test build obeys the override', async () => {
+    const entries: LogEntry[] = [];
+    const stopListening = onLogEntry(entry => entries.push(entry));
+    try {
+      process.env[KEYCHAIN_SERVICE_ENV_VAR] = 'ca.adam11.joinery.tests';
+      pretendPackagedTestBuild();
+      await servicesTouchedByASet();
+    } finally {
+      stopListening();
+    }
+
+    expect(entries.filter(entry => entry.message.includes(KEYCHAIN_SERVICE_ENV_VAR))).toEqual([]);
+  });
+
+  it('stays silent about the environment when nothing overrides the service', async () => {
+    const entries: LogEntry[] = [];
+    const stopListening = onLogEntry(entry => entries.push(entry));
+    try {
+      pretendPackaged();
+      await servicesTouchedByASet();
+    } finally {
+      stopListening();
+    }
+
+    expect(entries.filter(entry => entry.message.includes(KEYCHAIN_SERVICE_ENV_VAR))).toEqual([]);
   });
 });

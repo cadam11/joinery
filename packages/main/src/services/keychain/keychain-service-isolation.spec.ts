@@ -22,15 +22,21 @@ import { KEYCHAIN_SERVICE_ENV_VAR } from './service-name';
  *  2. it never names the production service as a string literal — so the override can never be
  *     pinned back at the thing it exists to avoid.
  *
- * And one more rule for a launcher that starts a PACKAGED bundle, because for that launcher rule 1
- * is not sufficient on its own (J-167). A packaged Joinery is the signed binary the user trusted
- * with their Keychain, so J-161 has it refuse the override — which leaves a packaged launcher
- * setting a variable the app ignores, booting against the production vault, where the credential
- * store's legacy migration writes a vault entry and deletes every legacy item it finds. So:
+ * Then one rule each for the two kinds of launcher, because rule 1 alone means something different
+ * to each. An UNPACKAGED launcher's environment pin is honoured, and that is the whole reason it is
+ * unpackaged, so:
  *
- *  3. a packaged launcher refuses to launch a bundle that was not built with the build-time test
- *     capability (`scripts/release/test-build-marker.ts`), which is the only thing an environment
- *     cannot forge.
+ *  3. it boots the app UNPACKAGED, from the built main entry rather than a packaged bundle —
+ *     because a packaged app refuses the override unless the BUNDLE carries the build-time test
+ *     capability (J-161 + J-167), so a Playwright launcher switched to `Joinery.app` would keep
+ *     rule 1 green while silently handing the tier the developer's real vault.
+ *
+ * A PACKAGED launcher cannot satisfy rule 3 by construction — booting a bundle is its job — so it
+ * carries the other half of the same guarantee instead (J-167):
+ *
+ *  4. it refuses to launch a bundle that was not built with the build-time test capability
+ *     (`scripts/release/test-build-marker.ts`), which is the only thing an environment cannot
+ *     forge, and which is exactly what makes that bundle honour the override.
  */
 
 /**
@@ -68,6 +74,16 @@ const LAUNCH_SITES = [...UNPACKAGED_LAUNCH_SITES, ...PACKAGED_LAUNCH_SITES] as c
 
 /** The production service name, as a source-code string literal in each of the three quote styles. */
 const PRODUCTION_SERVICE_LITERAL = new RegExp(`['"\`]${APP_ID.replace(/\./g, '\\.')}['"\`]`);
+
+/**
+ * The shapes a path into a PACKAGED macOS bundle takes: the app bundle itself, the executable
+ * inside it, and the archive electron-builder puts the code in. An UNPACKAGED launcher that
+ * mentions any of them is no longer launching the unpackaged app, and an unpackaged launch is the
+ * only mode that honours the keychain override with nothing else required (J-161) — a packaged
+ * bundle honours it only when it carries the build-time marker (J-167), which is why the packaged
+ * launcher is held to rule 4 instead of this one.
+ */
+const PACKAGED_BUNDLE_PATH = /Joinery\.app|Contents\/MacOS|app\.asar/;
 
 beforeAll(() => {
   expect(existsSync(join(REPO_ROOT, 'pnpm-workspace.yaml'))).toBe(true);
@@ -116,6 +132,14 @@ describe.each(LAUNCH_SITES)('%s launches Electron with an isolated keychain', re
 
   it('never names the production keychain service', () => {
     expect(source).not.toMatch(PRODUCTION_SERVICE_LITERAL);
+  });
+});
+
+describe.each(UNPACKAGED_LAUNCH_SITES)('%s launches the unpackaged app', relativePath => {
+  const source = readLaunchSite(relativePath);
+
+  it('launches the unpackaged app, not a packaged bundle', () => {
+    expect(source).not.toMatch(PACKAGED_BUNDLE_PATH);
   });
 });
 

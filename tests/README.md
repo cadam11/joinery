@@ -97,8 +97,41 @@ from it. Nothing sets the variable in a shipped app, so an installed Joinery sti
   `tests/scripts/perf-baseline.mjs`.
 - Applied AFTER a spec's own `envOverrides`, on purpose: which vault the app under test writes to is
   a property of the tier, not a per-spec knob.
+- **Honoured only while the app is unpackaged** (J-161). Both launchers boot
+  `packages/main/dist/index.js` through `node_modules/electron`, so `app.isPackaged` is false and
+  the override applies. A packaged `Joinery.app` refuses the variable, keeps its own service, and
+  logs a `CredentialStore` warning — a shipped, signed app is the one binary the user has already
+  trusted with their keychain, and the environment does not get to aim it elsewhere.
+  **So a launcher in this directory must never point Electron at a packaged bundle**: the pin
+  would still be set, the app would ignore it, and the tier would read and rewrite the developer's
+  real vault. The one launcher that does boot a bundle lives outside this directory and earns the
+  override a different way — see [below](#launchers-that-start-a-packaged-bundle).
 - Guarded by `packages/main/src/services/keychain/keychain-service-isolation.spec.ts`, which fails
-  the **unit** tier if a launcher stops setting the variable or names the production service.
+  the **unit** tier if a launcher stops setting the variable, names the production service, or
+  starts launching a packaged bundle.
+
+### The same rule holds for every environment hatch
+
+`JOINERY_KEYCHAIN_SERVICE` is not the only variable the tiers use to steer the app, and since J-161
+none of them are honoured by a packaged build. `packages/main/src/utils/runtime-mode.ts` is the one
+place that reads `app.isPackaged` and decides:
+
+| Variable                   | Set by         | What it does unpackaged                                                                    | Packaged                                                                                                                 |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `JOINERY_TEST=1`           | both launchers | keeps the main window hidden, so it does not flash in and out on every spec                | ignored — the window shows — unless the bundle is stamped a test build                                                   |
+| `NODE_ENV=development`     | `pnpm run dev` | loads the Vite dev server instead of the bundled renderer, opens devtools, relaxes the CSP | ignored, stamped or not — a bundle has no dev server, and this is the hatch that would serve someone else's page into it |
+| `JOINERY_KEYCHAIN_SERVICE` | both launchers | repoints the credential vault (above)                                                      | ignored, with a logged warning — unless the bundle is stamped a test build                                               |
+
+The practical consequence for anyone writing a new tier: **a launcher that starts a packaged
+`Joinery.app` built by `pnpm run package` gets none of this.** It will show a window, and it will
+read and write the developer's real keychain vault. Build it with `pnpm run package:test` instead —
+the capability is baked into the bundle rather than passed in the environment (J-167), because an
+environment variable is exactly the thing a shipped app must not trust: whoever can set one to
+unlock a shipped app can set two.
+
+`packages/main/src/utils/env-hatch-gating.spec.ts` fails the unit tier if any other file in
+`packages/main` so much as names one of these variables, which is what keeps the rule true through
+the next refactor.
 
 A test run therefore leaves exactly one stray keychain item, `ca.adam11.joinery.tests`. Delete it in
 Keychain Access (or `security delete-generic-password -s ca.adam11.joinery.tests`) whenever you like;
@@ -115,9 +148,15 @@ the environment can forge it, and `pnpm run verify:package` fails on a release b
 it (J-167).
 
 `keychain-service-isolation.spec.ts` therefore splits its launch sites in two. Every launcher must
-set `JOINERY_KEYCHAIN_SERVICE` and must not name the production service; a packaged launcher must
-additionally refuse a bundle that was not stamped, which `assertBundleIsTestCapable` does before
-Electron starts.
+set `JOINERY_KEYCHAIN_SERVICE` and must not name the production service; an unpackaged launcher
+must additionally never name a bundle path, and a packaged launcher must additionally refuse a
+bundle that was not stamped, which `assertBundleIsTestCapable` does before Electron starts.
+
+The stamp is what makes the pin work: `packages/main/src/utils/test-build-capability.ts` reads the
+marker, `packages/main/src/utils/runtime-mode.ts` carries it as `RuntimeSignals.isTestBuild`, and
+`services/keychain/service-name.ts` honours the override for a runtime that has it. So the smoke
+run gets both halves it needs — a throwaway keychain service and a hidden window — and a release
+bundle, which cannot carry the marker, gets neither.
 
 ## The Docker panel's pinned container inventory (visual tier)
 

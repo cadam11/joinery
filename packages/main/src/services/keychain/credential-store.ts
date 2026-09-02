@@ -7,6 +7,13 @@ import * as keytar from 'keytar';
 import { type KeychainStatus } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
+// Namespace import to keep the seam visible at the call site below: the spec drives the packaged
+// branch of this wiring with `vi.spyOn(runtimeMode, 'isPackagedApp')` (J-161). Not load-bearing —
+// this package compiles to CommonJS, where a named import is a property read on the same module
+// object, and the spy reaches it either way (measured in the cycle-9 re-review). Prefer this form
+// anyway, so the next reader can see why the call is a call.
+import * as runtimeMode from '../../utils/runtime-mode';
+import { isTestCapableBuild } from '../../utils/test-build-capability';
 import { resolveKeychainServiceName } from './service-name';
 
 const log = createLogger('CredentialStore');
@@ -22,11 +29,11 @@ export type KeychainStatusListener = (status: KeychainStatus) => void;
 
 export class CredentialStore extends BaseSingleton {
   /**
-   * The Keychain service every entry below lives under, resolved once per instance from the
-   * environment (J-96). Read here and nowhere else, so a test launcher can repoint the whole
-   * store at a throwaway namespace by setting one variable before Electron starts.
+   * The Keychain service every entry below lives under, resolved once per instance in the
+   * constructor (J-96, J-161). Read here and nowhere else, so a test launcher can repoint the
+   * whole store at a throwaway namespace by setting one variable before Electron starts.
    */
-  private readonly serviceName: string = resolveKeychainServiceName();
+  private readonly serviceName: string;
   // In-memory cache - all credentials loaded from single keychain entry
   private cache: Map<string, string> = new Map();
   private cacheLoaded = false;
@@ -38,6 +45,21 @@ export class CredentialStore extends BaseSingleton {
    * rather than polling or reaching into this class's fields (J-118).
    */
   private statusListeners: Set<KeychainStatusListener> = new Set();
+
+  constructor() {
+    super();
+    // Every ambient read that decides which vault this process touches is here, at the call site,
+    // and the decision itself is a pure function (J-161, J-167) — a named accessor
+    // (`utils/runtime-mode.ts`, the one place Electron's `app.isPackaged` is read and gated), a
+    // filesystem probe of this bundle's own Resources directory, and `process.env`.
+    const resolution = resolveKeychainServiceName({
+      isPackaged: runtimeMode.isPackagedApp(),
+      isTestBuild: isTestCapableBuild(),
+      env: process.env,
+    });
+    if (resolution.warning !== undefined) log.warn(resolution.warning);
+    this.serviceName = resolution.serviceName;
+  }
 
   /**
    * Load all credentials from keychain into memory cache. Startup kicks this
