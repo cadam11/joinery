@@ -48,7 +48,10 @@ function context(overrides: Partial<RunContext> = {}): RunContext {
     tabTitle: 'Query 1',
     connectionId: 'conn-1',
     database: 'shop',
-    querySettings: { maxRowsToDisplay: 500 } as RunContext['querySettings'],
+    querySettings: {
+      maxRowsToDisplay: 500,
+      defaultTimeout: 45_000,
+    } as RunContext['querySettings'],
     sql: 'select 1',
     ...overrides,
   };
@@ -105,7 +108,7 @@ describe('refusals', () => {
 });
 
 describe('the happy path', () => {
-  it('executes with the tab’s connection, database and row cap', async () => {
+  it('executes with the tab’s connection, database, row cap and query timeout', async () => {
     const execute = vi.fn(async () => okResult);
     teardowns.push(installJoineryMock({ query: { execute } }));
     const { api, unmount } = mountHook();
@@ -120,6 +123,9 @@ describe('the happy path', () => {
         sql: 'select 1',
         tabId: 'tab-1',
         maxRows: 500,
+        // J-54: `QuerySettings.defaultTimeout` reaching `QueryRequest.timeout` is the whole
+        // consumer chain for that setting on this side of IPC.
+        timeout: 45_000,
       })
     );
   });

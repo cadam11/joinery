@@ -13,6 +13,7 @@ import { ConnectionPoolManager } from './connection-pool';
 import type { MySQLPoolTrust } from './mysql-pool-options';
 import { MetadataService } from './metadata';
 import { applyRowCap } from './row-cap';
+import { resolveQueryTimeoutMs, withQueryTimeout } from './query-timeout';
 
 const log = createLogger('QueryExecutor');
 
@@ -64,6 +65,10 @@ export class QueryExecutor extends BaseSingleton {
   async execute(request: QueryRequest, options: ExecuteOptions = {}): Promise<QueryResult> {
     const queryId = request.queryId || uuidv4();
     const startTime = Date.now();
+    // Resolved once, here, so all three engines get the same validated value — and so a bogus
+    // timeout off the IPC boundary cannot reach a driver or a timer. See query-timeout.ts for
+    // why the deadline is Joinery's to enforce and how it stacks with the profile's own.
+    const timeoutMs = resolveQueryTimeoutMs(request.timeout);
 
     // Track active query
     const activeQuery: ActiveQuery = {
@@ -78,10 +83,17 @@ export class QueryExecutor extends BaseSingleton {
       // Route to engine-specific executor
       const engine = this.poolManager.getEngineForProfile(request.connectionId);
       if (engine === 'postgresql') {
-        return await this.executePg(request, activeQuery, queryId, startTime);
+        return await this.executePg(request, activeQuery, queryId, startTime, timeoutMs);
       }
       if (engine === 'mysql') {
-        return await this.executeMySQL(request, activeQuery, queryId, startTime, options);
+        return await this.executeMySQL(
+          request,
+          activeQuery,
+          queryId,
+          startTime,
+          options,
+          timeoutMs
+        );
       }
 
       const pool = await this.poolManager.getPool(request.connectionId, request.database);
@@ -153,7 +165,7 @@ export class QueryExecutor extends BaseSingleton {
         // Set database context in its own batch
         const setupReq = pool.request();
         activeQuery.request = setupReq;
-        await setupReq.batch(usePrefix.trimEnd());
+        await this.runBatch(setupReq, usePrefix.trimEnd(), timeoutMs);
       }
 
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -174,7 +186,7 @@ export class QueryExecutor extends BaseSingleton {
           if (this.requiresFirstInBatch(batchSql)) {
             const setupReq = pool.request();
             activeQuery.request = setupReq;
-            await setupReq.batch(usePrefix.trimEnd());
+            await this.runBatch(setupReq, usePrefix.trimEnd(), timeoutMs);
             sql = batchSql;
           } else {
             sql = usePrefix + batchSql;
@@ -186,7 +198,7 @@ export class QueryExecutor extends BaseSingleton {
         const sqlRequest = pool.request();
         activeQuery.request = sqlRequest;
 
-        const result = await sqlRequest.batch(sql);
+        const result = await this.runBatch(sqlRequest, sql, timeoutMs);
 
         // Process result sets from this batch
         if (Array.isArray(result.recordsets)) {
@@ -265,6 +277,26 @@ export class QueryExecutor extends BaseSingleton {
   }
 
   /**
+   * One MSSQL batch, under the per-query deadline.
+   *
+   * `Request.cancel()` sends an attention packet, so the server aborts the batch rather than
+   * Joinery merely walking away from it — the same call `cancel()` below uses for a user
+   * cancellation. It is per batch because tedious's own `requestTimeout` is per request too, so
+   * a `GO`-separated script keeps the semantics it already had.
+   */
+  private runBatch(
+    request: mssql.Request,
+    sql: string,
+    timeoutMs: number | undefined
+  ): Promise<mssql.IResult<Record<string, unknown>>> {
+    return withQueryTimeout(
+      timeoutMs,
+      () => request.cancel(),
+      () => request.batch<Record<string, unknown>>(sql)
+    );
+  }
+
+  /**
    * Cancel a running query
    */
   async cancel(queryId: string): Promise<boolean> {
@@ -315,7 +347,8 @@ export class QueryExecutor extends BaseSingleton {
     request: QueryRequest,
     activeQuery: ActiveQuery,
     queryId: string,
-    startTime: number
+    startTime: number,
+    timeoutMs: number | undefined
   ): Promise<QueryResult> {
     // PG sets database at the connection/pool level — pass database to get the right pool
     const pool = await this.poolManager.getPgPool(request.connectionId, request.database);
@@ -324,8 +357,22 @@ export class QueryExecutor extends BaseSingleton {
       return this.createCancelledResult(queryId, startTime);
     }
     const client = await pool.connect();
+    /**
+     * Set when the deadline fires, and passed to `release` so the client is DESTROYED rather
+     * than pooled: pg leaves an already-sent query in flight when it gives up on it
+     * (`pg/lib/client.js:719-727` destroys the stream only while pipelining), and the next
+     * borrower would share a socket with a response it never asked for. `release(undefined)` is
+     * the ordinary release, so there is still exactly one release on every path.
+     */
+    let abandoned: Error | undefined;
     try {
-      const result = await client.query(request.sql);
+      const result = await withQueryTimeout(
+        timeoutMs,
+        error => {
+          abandoned = error;
+        },
+        () => client.query(request.sql)
+      );
       const results = Array.isArray(result) ? result : [result];
 
       const allResultSets: ResultSet[] = [];
@@ -366,7 +413,7 @@ export class QueryExecutor extends BaseSingleton {
         request.maxRows
       );
     } finally {
-      client.release();
+      client.release(abandoned);
     }
   }
 
@@ -378,7 +425,8 @@ export class QueryExecutor extends BaseSingleton {
     activeQuery: ActiveQuery,
     queryId: string,
     startTime: number,
-    options: ExecuteOptions
+    options: ExecuteOptions,
+    timeoutMs: number | undefined
   ): Promise<QueryResult> {
     // MySQL supports USE for database context switching.
     // Trust level defaults to 'restricted' (J-137): only a caller that says it
@@ -396,7 +444,16 @@ export class QueryExecutor extends BaseSingleton {
 
     const conn = await pool.getConnection();
     try {
-      const [rawRows, rawFields] = await conn.query(request.sql);
+      const [rawRows, rawFields] = await withQueryTimeout(
+        timeoutMs,
+        // mysql2 leaves a timed-out connection fatally errored with a result still pending, so
+        // it must not go back to the pool. `destroy()` detaches it first
+        // (`mysql2/lib/pool_connection.js:57-69` nulls `_pool`), which makes the `release()`
+        // below a verified no-op (`release()` returns early when `_pool` is null) rather than a
+        // double free.
+        () => conn.destroy(),
+        () => conn.query(request.sql)
+      );
 
       const allResultSets: ResultSet[] = [];
       const allMessages: string[] = [];

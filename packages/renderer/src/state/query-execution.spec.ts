@@ -23,6 +23,7 @@ const REQUEST = {
   database: 'shop',
   sql: 'select 1',
   maxRows: 10_000,
+  timeout: 30_000,
 };
 
 const okResult = (queryId = 'query-1'): QueryResult => ({
@@ -89,11 +90,13 @@ describe('execute', () => {
     await createQueryExecutionStore().getState().execute(REQUEST);
 
     // `tabId` is what makes the main process persist the snapshot itself instead of the renderer
-    // shipping the whole result set back over IPC; `maxRows` is what truncates before it crosses.
+    // shipping the whole result set back over IPC; `maxRows` is what truncates before it crosses;
+    // `timeout` is the deadline the executor enforces per engine (J-54).
     expect(execute).toHaveBeenCalledWith(
       expect.objectContaining({
         tabId: 'tab-1',
         maxRows: 10_000,
+        timeout: 30_000,
         sql: 'select 1',
         database: 'shop',
       })

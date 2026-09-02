@@ -97,19 +97,28 @@ test.describe('Joinery — the settings panel', () => {
   });
 
   /*
-   * The J-44 rule, from the outside: the one control with no consumer is DISABLED and says whose job it
-   * is. The unit tier owns the exhaustive walk (`settings-dialog.spec.tsx`); what this adds is that the
-   * disabling survives the real build, where a `disabled` attribute lost to a Tailwind variant or a
-   * missing prop would otherwise ship a live-looking inert field.
+   * The last control in this panel that had no consumer, now that it has one (J-54): the timeout is
+   * set to its minimum and a query that sleeps well past it is stopped and says so.
+   *
+   * Asserted here rather than only in the unit tier because nothing below this level can see the
+   * whole chain: the setting is written in the renderer, sent as `QueryRequest.timeout`, and enforced
+   * by a timer in the main process that aborts the real pg client. The seeded container's `pg_sleep`
+   * is what makes the deadline the only reason the query could end.
    */
-  test('ships the unconsumed timeout control disabled, with its owner named', async () => {
+  test('stops a query at the timeout the panel was given', async () => {
     await withJoineryReact(async ({ app, window }) => {
-      await openSettings(app, window);
-      await openSettingsGroup(window, 'query');
+      await readyEditor(window);
 
-      const timeout = window.getByTestId('settings-query-timeout');
-      await expect(timeout).toBeDisabled();
-      await expect(window.getByTestId('settings-group-query')).toContainText(/J-\d+/);
+      await withSettings(app, window, 'query', async page => {
+        await setNumberSetting(page, 'settings-query-timeout', 5);
+      });
+
+      await typeSql(window, 'SELECT pg_sleep(30)');
+      await executeQuery(window);
+
+      // The message names the setting, so a user who did not remember lowering it can find it.
+      await expect(window.getByTestId('query-results-error-text')).toContainText(/timed out/i);
+      await expect(window.getByTestId('query-results-error-text')).toContainText(/5s/);
     });
   });
 

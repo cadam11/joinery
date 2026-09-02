@@ -49,6 +49,12 @@ export interface ExecuteRequest {
   readonly sql: string;
   /** `QuerySettings.maxRowsToDisplay` — the executor truncates main-side, before IPC. */
   readonly maxRows: number;
+  /**
+   * `QuerySettings.defaultTimeout`, in milliseconds — the deadline the main-process executor
+   * enforces per engine (J-54). The connection profile's own request timeout still applies, so
+   * whichever of the two is shorter is what a query actually gets.
+   */
+  readonly timeout: number;
 }
 
 export interface QueryExecutionState {
@@ -170,6 +176,7 @@ export function createQueryExecutionStore() {
             // round-tripping the whole result set back over IPC (`:1826-1828`).
             tabId: request.tabId,
             maxRows: request.maxRows,
+            timeout: request.timeout,
           });
 
           // Superseded: another execute (or a cancel) replaced this tab's record while we waited.
