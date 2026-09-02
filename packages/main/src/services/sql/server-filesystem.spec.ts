@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ServerFilesystemService,
   mapDirTreeRow,
   sanitizeServerPathForTest as sanitizeServerPath,
   serverPathStyle,
@@ -136,5 +137,21 @@ describe('sanitizeServerPath — the injection guard (J-50)', () => {
     it('answers null for anything unrooted, so one place refuses it', () => {
       expect(serverPathStyle('data')).toBeNull();
     });
+  });
+});
+
+describe('ServerFilesystemService surface (J-49)', () => {
+  /**
+   * `pathExists` was removed, not repaired. It ran
+   * `SELECT @exists as exists;` — `EXISTS` is a T-SQL reserved keyword, so an unbracketed alias
+   * is a syntax error and the statement failed on every call. A bare `catch { return false; }`
+   * turned that into a permanent, silent `false`, which is precisely the answer a caller would
+   * read as "the path is not there". Nothing ever called it, so there is no behaviour to keep;
+   * this pins that a broken, error-swallowing probe does not come back untested.
+   */
+  it('exposes no pathExists', () => {
+    expect(Object.getOwnPropertyNames(ServerFilesystemService.prototype)).not.toContain(
+      'pathExists'
+    );
   });
 });
