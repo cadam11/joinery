@@ -111,6 +111,16 @@ administrator command_
 Your next query opens a fresh connection on the same pool. Nothing else in the app is disturbed,
 and no work in another tab is affected.
 
+MySQL reports the same thing in its own driver's words — an administrator's `KILL`, a server
+restart, or anything else that closes the socket under a connection Joinery is holding:
+
+_MySQL connection error on MySQL \<profile\> (\<database\>, restricted)
+\[PROTOCOL_CONNECTION_LOST\]: Connection lost: The server closed the connection._
+
+The trailing `restricted` or `script` names which of the two pools Joinery keeps per MySQL database
+lost the connection; `script` is the one the query editor uses. The outcome is the same as above —
+one connection discarded, the next query opens a fresh one.
+
 ## Dropped SSH tunnels
 
 A silently dropped TCP socket — a NAT or firewall idle timeout, a network change, a laptop going

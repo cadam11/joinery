@@ -200,16 +200,48 @@ export class ConnectionPoolManager extends BaseSingleton {
    * Logging is the whole job: both drivers have already given up on the connection by the time
    * they emit, so the pool stays usable and opens a fresh connection on the next call.
    *
-   * mysql2 pools are deliberately NOT guarded. `PromisePool` inherits only
+   * mysql2 *pools* are deliberately NOT guarded here. `PromisePool` inherits only
    * `acquire | connection | enqueue | release` from the core pool
    * (`mysql2/lib/promise/pool.js:18`) and neither pool class ever emits `'error'`, so a listener
-   * there would be unreachable code; its `PoolConnection` registers its own
-   * (`mysql2/lib/pool_connection.js:14-16`).
+   * there would be unreachable code. Its connections are guarded one level down, by
+   * {@link guardMySQLConnectionErrors}.
    */
   private guardPoolErrors(pool: EventEmitter, label: string): void {
     pool.on('error', (err: unknown) => {
       const code = (err as { code?: string } | null)?.code;
       log.error(`Pool error on ${label}${code ? ` [${code}]` : ''}: ${this.errMessage(err)}`);
+    });
+  }
+
+  /**
+   * Say something when a pooled MySQL connection dies (J-184).
+   *
+   * mysql2's `PoolConnection` constructor registers
+   * `once('error', () => this._removeFromPool())` (`mysql2/lib/pool_connection.js:14-16`), so a
+   * server-side FATAL on a pooled connection is handled — and handled *silently*. The pool drops
+   * that one connection and the next call opens a fresh one; nothing crashes, but nothing reaches
+   * the output panel either, which is the one way PostgreSQL and SQL Server differ from MySQL
+   * after J-175.
+   *
+   * The safety half is already covered by mysql2 itself: a second error on the same dead
+   * connection does not reach an unlistened `emit`, because `_notifyError` early-returns on
+   * `_fatalError` (`mysql2/lib/base/connection.js:264`) and `protocolError` early-returns on
+   * `_closing` (`:452`). So this adds the missing log line and nothing else.
+   *
+   * `'connection'` fires once per *new* physical connection, after it finishes connecting
+   * (`mysql2/lib/base/pool.js:92-104`), and `PromisePool` forwards it with the original arguments
+   * through `inheritEvents` (`mysql2/lib/promise/pool.js:18`) — so `conn` is the core
+   * `PoolConnection`, an `EventEmitter`, and this listener is registered exactly once per
+   * connection rather than once per acquire.
+   */
+  private guardMySQLConnectionErrors(pool: MySQLPool, label: string): void {
+    pool.on('connection', (conn: EventEmitter) => {
+      conn.on('error', (err: unknown) => {
+        const code = (err as { code?: string } | null)?.code;
+        log.error(
+          `MySQL connection error on ${label}${code ? ` [${code}]` : ''}: ${this.errMessage(err)}`
+        );
+      });
     });
   }
 
@@ -722,6 +754,7 @@ export class ConnectionPoolManager extends BaseSingleton {
       // Options from the shared builder (J-149), not a local literal: the copy
       // that used to live here had already drifted from mysqlPoolOptions.
       testPool = mysql.createPool(mysqlTestPoolOptions(profile, password));
+      this.guardMySQLConnectionErrors(testPool, `MySQL probe ${profile.name}`);
 
       const [rows] = await testPool.query('SELECT VERSION() AS version, DATABASE() AS name');
       const row = (rows as Record<string, unknown>[])[0];
@@ -790,6 +823,7 @@ export class ConnectionPoolManager extends BaseSingleton {
     const { effectiveProfile } = await this.withTunnel(profile);
 
     const pool = mysql.createPool(mysqlPoolOptions(effectiveProfile, dbName, trust, password));
+    this.guardMySQLConnectionErrors(pool, `MySQL ${profile.name} (${dbName}, ${trust})`);
 
     // Verify connection
     const conn = await pool.getConnection();
