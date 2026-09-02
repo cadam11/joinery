@@ -29,7 +29,7 @@ export interface DockerView {
   readonly pip: DockerPip;
   readonly rows: readonly ContainerRow[];
   readonly status: DockerStatus | undefined;
-  /** Named volumes, when main can answer. Empty today — see `docker-model.ts` finding 3 (J-70). */
+  /** The named volumes the database containers mount — see `docker-model.ts` finding 3 (J-70). */
   readonly volumes: readonly DockerVolume[];
   readonly loading: boolean;
   /** The detect call rejected. Distinct from "Docker is not running", which is a successful answer. */
@@ -71,8 +71,8 @@ export function useDocker(): DockerView {
   });
 
   const invalidate = useInvalidateIpc();
-  // The whole namespace: `detect`, `getContainers` and `getVolumes` all answer from one `docker ps`, so
-  // there is no case where one of them is stale and the others are not.
+  // The whole namespace: `detect`, `getContainers` and `getVolumes` all read the same container list,
+  // so there is no case where one of them is stale and the others are not.
   const refresh = useCallback(() => {
     void invalidate.namespace('docker');
   }, [invalidate]);

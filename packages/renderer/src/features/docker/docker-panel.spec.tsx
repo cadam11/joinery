@@ -156,8 +156,8 @@ describe('DockerPanel — the states', () => {
   });
 
   it('renders no Volumes section while main answers with an empty list', async () => {
-    // `docker.getVolumes()` is a stub that returns [] (J-70). A permanently empty section would be the
-    // decorative control J-44 forbids.
+    // A container that only bind-mounts makes `docker.getVolumes()` answer `[]` (J-70). A permanently
+    // empty section would be the decorative control J-44 forbids.
     mount();
     await waitFor(() => expect(screen.queryAllByTestId('docker-container')).toHaveLength(1));
     expect(screen.queryByTestId('docker-volumes')).toBeNull();

@@ -6,6 +6,7 @@
 import Dockerode from 'dockerode';
 import type {
   DockerContainer,
+  DockerVolume,
   DockerVolumeMapping,
   DockerDetectionResult,
   StartContainerResult,
@@ -53,22 +54,10 @@ export class DockerDetector extends BaseSingleton {
       const sqlContainers: DockerContainer[] = [];
 
       for (const container of containers) {
-        const imageLower = container.Image.toLowerCase();
-        const isSqlServer =
-          imageLower.includes('mssql') ||
-          imageLower.includes('sqlserver') ||
-          imageLower.includes('azure-sql-edge');
-        const isPostgres =
-          imageLower.includes('postgres') ||
-          imageLower.includes('postgresql') ||
-          imageLower.includes('postgis');
-        const isMySQL = imageLower.includes('mysql') || imageLower.includes('mariadb');
+        const engine = databaseEngineOf(container.Image);
 
-        const isDatabase = isSqlServer || isPostgres || isMySQL;
-
-        if (isDatabase) {
-          const defaultPort = isPostgres ? 5432 : isMySQL ? 3306 : 1433;
-          const portBinding = container.Ports.find(p => p.PrivatePort === defaultPort);
+        if (engine) {
+          const portBinding = container.Ports.find(p => p.PrivatePort === ENGINE_PORTS[engine]);
 
           const volumeMappings: DockerVolumeMapping[] = (container.Mounts || [])
             .filter(m => m.Type === 'bind')
@@ -123,6 +112,38 @@ export class DockerDetector extends BaseSingleton {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * The named volumes the database containers mount.
+   *
+   * Filtered to the containers `detect()` keeps, rather than every volume on the machine: the
+   * panel lists these underneath the database containers, and a development box accumulates
+   * dozens of unrelated (often dangling) volumes that would drown the section. `Name` is set only
+   * on `Type: 'volume'` mounts, so a bind mount contributes nothing here — those are already
+   * reported per container as `volumeMappings`.
+   *
+   * Rejects when the daemon does, rather than answering `[]`: the caller's channel logs and
+   * re-throws, and the renderer only asks once `detect()` has said Docker is running.
+   */
+  async listVolumes(): Promise<DockerVolume[]> {
+    const [listed, containers] = await Promise.all([
+      this.docker.listVolumes(),
+      this.docker.listContainers({ all: true }),
+    ]);
+
+    const mounted = new Set(
+      containers
+        .filter(c => databaseEngineOf(c.Image) !== null)
+        .flatMap(c => c.Mounts || [])
+        .filter(m => m.Type === 'volume')
+        .map(m => m.Name)
+        .filter((name): name is string => typeof name === 'string')
+    );
+
+    return (listed.Volumes || [])
+      .filter(v => mounted.has(v.Name))
+      .map(v => ({ name: v.Name, driver: v.Driver, mountpoint: v.Mountpoint }));
   }
 
   /**
@@ -275,4 +296,32 @@ export class DockerDetector extends BaseSingleton {
     if (engine === 'mysql') return '/var/lib/mysql';
     return '/var/opt/mssql/data';
   }
+}
+
+type DatabaseEngine = 'mssql' | 'postgresql' | 'mysql';
+
+/** The port each engine listens on inside its container. */
+const ENGINE_PORTS: Record<DatabaseEngine, number> = {
+  mssql: 1433,
+  postgresql: 5432,
+  mysql: 3306,
+};
+
+/**
+ * Which database engine an image is, or `null` for an image that is not one.
+ *
+ * Lifted out of `detect()` so `listVolumes()` decides "is this a database container" by exactly
+ * the same test rather than a second copy of it. The order matters and is the order `detect()`
+ * used to resolve its default port with: an image naming two engines is read as the earlier one.
+ */
+function databaseEngineOf(image: string): DatabaseEngine | null {
+  const lower = image.toLowerCase();
+  if (lower.includes('postgres') || lower.includes('postgresql') || lower.includes('postgis')) {
+    return 'postgresql';
+  }
+  if (lower.includes('mysql') || lower.includes('mariadb')) return 'mysql';
+  if (lower.includes('mssql') || lower.includes('sqlserver') || lower.includes('azure-sql-edge')) {
+    return 'mssql';
+  }
+  return null;
 }

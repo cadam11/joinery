@@ -7,8 +7,8 @@
  *  - **it shows every database engine**, because the Angular `filter(c => c.isSqlServer)` was a no-op
  *    over a flag main sets to `true` for everything, and its empty state read "No SQL Server containers
  *    found" on a machine full of PostgreSQL ones;
- *  - **the bind mounts are on screen**, which is the "volumes" half of this surface that actually has
- *    data behind it (`docker.getVolumes()` is a main-process stub — see finding 3);
+ *  - **the bind mounts are on screen**, alongside the named volumes the bridge now answers with
+ *    (J-70 replaced the `docker.getVolumes()` stub — see finding 3);
  *  - **Connect goes through `connect-to-container`**, so it opens the connection editor pre-filled
  *    instead of a router navigation this renderer has no router for. That prefill prop has existed since
  *    Task 9 with a comment naming this entry point, and nothing passed it until now;
@@ -175,8 +175,9 @@ function DockerBody({
         />
       ))}
       {docker.volumes.length === 0 ? null : (
-        // Rendered only when main can answer, which today it cannot — `docker.getVolumes()` returns []
-        // (J-70). A permanently empty section would be the decorative control J-44 forbids.
+        // Rendered only when main answers with something: `docker.getVolumes()` lists the named
+        // volumes the database containers mount, and a container that only bind-mounts contributes
+        // none. A permanently empty section would be the decorative control J-44 forbids.
         <li className="border-t border-rule px-3 py-2" data-testid="docker-volumes">
           <h3 className="font-mono text-2xs tracking-eyebrow uppercase text-fg-subtle">Volumes</h3>
           <ul className="flex flex-col gap-0.5 pt-1">

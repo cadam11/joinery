@@ -120,7 +120,7 @@ The containers panel is documented in full under
 | Connect is disabled with that sentence when no port is published                     | `packages/renderer/src/features/docker/docker-panel.tsx:265-284`                                     |
 | The stop handler discards its failure result, so the renderer confirms by re-reading | `packages/main/src/ipc/docker.ipc.ts:52-58`, `docker-model.ts:174-188`, `use-docker.ts:150-166`      |
 | J-71 — the stop-reports-success finding                                              | `packages/renderer/src/features/docker/docker-model.ts:26-29`                                        |
-| J-70 — `getVolumes` answers `[]`, so only bind mounts are listed                     | `packages/main/src/ipc/docker.ipc.ts:35-39`, `docker-model.ts:21-25`                                 |
+| Named volumes come from `listVolumes`, filtered to the database containers' mounts   | `packages/main/src/services/docker/detector.ts`, `docker.ipc.ts` (`GET_VOLUMES`)                     |
 | Create is SQL Server only, and why an image picker would be wrong                    | `packages/main/src/services/docker/detector.ts:198-213`, `docker-panel.tsx:90-99`                    |
 | ⌘J toggles the output panel, which can reveal its log file                           | `packages/renderer/src/commands/catalogue.ts:559-566`, `shell/workspace/output-panel.tsx:207-217`    |
 

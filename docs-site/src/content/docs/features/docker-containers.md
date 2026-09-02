@@ -52,7 +52,12 @@ published port_), and **Docker's own status line** verbatim — _Up 3 hours_, _E
 A filled pip marks a running container. Running containers are listed first, then alphabetically.
 
 Any **bind mounts** the container has are listed under it as `host path → container path`, with
-`(read-only)` where that applies. Named Docker volumes are not listed.
+`(read-only)` where that applies.
+
+Under the list, a **Volumes** section names the **named Docker volumes** those database containers
+mount — the ones `docker volume ls` shows. Only those: a volume mounted by some other container, or
+by nothing at all, is not listed, and the section is absent entirely when the database containers
+only bind-mount.
 
 ### Starting, stopping, connecting
 
@@ -129,7 +134,7 @@ Docker and why the answer can differ from your terminal's.
 | The status string is shown verbatim and never matched on               | `packages/renderer/src/features/docker/docker-model.ts:74-76, 92-95`                                                  |
 | Running containers sort first, then alphabetically                     | `packages/renderer/src/features/docker/docker-model.ts:102-109`                                                       |
 | Bind mounts are listed, with a read-only marker                        | `packages/renderer/src/features/docker/docker-panel.tsx:228-244`                                                      |
-| Named volumes are not listed, because the bridge answers `[]`          | `packages/renderer/src/features/docker/docker-model.ts:21-25`, `docker-panel.tsx:172-186`                             |
+| Named volumes are listed, filtered to the database containers' mounts  | `packages/main/src/services/docker/detector.ts` (`listVolumes`), `docker-panel.tsx:172-186`                           |
 | Start, Stop and Connect, and which appears when                        | `packages/renderer/src/features/docker/docker-panel.tsx:246-305`                                                      |
 | Connect pre-fills the connection editor with localhost and the port    | `packages/renderer/src/features/docker/docker-panel.tsx:259-289`, `features/connections/connection-dialogs.tsx:94-96` |
 | It is disabled with a stated reason when no port is published          | `packages/renderer/src/features/docker/docker-panel.tsx:265-284`                                                      |
