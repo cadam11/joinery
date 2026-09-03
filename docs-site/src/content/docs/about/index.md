@@ -23,9 +23,10 @@ stays in the repository:
 
 ## Releases
 
-There have been none yet. Packaged installers arrive with v1; until then Joinery is
-[built from source](../getting-started/install/). Release notes will live here once there is
-something to note.
+Every release, with its notes and its installers, is on
+[GitHub Releases](https://github.com/cadam11/joinery/releases). **v1.0.0** (3 September 2026) is
+the first. See [Install](../getting-started/install/) for the Homebrew command, the direct
+downloads, and building from source.
 
 ## Contributing and reporting problems
 

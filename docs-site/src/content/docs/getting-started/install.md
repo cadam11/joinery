@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Build Joinery from source today. Homebrew and packaged installers arrive with v1, and this page already describes what they will do.
+description: Install Joinery 1.0.0 with Homebrew or a direct download, or build it from source. Joinery is not code-signed, so macOS asks you to allow it once.
 sidebar:
   order: 1
 ---
@@ -8,13 +8,89 @@ sidebar:
 Joinery is open source under the **MIT license**, and its source is on
 [GitHub](https://github.com/cadam11/joinery).
 
-It has no tagged releases today, so there is nothing to download yet and
-`brew install --cask cadam11/joinery/joinery` does not resolve. Building from source is four
-commands, and it is how everyone runs Joinery right now.
+[**v1.0.0**](https://github.com/cadam11/joinery/releases/tag/v1.0.0) is the current release, and
+the first one. Install it with Homebrew or download an installer directly. You can also
+[build from source](#build-from-source), which is what you want if you intend to change Joinery
+rather than use it.
 
-The release machinery for v1 is built and sitting behind the first tag. [What installing will look
-like](#what-installing-will-look-like) describes it, so the promise is specific and you can hold
-this page to it when the tag lands.
+## Install
+
+### Homebrew, on macOS
+
+```bash
+brew install --cask cadam11/joinery/joinery
+```
+
+The cask installs `Joinery.app` into `/Applications` and follows releases from then on, so
+`brew upgrade --cask joinery` is how you move to the next version.
+
+### Direct download, on macOS and Windows
+
+Installers are attached to [each release](https://github.com/cadam11/joinery/releases/latest):
+
+| Platform                    | File                                |
+| --------------------------- | ----------------------------------- |
+| macOS, Apple Silicon        | `Joinery-<version>-arm64.dmg`       |
+| macOS, Intel                | `Joinery-<version>-x64.dmg`         |
+| Windows, x64                | `Joinery-<version>-x64-setup.exe`   |
+| Windows, ARM64              | `Joinery-<version>-arm64-setup.exe` |
+| Windows, either (universal) | `Joinery-<version>-setup.exe`       |
+
+The three Windows installers are alternatives, not steps: each per-architecture one carries a
+single build, and `Joinery-<version>-setup.exe` carries both. Zips of the same macOS and Windows
+builds are attached beside them, for running the app from a folder instead of installing it.
+
+A `SHA256SUMS.txt` covering every file in the release is published beside them, so a download can
+be checked before it is opened:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+### Joinery is not code-signed
+
+Joinery is not signed with an Apple Developer ID, not notarized, and its Windows builds are not
+code-signed either. There is no Apple Developer Program membership behind the project, and the
+release workflow does not pretend otherwise: it has no signing step to skip and no certificate to
+look for.
+
+That costs you one extra step the first time you open it, and again each time you upgrade.
+
+#### macOS
+
+macOS quarantines Joinery however you install it — the Homebrew cask included, because Homebrew
+quarantines what it downloads — and refuses the first launch.
+
+1. Double-click Joinery. macOS refuses, and says the developer cannot be verified.
+2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open
+   Anyway** beside the message about Joinery.
+3. Confirm, and authenticate. Every launch after that one is normal.
+
+**An upgrade asks again.** Homebrew can carry your approval forward across a `brew upgrade` only
+when it can check that the new app is signed by the same developer as the old one. Joinery is not
+signed at all, so there is nothing to check, and the new bundle arrives quarantined like the first
+one did. Expect to repeat the three steps above after every upgrade.
+
+On macOS Sonoma and earlier you can instead Control-click the app in Finder and choose **Open**.
+[Apple removed that shortcut in macOS Sequoia](https://developer.apple.com/news/?id=saqachfa), so
+on Sequoia and later the System Settings route above is the one that works.
+
+If you would rather do it from a terminal, remove the quarantine flag before the first launch:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Joinery.app"
+```
+
+The `-r` is not optional. Homebrew sets the flag on every file inside the app bundle, so removing
+it from the bundle alone leaves the app blocked.
+
+Homebrew used to accept `--no-quarantine`; that option was removed upstream, and the cask does not
+strip the flag for you either. Deciding that Joinery is safe to run on your machine is your
+decision to make, not Joinery's.
+
+#### Windows
+
+SmartScreen warns. Click **More info**, then **Run anyway**.
 
 ## Build from source
 
@@ -37,7 +113,7 @@ together with hot reload. The window opens on the welcome tab — see [First run
 
 ## Build a packaged app locally
 
-You can produce the same artifacts the v1 release will ship, unsigned:
+You can produce the same artifacts the release publishes, unsigned:
 
 ```bash
 pnpm run package:dmg   # macOS DMG, arm64 and x64 — what the release publishes
@@ -93,87 +169,8 @@ pnpm run dev
 Run `pnpm install` after every pull: dependencies move with the code, and a stale
 `node_modules` is the usual cause of a build that worked yesterday.
 
-## What installing will look like
-
-None of this works yet. It starts working when the first `v*` tag is pushed, which is what runs the
-release workflow.
-
-### Homebrew, on macOS
-
-```bash
-brew install --cask cadam11/joinery/joinery
-```
-
-The cask installs `Joinery.app` into `/Applications` and follows releases from then on, so
-`brew upgrade --cask joinery` is how you move to the next version.
-
-### Direct download, on macOS and Windows
-
-Each release carries four installers:
-
-| Platform             | File                                |
-| -------------------- | ----------------------------------- |
-| macOS, Apple Silicon | `Joinery-<version>-arm64.dmg`       |
-| macOS, Intel         | `Joinery-<version>-x64.dmg`         |
-| Windows, x64         | `Joinery-<version>-x64-setup.exe`   |
-| Windows, ARM64       | `Joinery-<version>-arm64-setup.exe` |
-
-A `SHA256SUMS.txt` covering every file in the release is published beside them, so a download can
-be checked before it is opened:
-
-```bash
-shasum -a 256 -c SHA256SUMS.txt --ignore-missing
-```
-
-### Joinery is not code-signed
-
-Joinery is not signed with an Apple Developer ID, not notarized, and its Windows builds are not
-code-signed either. There is no Apple Developer Program membership behind the project, and the
-release workflow does not pretend otherwise: it has no signing step to skip and no certificate to
-look for.
-
-That costs you one extra step the first time you open it, and again each time you upgrade.
-
-#### macOS
-
-macOS quarantines Joinery however you install it — the Homebrew cask included, because Homebrew
-quarantines what it downloads — and refuses the first launch.
-
-1. Double-click Joinery. macOS refuses, and says the developer cannot be verified.
-2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open
-   Anyway** beside the message about Joinery.
-3. Confirm, and authenticate. Every launch after that one is normal.
-
-**An upgrade asks again.** Homebrew can carry your approval forward across a `brew upgrade` only
-when it can check that the new app is signed by the same developer as the old one. Joinery is not
-signed at all, so there is nothing to check, and the new bundle arrives quarantined like the first
-one did. Expect to repeat the three steps above after every upgrade.
-
-On macOS Sonoma and earlier you can instead Control-click the app in Finder and choose **Open**.
-[Apple removed that shortcut in macOS Sequoia](https://developer.apple.com/news/?id=saqachfa), so
-on Sequoia and later the System Settings route above is the one that works.
-
-If you would rather do it from a terminal, remove the quarantine flag before the first launch:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Joinery.app"
-```
-
-The `-r` is not optional. Homebrew sets the flag on every file inside the app bundle, so removing
-it from the bundle alone leaves the app blocked.
-
-Homebrew used to accept `--no-quarantine`; that option was removed upstream, and the cask does not
-strip the flag for you either. Deciding that Joinery is safe to run on your machine is your
-decision to make, not Joinery's.
-
-#### Windows
-
-SmartScreen warns. Click **More info**, then **Run anyway**.
-
 ## What is not here yet
 
-- **Downloads.** No release has been tagged. Pushing a `v*` tag runs the release workflow, which
-  builds both platforms, publishes them with checksums, and updates the Homebrew tap.
 - **Auto-update.** Not implemented, and deliberately out of scope for v1.
 - **Linux.** The packaging config targets macOS and Windows only.
 
@@ -185,7 +182,8 @@ Every claim above was checked against the repository at the commit this page was
 | Claim                                                                                                             | Source                                                                                                                                                                                                                                  |
 | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Joinery is MIT licensed                                                                                           | `LICENSE:1`, `package.json:6` (`"license": "MIT"`)                                                                                                                                                                                      |
-| No tagged releases and nothing to download                                                                        | `git tag` is empty; `.github/workflows/release.yml` triggers only on `push: tags: v*`                                                                                                                                                   |
+| v1.0.0 is the current release, and the first one                                                                  | [`v1.0.0`](https://github.com/cadam11/joinery/releases/tag/v1.0.0), published 2026-09-03 by `.github/workflows/release.yml`, which triggers on `push: tags: v*`                                                                         |
+| The Homebrew cask resolves to 1.0.0                                                                               | `cadam11/homebrew-joinery`, `Casks/joinery.rb` — `version "1.0.0"` with both DMG checksums stamped in                                                                                                                                   |
 | `git clone` → `cd` → `pnpm install` → `pnpm run dev`                                                              | `README.md:259-262`, `CONTRIBUTING.md:31-36`                                                                                                                                                                                            |
 | `pnpm run dev` builds first, then runs renderer and main concurrently                                             | `package.json`, the `dev` script                                                                                                                                                                                                        |
 | Node 20+, pnpm 11+, Xcode Command Line Tools                                                                      | `package.json` `engines`, `CONTRIBUTING.md:26-28`                                                                                                                                                                                       |
@@ -201,6 +199,8 @@ Every claim above was checked against the repository at the commit this page was
 | `verify:package` fails on a bundle carrying the marker                                                            | `package.json` `verify:package` chains `scripts/release/test-build-marker.ts --check`                                                                                                                                                   |
 | The DMG file names                                                                                                | `electron-builder.yml` `dmg.artifactName` (`${productName}-${version}-${arch}.dmg`)                                                                                                                                                     |
 | The Windows installer file names                                                                                  | `electron-builder.yml` `nsis.artifactName` (`${productName}-${version}-${arch}-setup.exe`)                                                                                                                                              |
+| A third, architecture-less `Joinery-<version>-setup.exe` carrying both Windows builds                             | The v1.0.0 asset list — `Joinery-1.0.0-setup.exe` beside `-x64-setup.exe` and `-arm64-setup.exe`; electron-builder emits it for a multi-arch `nsis` target, and `electron-builder.yml` does not name it                                 |
+| Zips are published beside the installers                                                                          | `electron-builder.yml` `mac.target` and `win.target` each list `zip` for both architectures; the v1.0.0 asset list carries all four                                                                                                     |
 | Both macOS architectures, both Windows architectures                                                              | `electron-builder.yml` `mac.target` and `win.target`                                                                                                                                                                                    |
 | The Homebrew command, and that the cask installs `Joinery.app` to /Applications                                   | `Casks/joinery.rb` (`cask "joinery"`, `app "Joinery.app"`), pushed to `cadam11/homebrew-joinery`                                                                                                                                        |
 | `SHA256SUMS.txt` covers every asset                                                                               | `.github/workflows/release.yml`, the "Checksum everything that is about to be published" step                                                                                                                                           |
