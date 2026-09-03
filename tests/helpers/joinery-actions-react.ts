@@ -85,6 +85,7 @@ export {
 export {
   executeQuery,
   executionPlan,
+  focusEditor,
   openAnalysisTab,
   openQueryTab,
   planNodeTypes,

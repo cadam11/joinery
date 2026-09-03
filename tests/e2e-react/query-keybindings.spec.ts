@@ -31,11 +31,11 @@ import {
   connectFromSidebar,
   createPostgresProfile,
   ensureJoineryTestSeeded,
+  focusEditor,
   gridColumnHeaders,
   newQueryTabFromMenu,
   openPalette,
   openQueryTab,
-  queryEditor,
   selectDatabase,
   typeSql,
   visibleSql,
@@ -55,18 +55,6 @@ async function readyEditor(window: Page): Promise<void> {
   await connectFromSidebar(window, PROFILE);
   await selectDatabase(window, DATABASE);
   await openQueryTab(window);
-}
-
-/**
- * Puts the caret in the visible editor.
- *
- * `.view-lines` is Monaco's own DOM — the vendor exemption `helpers/react/query.ts` documents and
- * `query-editor.spec.ts` uses for the same purpose. A keybinding test has to press the key with
- * focus where a user's would be, because the whole subject is which editor's context the keystroke
- * resolves against.
- */
-async function focusEditor(window: Page): Promise<void> {
-  await queryEditor(window).locator('.view-lines').click();
 }
 
 /** Is the caret inside Monaco's focus sink? Mirrors `a11y.spec.ts`'s check of the same thing. */

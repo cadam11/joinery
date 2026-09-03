@@ -47,6 +47,28 @@ export async function openQueryTab(window: Page): Promise<Locator> {
 }
 
 /**
+ * Puts the caret in the visible editor and waits until Monaco actually holds DOM focus.
+ *
+ * Needed before any keystroke the EDITOR owns. `execute-query`'s ⌃E is declared
+ * `accelerator: { source: 'editor' }` (`packages/renderer/src/commands/catalogue.ts`) and bound by
+ * Monaco with `registerAccelerator: false`, so it only fires while Monaco's input sink has focus —
+ * a press that lands on `document.body` is silently dropped. Anything that took focus away first
+ * (a Radix dialog restores it asynchronously after its close animation, and under a full-tier load
+ * that restore loses the race) leaves the next press on the floor.
+ *
+ * The wait is on `.monaco-editor.focused` rather than `toBeFocused()` on an input element, because
+ * WHICH element Monaco focuses is a vendor detail that has already moved: this build focuses
+ * `<div class="native-edit-context">`, not the historical `<textarea class="inputarea">`
+ * (`helpers/react/a11y.ts`'s `MONACO_EXEMPTION` documents the same discovery). The `.focused` class
+ * on the editor root is the marker Monaco maintains across both input paths.
+ */
+export async function focusEditor(window: Page): Promise<void> {
+  const editor = queryEditor(window);
+  await editor.locator('.view-lines').click();
+  await expect(editor.locator('.monaco-editor.focused')).toHaveCount(1, { timeout: UI_TIMEOUT_MS });
+}
+
+/**
  * Types SQL into the editor, replacing whatever was there.
  *
  * `insertText` rather than `type`: Monaco's auto-indent and bracket completion

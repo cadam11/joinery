@@ -21,6 +21,7 @@ import {
   createPostgresProfile,
   ensureJoineryTestSeeded,
   executeQuery,
+  focusEditor,
   gridColumnHeaders,
   openNodeMenu,
   openQueryTab,
@@ -115,7 +116,14 @@ test.describe('Joinery (React) — the query editor', () => {
       await readyEditor(window);
       await typeSql(window, 'SELECT 1');
 
+      // Every press below is preceded by `focusEditor`, and that is the test's subject rather than
+      // ceremony: ⌃E is declared `source: 'editor'` and bound by Monaco, so it fires only while the
+      // editor holds DOM focus. The Radix confirm dialog restores focus asynchronously after its close
+      // animation, and under a full-tier load that restore lost the race — the second press landed on
+      // `document.body` and the dialog never reopened (J-217).
+
       // First press: the gate. Cancelling runs nothing.
+      await focusEditor(window);
       await window.keyboard.press('ControlOrMeta+e');
       await expect(window.getByTestId('query-confirm-execute')).toBeVisible();
       await window.getByTestId('query-confirm-execute-cancel').click();
@@ -123,6 +131,7 @@ test.describe('Joinery (React) — the query editor', () => {
       await expect(window.getByTestId('query-results-empty')).toBeVisible();
 
       // Second press, with "don't ask again": it runs, and the flag is persisted.
+      await focusEditor(window);
       await window.keyboard.press('ControlOrMeta+e');
       await window.getByTestId('query-confirm-execute-remember').check();
       await window.getByTestId('query-confirm-execute-run').click();
@@ -130,6 +139,7 @@ test.describe('Joinery (React) — the query editor', () => {
 
       // Third press: no dialog at all.
       await typeSql(window, 'SELECT 2');
+      await focusEditor(window);
       await window.keyboard.press('ControlOrMeta+e');
       await expect(window.getByTestId('query-confirm-execute')).toHaveCount(0);
       await expect(window.getByTestId('query-results')).toBeVisible({ timeout: 20_000 });
