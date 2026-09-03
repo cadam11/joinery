@@ -31,6 +31,12 @@ vi.mock('electron', () => ({
       },
     ],
   },
+  // `new BackupRestoreService()` builds `MetadataService` and `ConnectionPoolManager`, and through
+  // them the SSH tunnel manager and the credential store, which read `app.isPackaged`
+  // (`runtime-mode.ts:isPackagedApp`). A key missing from a `vi.mock` factory is not `undefined` —
+  // reading it throws `No "app" export is defined on the "electron" mock` — so without this every
+  // test in this file died at construction. Same key the PG/MySQL specs gained in J-195.
+  app: { isPackaged: false },
 }));
 
 vi.mock('@joinery/main/services/config/connection-profiles', () => ({
