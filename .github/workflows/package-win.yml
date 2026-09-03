@@ -1,0 +1,61 @@
+name: Package Windows
+
+# The release workflow's Windows leg had no pull-request coverage: the v1.0.0 tag was the first
+# time `node scripts/package.js --win` ran on windows-latest, and it hung for 90 minutes (J-220).
+# This runs the same install → build → package sequence, without the release half, whenever a
+# pull request touches a packaging input, and by hand from the Actions tab.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'electron-builder.yml'
+      - 'scripts/package.js'
+      - 'scripts/workspace-links.js'
+      - 'scripts/before-build.js'
+      - '.github/workflows/package-win.yml'
+
+jobs:
+  package:
+    name: Package win
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm run build
+
+      # Same invocation as release.yml's build job, so this proves that step and nothing else.
+      - name: Build the Electron app
+        shell: bash
+        run: node scripts/package.js --win
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-win
+          path: |
+            release/*.exe
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 3
