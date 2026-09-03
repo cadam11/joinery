@@ -17,6 +17,7 @@
  * They are the only side effect in this module.
  */
 
+import type { EventEmitter } from 'node:events';
 import mysql from 'mysql2/promise';
 import type { RowDataPacket } from 'mysql2/promise';
 import pg from 'pg';
@@ -25,6 +26,26 @@ import { createLogger } from '../../utils/logger';
 import { mysqlVerifyConnectionOptions } from './mysql-pool-options';
 
 const log = createLogger('RestoreVerify');
+
+/**
+ * Log — never rethrow — a driver error that arrives outside an awaited call (J-183 / J-195).
+ *
+ * Both drivers hand back an `EventEmitter`, and an `EventEmitter` with no `'error'` listener
+ * *rethrows* from inside `emit()`. These emits happen on a socket callback, not on the promise
+ * the caller is awaiting, so an unlistened one lands in the event loop as an uncaught exception —
+ * in the main process, a crash of the app. Logging is the whole job: the connection has already
+ * failed every in-flight query by the time it emits, and each caller's `finally` still closes it.
+ *
+ * `label` follows the pool guards' convention (`connection-pool.ts:209-214`), because two restores
+ * running at once are otherwise indistinguishable in the Output panel.
+ */
+function logConnectionErrors(conn: EventEmitter, engine: string, label: string): void {
+  conn.on('error', (err: unknown) => {
+    const code = (err as { code?: string } | null)?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    log.error(`Restore-verify ${engine} error on ${label}${code ? ` [${code}]` : ''}: ${message}`);
+  });
+}
 
 /**
  * Does `name` exist as a schema on the profile's MySQL server?
@@ -45,6 +66,10 @@ export async function mysqlDatabaseExists(
   password: string | undefined
 ): Promise<boolean> {
   const conn = await mysql.createConnection(mysqlVerifyConnectionOptions(profile, password ?? ''));
+  // Attached before the first query, and to the object this function holds: `PromiseConnection`
+  // only forwards its core connection's events once a listener exists here
+  // (`mysql2/lib/promise/inherit_events.js`, on `'newListener'`).
+  logConnectionErrors(conn, 'MySQL connection', `${profile.name} (${name})`);
   try {
     const [rows] = await conn.query<RowDataPacket[]>(
       'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?',
@@ -87,21 +112,10 @@ export async function pgDatabaseExists(
     ssl: profile.encrypt ? { rejectUnauthorized: !profile.trustServerCertificate } : false,
     connectionTimeoutMillis: profile.connectionTimeout * 1000,
   });
-  // A pg `Client` is an `EventEmitter`, and an `EventEmitter` with no `'error'`
-  // listener *rethrows* from inside `emit()`. Once connected,
-  // `_handleErrorEvent` emits unconditionally (`pg/lib/client.js:416-423`), and
-  // a backend error arriving with no query in flight routes there too
-  // (`_handleErrorMessage`, `:425-434`). That emit is on a socket callback, not
-  // on the awaited promise, so with no listener the throw lands in the event
-  // loop as an uncaught exception — in the main process, a crash of the app.
-  // Logging is the whole job: pg has already failed every in-flight query and
-  // marked the client unqueryable by the time it emits, and the `finally` below
-  // still closes it (J-183, same shape as J-175's pool guards).
-  client.on('error', (err: unknown) => {
-    const code = (err as { code?: string } | null)?.code;
-    const message = err instanceof Error ? err.message : String(err);
-    log.error(`Restore-verify PostgreSQL client error${code ? ` [${code}]` : ''}: ${message}`);
-  });
+  // Before `connect()`: `_handleErrorWhileConnecting` emits too when there is no connection
+  // callback (`pg/lib/client.js:400-411`), as does `_handleErrorEvent` once connected (`:416-423`)
+  // and `_handleErrorMessage` for a backend error with no query in flight (`:425-434`).
+  logConnectionErrors(client, 'PostgreSQL client', `${profile.name} (${name})`);
   await client.connect();
   try {
     const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [name]);

@@ -187,6 +187,12 @@ with an exit code that looks like success and nothing applied. So when the tool 
 reconnects and asks the server whether the target database is actually there, and only then reports
 success. If it is not, the failure says so and names the likely causes.
 
+That server check is the only thing that decides the verdict. Once it answers yes, the restore is a
+success — including when the housekeeping that follows it fails. Joinery drops the connection's
+cached database list at that point so the restored database appears in the sidebar right away, and
+if that refresh cannot run it is reported as its own line in the Output panel and the restore still
+reads as succeeded. Reload the connection if the new database has not appeared.
+
 That check connects with the profile's own settings, **Encrypt the connection** and **Trust the
 server certificate** included. A server that refuses unencrypted connections — MySQL's
 `require_secure_transport`, a PostgreSQL `hostssl` rule — answers the check rather than rejecting it,
@@ -247,6 +253,7 @@ so a restore that succeeded against such a server is reported as a success.
 | The refusal when the connection cannot create databases                                | `packages/renderer/src/features/restore/restore-model.ts:441-443`                                                                                                                           |
 | MySQL target names are limited to letters, digits and underscores                      | `packages/renderer/src/features/restore/restore-model.ts:245-258`                                                                                                                           |
 | The restore is checked against the server after the tool exits                         | `packages/main/src/services/sql/restore-verify.ts`, `mysql-backup.ts` (`runRestoreProcess`), `pg-backup.ts` (`runProcess`)                                                                  |
+| Only the server check decides the verdict; a failed cache refresh is logged, not fatal | `packages/main/src/services/sql/metadata.ts` (`invalidateDatabasesAfterRestore`), `pg-backup.ts` (`onRestored`), `mysql-backup.ts` (`runRestoreProcess`)                                    |
 | The check connects with the profile's encryption settings                              | `packages/main/src/services/sql/mysql-pool-options.ts` (`mysqlVerifyConnectionOptions`), `restore-verify.ts` (`pgDatabaseExists`)                                                           |
 
 </details>
