@@ -7,6 +7,7 @@ import {
   KEYCHAIN_SERVICE_ENV_VAR,
   resolveKeychainServiceName,
 } from '../services/keychain/service-name';
+import { PYTHON_ENV_VAR, resolvePythonOverride } from '../services/sql/python-deps';
 import { isDevelopmentHatchOpen, isTestHatchOpen } from './runtime-mode';
 
 /**
@@ -141,10 +142,16 @@ describe.each(GATED_HATCHES)(
  *
  * `reopenedByTestBuild` is the only per-hatch difference. A J-167 test bundle
  * (`Contents/Resources/joinery-test-build`) gets the test-only hatches back, because the packaged
- * smoke run boots a real bundle and needs them; `NODE_ENV=development` is deliberately NOT
- * reopened — a stamped bundle has no dev server to reach either, so honouring it would only let
- * whoever set the variable serve their own page into a bundle that carries the preload bridge.
- * See `runtime-mode.ts`'s {@link isDevelopmentHatchOpen}.
+ * smoke run boots a real bundle and needs them. TWO are deliberately not reopened, and both gate on
+ * `isPackaged` alone:
+ *
+ *  - `NODE_ENV=development` — a stamped bundle has no dev server to reach either, so honouring it
+ *    would only let whoever set the variable serve their own page into a bundle that carries the
+ *    preload bridge. See `runtime-mode.ts`'s {@link isDevelopmentHatchOpen}.
+ *  - `JOINERY_PYTHON` (J-171) — it selects an executable to spawn rather than redirecting a read,
+ *    and nothing in `scripts/release/`, `tests/smoke-packaged/` or any Playwright config sets it
+ *    for a packaged run, so reopening it would buy uniformity and nothing else. See
+ *    `services/sql/python-deps.ts`'s `resolvePythonOverride`.
  */
 const HATCH_BEHAVIOUR = [
   {
@@ -181,6 +188,18 @@ const HATCH_BEHAVIOUR = [
         },
       }) !== null,
   },
+  {
+    // Not reopened by the J-167 marker, unlike every other hatch here: nothing in
+    // `scripts/release/`, `tests/smoke-packaged/` or any Playwright config sets this variable for a
+    // packaged run, and the packaged smoke tier does not touch Python at all. So shutting it for
+    // ANY packaged bundle is strictly tighter at zero cost — and this is the one hatch that selects
+    // an executable rather than redirecting a read, so the tighter side is the right default.
+    variable: 'JOINERY_PYTHON',
+    reopenedByTestBuild: false,
+    isHonoured: (build: BuildUnderTest) =>
+      resolvePythonOverride({ ...build, env: { [PYTHON_ENV_VAR]: '/tmp/venv/bin/python' } }) ===
+      '/tmp/venv/bin/python',
+  },
 ] as const;
 
 /** The two artifact facts every hatch decision is a function of (J-161, J-167). */
@@ -188,14 +207,17 @@ type BuildUnderTest = { isPackaged: boolean; isTestBuild: boolean };
 
 /**
  * Hatches that {@link GATED_HATCHES} pins the reader of but that are deliberately NOT gated on the
- * build marker, each with the ticket that owns the real fix. Listed rather than omitted so the
- * cross-check below stays exhaustive: a new hatch has to be classified, not forgotten.
+ * build marker, each with the ticket that owns the real fix. Kept — empty — rather than deleted,
+ * so the cross-check below stays exhaustive: a new hatch has to be classified, not forgotten, and
+ * the classification "deliberately ungated" needs somewhere to live that carries a ticket.
  *
- * `JOINERY_PYTHON` is J-171's. It selects a real, documented user-facing setting (three docs-site
- * pages), so build-marker gating would be the wrong mitigation — the fix is to stop reading it
- * from the ambient environment at spawn time and persist the interpreter path via Settings.
+ * Emptied by J-171, which gated `JOINERY_PYTHON`: it is the sharpest instance of the shape, since
+ * it selects the executable that gets spawned inside the signed app's process tree rather than
+ * redirecting a read. Gating it does cost release users the documented virtualenv escape hatch;
+ * persisting an interpreter path through Settings is the replacement, and remains J-171's open
+ * remainder along with the `PATH`-resolved children (`pg_dump`, `mysqldump`, `python3`).
  */
-const KNOWN_UNGATED = [{ variable: 'JOINERY_PYTHON', ticket: 'J-171' }] as const;
+const KNOWN_UNGATED: ReadonlyArray<{ variable: string; ticket: string }> = [];
 
 const BUILDS: ReadonlyArray<BuildUnderTest & { label: string }> = [
   { label: 'a development / Playwright launch', isPackaged: false, isTestBuild: false },

@@ -48,9 +48,14 @@ On success you get **Converted to _engine_** and the editor holds the rewritten 
 
 Conversion is done by [sqlglot](https://github.com/tobymao/sqlglot), a Python library. Joinery
 spawns a small local service from `resources/python/sqlglot-server.py`, on `127.0.0.1` with an
-ephemeral port, and talks to it over HTTP. It finds the interpreter by probing **`JOINERY_PYTHON`**,
-then **`python3`**, then **`python`**, and on Windows the **`py -3`** launcher — the first that runs
-and has all four packages.
+ephemeral port, and talks to it over HTTP. It finds the interpreter by probing **`python3`**, then
+**`python`**, and on Windows the **`py -3`** launcher — the first that runs and has all four
+packages. The setup dialog names exactly what it tried.
+
+Run Joinery **from source** and one more name goes first: **`JOINERY_PYTHON`**, if you set it. Any
+packaged Joinery ignores that variable and logs one line saying so, because it names the executable
+the app spawns — honouring it in a signed app would let whoever controls the launch environment run
+their own binary with Joinery's permissions.
 
 That service is started **lazily, on your first conversion** — not at launch — and stopped when the
 app quits. It gets 15 seconds to come up and 30 seconds to answer a conversion.

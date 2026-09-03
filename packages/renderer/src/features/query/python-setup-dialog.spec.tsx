@@ -28,6 +28,7 @@ function depsMissingPackages(): PythonDepsResult {
     platform: 'darwin',
     command: 'python3',
     commandArgs: [],
+    tried: ['python3', 'python'],
     version: 'Python 3.14.6',
     modules: [
       { module: 'sqlglot', available: false },
@@ -45,6 +46,7 @@ function depsNoInterpreter(): PythonDepsResult {
     platform: 'win32',
     command: null,
     commandArgs: [],
+    tried: ['python3', 'python', 'py -3'],
     modules: [],
     ready: false,
     installInstructions: { ...INSTRUCTIONS, platform: 'win32' },
@@ -101,6 +103,16 @@ describe('the SQL-conversion setup dialog', () => {
     expect(probed.textContent).toContain('py -3');
     // No module rows: nothing ran, so nothing could be imported to find out.
     expect(screen.queryByTestId('python-module-sqlglot')).toBeNull();
+  });
+
+  it('names only what the probe actually ran, never a remembered list (J-171)', () => {
+    // The line used to be a hard-coded "Tried JOINERY_PYTHON, python3, python", which a packaged
+    // build made false the moment it stopped honouring the variable. It now renders `tried`, so a
+    // build that refused the override cannot claim it tried it.
+    mount({ ...depsNoInterpreter(), tried: ['python3', 'python'] });
+
+    const probed = screen.getByTestId('python-setup-no-interpreter');
+    expect(probed.textContent).toBe('Tried python3, python.');
   });
 
   it('renders the steps and the copyable command', async () => {

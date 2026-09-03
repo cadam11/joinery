@@ -9,9 +9,12 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PythonDepsService } from './python-deps';
+import { onLogEntry } from '../../utils/logger';
+import * as runtimeMode from '../../utils/runtime-mode';
+
+import { PYTHON_ENV_VAR, PythonDepsService, resolvePythonOverride } from './python-deps';
 
 const ORIGINAL = process.env.JOINERY_PYTHON;
 
@@ -103,5 +106,113 @@ describeIfPython('against a real interpreter', () => {
     const rechecked = await service.recheck();
     expect(rechecked).not.toBe(first);
     expect(rechecked.command).toBe(first.command);
+  });
+});
+
+/**
+ * J-171: the interpreter path is the executable a signed Joinery spawns, so a PACKAGED bundle
+ * refuses to take it from the environment. Stricter than every other hatch, which the J-167 test
+ * marker reopens: this one is `isPackaged` alone, so a stamped bundle refuses it too. Pinned from
+ * all four build combinations in `utils/env-hatch-gating.spec.ts`; here only the refusal's ONE side
+ * effect is checked.
+ *
+ * The latch is module scope, so this must be the FIRST place in this file that drives the release
+ * branch: a release-build call anywhere above would consume the single warning and leave this test
+ * asserting nothing. The wiring suite below drives it too, which is why it comes after.
+ */
+describe('when a release bundle is told which interpreter to use', () => {
+  function warningsWhile(run: () => void): string[] {
+    const seen: string[] = [];
+    const stop = onLogEntry(entry => {
+      if (entry.level === 'warn' && entry.tag === 'PythonDeps') seen.push(entry.message);
+    });
+    try {
+      run();
+    } finally {
+      stop();
+    }
+    return seen;
+  }
+
+  it('ignores it and says so exactly once, however often it is asked', () => {
+    const release = { isPackaged: true, isTestBuild: false, env: { [PYTHON_ENV_VAR]: '/evil/py' } };
+
+    const warnings = warningsWhile(() => {
+      expect(resolvePythonOverride(release)).toBeNull();
+      expect(resolvePythonOverride(release)).toBeNull();
+      expect(resolvePythonOverride(release)).toBeNull();
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(PYTHON_ENV_VAR);
+  });
+});
+
+/**
+ * The gate is only worth having if the SERVICE reaches it (J-171 review, N6).
+ *
+ * Every other case here drives the pure `resolvePythonOverride`. Nothing pinned that `probe()`
+ * hands it the REAL `runtimeSignals()` — a refactor to a hard-coded `{ isPackaged: false, env:
+ * process.env }` would leave the whole suite green and reopen the hole. So this drives the real
+ * `PythonDepsService.check()` and only replaces the signals gatherer, at the seam
+ * `python-deps.ts` actually imports.
+ *
+ * The interpreter is a real one, named by ABSOLUTE path, so that honoured and refused give
+ * different answers: honoured means `command` is that path, refused means the probe fell through
+ * to the bare `python3` name.
+ */
+describeIfPython('the packaged gate, through the real service', () => {
+  /**
+   * `python3`'s own absolute path — a name the fall-through candidates can never produce.
+   *
+   * Resolved in `beforeAll`, not in this factory: `describe.skip` still RUNS the factory to collect
+   * the cases it then skips, so spawning here would fail collection of the whole file on a host
+   * with no `python3` — the exact host this suite is skipped for.
+   */
+  let absolute = '';
+
+  beforeAll(() => {
+    absolute = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'])
+      .toString()
+      .trim();
+    expect(absolute.startsWith('/')).toBe(true);
+  });
+
+  beforeEach(() => {
+    process.env.JOINERY_PYTHON = absolute;
+    PythonDepsService.resetInstance();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function withBuild(isPackaged: boolean, isTestBuild: boolean): void {
+    vi.spyOn(runtimeMode, 'runtimeSignals').mockReturnValue({
+      isPackaged,
+      isTestBuild,
+      env: process.env,
+    });
+  }
+
+  it('honours the override in a development build', async () => {
+    withBuild(false, false);
+
+    const result = await PythonDepsService.getInstance().check();
+
+    expect(result.command).toBe(absolute);
+    expect(result.tried[0]).toBe(absolute);
+  });
+
+  it('refuses it in a packaged bundle, stamped as a test build or not', async () => {
+    for (const isTestBuild of [false, true]) {
+      PythonDepsService.resetInstance();
+      withBuild(true, isTestBuild);
+
+      const result = await PythonDepsService.getInstance().check();
+
+      expect(result.command).not.toBe(absolute);
+      expect(result.tried).not.toContain(absolute);
+    }
   });
 });

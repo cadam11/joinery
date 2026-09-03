@@ -110,9 +110,15 @@ feature that needs a Python interpreter. Joinery spawns a small local FastAPI se
 `resources/python/sqlglot-server.py`, on `127.0.0.1` with an ephemeral port, and talks to it over
 HTTP.
 
-It looks for an interpreter in this order: **`JOINERY_PYTHON`** if you set it (point it at a
-virtualenv), then **`python3`**, then **`python`**, and on Windows the **`py -3`** launcher. The
-first one that runs and has all four packages wins.
+**If you installed Joinery from a release**, it looks for **`python3`**, then **`python`**, and on
+Windows the **`py -3`** launcher. The first one that runs and has all four packages wins. Install
+the packages into that interpreter — a released Joinery does **not** read an interpreter path from
+the environment, so pointing it at a virtualenv is not an option. It ignores `JOINERY_PYTHON`, logs
+one line saying so, and probes the three names above. The variable would name an executable the
+signed app then spawns, which is why any packaged bundle refuses it.
+
+**If you run Joinery from source**, `JOINERY_PYTHON` is honoured and tried first, ahead of those
+three, so you can point it at a virtualenv.
 
 Install the four packages it imports:
 
@@ -159,6 +165,7 @@ single JSON entry that Joinery reads once at startup.
 | sqlglot service is spawned as `python3` against `resources/python/sqlglot-server.py`                              | `packages/main/src/services/sql/sqlglot/sqlglot-client.ts:56, 98`                                              |
 | It is a FastAPI app importing `fastapi`, `pydantic`, `sqlglot`, `uvicorn`, bound to loopback on an ephemeral port | `resources/python/sqlglot-server.py:1-12`                                                                      |
 | The interpreter is probed (JOINERY_PYTHON, python3, python, py -3) and the message names what is missing          | `packages/main/src/services/sql/python-deps.ts`, `sql-converter.ts` (`ensureRunning`, `describeMissingPython`) |
+| Any packaged build ignores JOINERY_PYTHON, warns once, then probes the other names                                | `packages/main/src/services/sql/python-deps.ts` (`resolvePythonOverride`)                                      |
 | Credentials are stored via `keytar` as one JSON vault entry, read once at startup                                 | `packages/main/src/services/keychain/credential-store.ts:1-4, 13-14, 52-64`                                    |
 | AI provider keys go to the same store, as `ai-<vendorId>`                                                         | `packages/main/src/services/ai/ai-service.ts:136-138`                                                          |
 | SSH passwords and passphrases go there as `<profileId>:ssh-password` / `:ssh-passphrase`                          | `packages/main/src/services/ssh/ssh-tunnel-manager.ts:88-97`                                                   |

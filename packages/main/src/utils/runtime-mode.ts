@@ -86,8 +86,8 @@ export function runtimeSignals(): RuntimeSignals {
 }
 
 /**
- * May this build honour a test-only environment hatch at all? The shared predicate every hatch
- * site composes with its own variable (J-180).
+ * May this build honour a test-only environment hatch at all? The shared predicate most hatch
+ * sites compose with their own variable (J-180) — see the two stricter exceptions below.
  *
  * Unpackaged, or packaged and stamped with the J-167 marker. Written once because it had already
  * been written twice by hand — `isTestHatchOpen` and `service-name.ts` — and a third hatch
@@ -99,8 +99,12 @@ export function runtimeSignals(): RuntimeSignals {
  * `isTestBuild` absent means `false`, so a call site that forgets the field gets the release
  * behaviour — the safe direction to fail in.
  *
- * NOT for `NODE_ENV=development`, which is deliberately stricter: see
- * {@link isDevelopmentHatchOpen}.
+ * Two hatches are deliberately STRICTER and do not compose this at all — both gate on `isPackaged`
+ * alone, so a stamped bundle refuses them as a release bundle does. `NODE_ENV=development`, see
+ * {@link isDevelopmentHatchOpen}; and `JOINERY_PYTHON` (J-171), see
+ * `services/sql/python-deps.ts`'s `resolvePythonOverride` — it selects an executable to spawn
+ * rather than redirecting a read, and nothing in the packaged test path sets it, so reopening it
+ * for a stamped bundle would buy uniformity and nothing else.
  */
 export function areTestHatchesHonoured(
   signals: Pick<RuntimeSignals, 'isPackaged' | 'isTestBuild'>
