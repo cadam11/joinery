@@ -52,6 +52,12 @@ vi.mock('electron', () => ({
       },
     ],
   },
+  // The post-restore metadata-cache drop constructs `MetadataService`, and through it the pool
+  // manager, the SSH tunnel manager and the credential store, which read `app.isPackaged`
+  // (`runtime-mode.ts:isPackagedApp`). A key missing from a `vi.mock` factory is not `undefined` —
+  // reading it throws `No "app" export is defined on the "electron" mock` — so without this the
+  // refresh blew up inside the service on every run of this file (J-195).
+  app: { isPackaged: false },
 }));
 
 vi.mock('@joinery/main/services/config/connection-profiles', () => ({

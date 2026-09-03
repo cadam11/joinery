@@ -64,6 +64,41 @@ const profile = (over: Partial<ConnectionProfile> = {}): ConnectionProfile => ({
 });
 
 /**
+ * A mysql2 promise connection, in the shape `restore-verify.ts` uses it — and a real
+ * `EventEmitter`, deliberately (J-195), so the double cannot encode the bug under test.
+ *
+ * `mysql.createConnection` (promise flavour) resolves a `PromiseConnection`, and
+ * `PromiseConnection extends EventEmitter` with **no** `'error'` listener of its own
+ * (`mysql2/lib/promise/connection.js:13-25`, v3.23.3). Its constructor calls
+ * `inheritEvents(coreConnection, this, ['error', …])`, and that helper only wires a
+ * core → wrapper forwarder when a listener is added to the wrapper
+ * (`lib/promise/inherit_events.js:5-11`, on `'newListener'`). So with no listener attached
+ * here, a server-side error never reaches this object at all: it stops at the stale
+ * `coreConnection.once('error', reject)` that `createConnectionPromise`
+ * (`promise.js:36-39`) left behind, rejecting an already-settled promise — silently. The
+ * listener this fixture counts is what turns that into a log line.
+ */
+class FakeMySQLConnection extends EventEmitter {
+  /** `'error'` listeners present at the moment `query()` was called. */
+  errorListenersAtQuery = -1;
+
+  constructor(private readonly calls: Recorded) {
+    super();
+  }
+
+  async query(sql: string, values: unknown[]): Promise<[unknown, unknown[]]> {
+    this.errorListenersAtQuery = this.listenerCount('error');
+    this.calls.queries.push({ sql, values });
+    if (mysqlRows instanceof Error) throw mysqlRows;
+    return [mysqlRows, []];
+  }
+
+  async end(): Promise<void> {
+    this.calls.ended += 1;
+  }
+}
+
+/**
  * A pg `Client`, in the shape `restore-verify.ts` uses it — and a real
  * `EventEmitter`, deliberately (J-183). The failure mode under test is Node's
  * own `emit('error')` rethrow on an emitter with no `'error'` listener, so the
@@ -110,6 +145,8 @@ let mysqlRows: unknown[] | Error;
 let pgRows: unknown[] | Error;
 /** Every client `pgDatabaseExists` built, newest last. */
 let pgClients: FakePgClient[];
+/** Every connection `mysqlDatabaseExists` opened, newest last. */
+let mysqlConnections: FakeMySQLConnection[];
 
 beforeEach(() => {
   mysqlCalls = recorded();
@@ -117,19 +154,13 @@ beforeEach(() => {
   mysqlRows = [];
   pgRows = [];
   pgClients = [];
+  mysqlConnections = [];
 
   vi.spyOn(mysql, 'createConnection').mockImplementation(async (options): Promise<Connection> => {
     mysqlCalls.configs.push(options);
-    return {
-      query: async (sql: string, values: unknown[]) => {
-        mysqlCalls.queries.push({ sql, values });
-        if (mysqlRows instanceof Error) throw mysqlRows;
-        return [mysqlRows, []];
-      },
-      end: async () => {
-        mysqlCalls.ended += 1;
-      },
-    } as unknown as Connection;
+    const conn = new FakeMySQLConnection(mysqlCalls);
+    mysqlConnections.push(conn);
+    return conn as unknown as Connection;
   });
 
   vi.spyOn(pg, 'Client').mockImplementation(function (this: unknown, config: unknown) {
@@ -196,6 +227,38 @@ describe('mysqlDatabaseExists', () => {
     // (`lib/connection_config.js:110`), so '' and absent are the same wire
     // behaviour — but nothing here may invent a password.
     expect(config.password || undefined).toBeUndefined();
+  });
+
+  // J-195, the mysql2 sibling of J-183's fix four functions below. Without a
+  // listener a server-side error on this connection goes nowhere the user can
+  // see it (see FakeMySQLConnection's note for the exact chain), and any error
+  // after the first rethrows out of `emit()` on a socket callback — in the main
+  // process, an uncaught exception.
+  it('carries a logging error listener from before it queries (J-195)', async () => {
+    await mysqlDatabaseExists('restored_db', profile({ name: 'Reporting' }), 'secret');
+
+    const [conn] = mysqlConnections;
+    expect(conn.errorListenersAtQuery).toBe(1);
+
+    const logged: string[] = [];
+    const stopLogging = onLogEntry(entry => {
+      if (entry.level === 'error') logged.push(entry.message);
+    });
+    const fatal = Object.assign(new Error('Connection lost: The server closed the connection.'), {
+      code: 'PROTOCOL_CONNECTION_LOST',
+    });
+    try {
+      expect(() => conn.emit('error', fatal)).not.toThrow();
+    } finally {
+      stopLogging();
+    }
+
+    expect(logged).toEqual([
+      expect.stringContaining('Connection lost: The server closed the connection.'),
+    ]);
+    expect(logged[0]).toContain('PROTOCOL_CONNECTION_LOST');
+    // Two restores at once are indistinguishable without the label (J-183 review, N1).
+    expect(logged[0]).toContain('Reporting (restored_db)');
   });
 });
 
@@ -309,5 +372,7 @@ describe('pgDatabaseExists', () => {
       expect.stringContaining('terminating connection due to administrator command'),
     ]);
     expect(logged[0]).toContain('57P01');
+    // J-195: labelled the way every pool line is, so concurrent restores are tellable apart.
+    expect(logged[0]).toContain('Profile (restored_db)');
   });
 });

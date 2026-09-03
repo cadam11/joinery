@@ -1203,3 +1203,30 @@ WHERE TABLE_SCHEMA = ?
     this.procedureCache.clear();
   }
 }
+
+/**
+ * Drop a connection's cached database list after a restore lands — and never fail the restore
+ * because that drop failed (J-51d, J-195).
+ *
+ * `listDatabases` caches for 60s, so without this a database a restore had just created stayed
+ * invisible to `database.list` for a minute. It is a best-effort convenience, not part of the
+ * restore: the data is on the server either way, and the stale entry expires on its own.
+ *
+ * It was not treated that way. Both CLI restore services called
+ * `MetadataService.getInstance().invalidateDatabases(...)` from inside the block whose `catch`
+ * builds `"… exited cleanly but post-restore verification failed: …"`, so a throw here marked a
+ * restore that had succeeded *and* verified as failed to the user. And `getInstance()` really can
+ * throw: it constructs on first call, and this class's constructor reaches
+ * `ConnectionPoolManager` → `SshTunnelManager` → `CredentialStore` → Electron's `app`.
+ *
+ * So the guard lives here, at the single function both services call, rather than at each of their
+ * call sites. Logged, never swallowed.
+ */
+export function invalidateDatabasesAfterRestore(connectionId: string): void {
+  try {
+    MetadataService.getInstance().invalidateDatabases(connectionId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Post-restore database-cache refresh failed for ${connectionId}: ${message}`);
+  }
+}

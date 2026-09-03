@@ -13,7 +13,7 @@ import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
 import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
-import { MetadataService } from './metadata';
+import { invalidateDatabasesAfterRestore } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
@@ -285,10 +285,14 @@ export class PgBackupService extends BaseSingleton {
    * `MetadataService.listDatabases` caches for 60s, and only the MSSQL path invalidated it — so a
    * database a restore had just created could stay invisible to `database.list` for a minute.
    * A cache drop, not a query: the side effect is one map deletion.
+   *
+   * It must not throw (J-195): one call site sits inside the `try` whose `catch` reports a
+   * post-restore *verification* failure, and the other inside a floating promise with no `catch`
+   * at all. `invalidateDatabasesAfterRestore` owns that guarantee for both engines.
    */
   private onRestored(operation: PgBackupOperation, type: 'backup' | 'restore'): void {
     if (type !== 'restore') return;
-    MetadataService.getInstance().invalidateDatabases(operation.connectionId);
+    invalidateDatabasesAfterRestore(operation.connectionId);
   }
 
   private sendProgress(operationId: string, type: 'backup' | 'restore', message: string): void {

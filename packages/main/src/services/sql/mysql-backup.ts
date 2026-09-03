@@ -15,7 +15,7 @@ import { IPC_CHANNELS } from '@joinery/shared';
 import { BaseSingleton } from '../../utils/singleton';
 import { killProcess } from './kill-process';
 import { backupDestinationKey, OperationClaims, restoreTargetKey } from './operation-claims';
-import { MetadataService } from './metadata';
+import { invalidateDatabasesAfterRestore } from './metadata';
 import { operationProgressEvent } from './operation-progress';
 import { createLogger } from '../../utils/logger';
 import { ConnectionProfilesStore } from '../config/connection-profiles';
@@ -321,7 +321,9 @@ export class MySQLBackupService extends BaseSingleton {
             log.info(`mysql restore completed successfully → ${targetDb}`);
             // The piped prelude creates the target here, so unlike PostgreSQL nothing else
             // invalidates the cached list — a restored database stayed invisible for 60s (J-51d).
-            MetadataService.getInstance().invalidateDatabases(operation.connectionId);
+            // Guarded, because this `.then()` shares its `.catch()` with the verification above:
+            // a throwing refresh used to report a verified restore as failed (J-195).
+            invalidateDatabasesAfterRestore(operation.connectionId);
             this.sendComplete(operationId, 'restore', true);
           } else {
             const errMsg =
