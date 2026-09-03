@@ -52,6 +52,12 @@ ephemeral port, and talks to it over HTTP. It finds the interpreter by probing *
 then **`python3`**, then **`python`**, and on Windows the **`py -3`** launcher — the first that runs
 and has all four packages.
 
+`JOINERY_PYTHON` is honoured only by a **development build**, or by a bundle built for testing. A
+released Joinery ignores it — the variable names the executable the app spawns, so honouring it in
+a signed app would let whoever controls the launch environment run their own binary with Joinery's
+permissions. A release build logs one line saying it is ignoring the variable, then probes
+`python3`, `python` and `py -3` as usual.
+
 That service is started **lazily, on your first conversion** — not at launch — and stopped when the
 app quits. It gets 15 seconds to come up and 30 seconds to answer a conversion.
 

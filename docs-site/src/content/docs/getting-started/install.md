@@ -72,9 +72,10 @@ step further: it uses a fresh throwaway service per run and deletes every item i
 run ends, then checks that the keychain service your installed Joinery uses holds exactly as many
 items as it did beforehand. A release bundle refuses both — and refuses every other test-only
 variable by the same rule, including `JOINERY_DOCKER_FIXTURE`, which pins what the Docker panel
-reports for the visual test tier and which a shipped app ignores in favour of the real daemon. It
-is a property of the artifact rather than of the environment on purpose: anyone who could set one
-environment variable to unlock a shipped app could set two.
+reports for the visual test tier and which a shipped app ignores in favour of the real daemon, and
+`JOINERY_PYTHON`, which names the Python interpreter the SQL converter spawns. It is a property of
+the artifact rather than of the environment on purpose: anyone who could set one environment
+variable to unlock a shipped app could set two.
 
 ## Keeping a source install current
 
@@ -187,6 +188,7 @@ Every claim above was checked against the repository at the commit this page was
 | `package:test` builds the bundle then stamps `Contents/Resources/joinery-test-build`                              | `package.json` `package:test`; `scripts/release/test-build-marker.ts` (`TEST_BUILD_MARKER_FILENAME`, `stampBundle`)                                                                                                                     |
 | A stamped bundle honours `JOINERY_KEYCHAIN_SERVICE` and `JOINERY_TEST`; a release bundle refuses both             | `packages/main/src/services/keychain/service-name.ts:51-67, 99-110`; `packages/main/src/utils/runtime-mode.ts:101-105, 121-124` (`areTestHatchesHonoured`, `isTestHatchOpen`); `packages/main/src/utils/test-build-capability.ts:53-58` |
 | Every test-only variable is gated on the same predicate, `JOINERY_DOCKER_FIXTURE` included                        | `packages/main/src/utils/runtime-mode.ts:101-105`; `packages/main/src/services/docker/docker-fixture.ts:88-105`; `packages/main/src/utils/env-hatch-gating.spec.ts` (the `HATCH_BEHAVIOUR` table)                                       |
+| `JOINERY_PYTHON` obeys the same predicate; a release build warns once and probes its own names                    | `packages/main/src/services/sql/python-deps.ts` (`resolvePythonOverride`, `warnedAboutRefusal`); `packages/main/src/utils/env-hatch-gating.spec.ts`                                                                                     |
 | A stamped bundle says so in the log at startup                                                                    | `packages/main/src/utils/test-build-capability.ts` (`isTestCapableBuild`, `TEST_BUILD_WARNING`); `packages/main/src/index.ts`                                                                                                           |
 | `smoke:package` refuses a bundle without the marker                                                               | `scripts/release/smoke-packaged-app.ts` (`assertBundleIsTestCapable`)                                                                                                                                                                   |
 | `test:smoke:packaged` packages a bundle, refuses an unstamped one, and queries all three engines                  | `package.json` (`pretest:smoke:packaged`, `test:smoke:packaged`); `tests/smoke-packaged/packaged-app.ts` (`launchPackagedJoinery` calls `assertBundleIsTestCapable`); `tests/smoke-packaged/smoke.spec.ts` (`ENGINE_CASES`)             |

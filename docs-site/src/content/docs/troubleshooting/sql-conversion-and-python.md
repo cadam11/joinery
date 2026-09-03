@@ -63,8 +63,12 @@ packages. So a Windows machine whose interpreter is `python` works without confi
 did not before **J-29**, when the spawn was hardcoded to `python3` and failed with `ENOENT`
 whatever was installed.
 
-**Your packages live in a virtualenv.** Set `JOINERY_PYTHON` to that interpreter's path and it wins
-over every other candidate. That is the same variable the integration suite uses.
+**Your packages live in a virtualenv.** Install them into the interpreter Joinery finds as well —
+`python3`, `python`, or `py -3` on Windows. Setting `JOINERY_PYTHON` to the virtualenv's interpreter
+works in a **development build** (it wins over every other candidate, and it is the same variable
+the integration suite uses), but a **released Joinery ignores it** and logs one line saying so. The
+variable names the executable the app spawns, and a signed app that took that from its environment
+would run whatever binary the launcher pointed it at.
 
 > **Note** — the probe result is cached for the lifetime of the app. If you install the packages
 > while Joinery is running, press **Check again** in the setup dialog: that is what re-probes

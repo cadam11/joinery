@@ -14,6 +14,16 @@ import { PYTHON_MODULES, type PythonInstallInstructions } from '../types/python-
 
 const MODULES = PYTHON_MODULES.join(' ');
 
+/**
+ * J-171 gated `JOINERY_PYTHON`, so a released Joinery no longer takes an interpreter path from the
+ * environment — it selects the executable spawned inside the signed app, which is the one hatch
+ * shape that is arbitrary-code-execution rather than a redirected read. This note used to tell
+ * every user to set it; it must not tell a release user to do something the app ignores.
+ */
+const VIRTUALENV_NOTE =
+  'Keeping these packages in a virtualenv? Install them into the interpreter Joinery finds as ' +
+  'well — a released Joinery ignores JOINERY_PYTHON, which only a development build honours.';
+
 const SUPPORTED: Record<CliInstructionsPlatform, PythonInstallInstructions> = {
   darwin: {
     platform: 'darwin',
@@ -30,9 +40,7 @@ const SUPPORTED: Record<CliInstructionsPlatform, PythonInstallInstructions> = {
       },
       { description: 'Reopen the conversion panel — Joinery probes again each time it starts.' },
     ],
-    notes: [
-      'Set JOINERY_PYTHON to an interpreter path if you keep these packages in a virtualenv.',
-    ],
+    notes: [VIRTUALENV_NOTE],
   },
   win32: {
     platform: 'win32',
@@ -50,7 +58,7 @@ const SUPPORTED: Record<CliInstructionsPlatform, PythonInstallInstructions> = {
     ],
     notes: [
       'Joinery tries python3, python and the py launcher, so either installer layout works.',
-      'Set JOINERY_PYTHON to an interpreter path if you keep these packages in a virtualenv.',
+      VIRTUALENV_NOTE,
     ],
   },
 };
@@ -65,7 +73,7 @@ const GENERIC: PythonInstallInstructions = {
       command: `python3 -m pip install --user ${MODULES}`,
     },
   ],
-  notes: ['Set JOINERY_PYTHON to an interpreter path if you keep these packages in a virtualenv.'],
+  notes: [VIRTUALENV_NOTE],
 };
 
 export function getPythonInstallInstructions(platform: string): PythonInstallInstructions {

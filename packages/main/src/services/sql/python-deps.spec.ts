@@ -11,7 +11,9 @@ import { execFileSync } from 'node:child_process';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { PythonDepsService } from './python-deps';
+import { onLogEntry } from '../../utils/logger';
+
+import { PYTHON_ENV_VAR, PythonDepsService, resolvePythonOverride } from './python-deps';
 
 const ORIGINAL = process.env.JOINERY_PYTHON;
 
@@ -103,5 +105,43 @@ describeIfPython('against a real interpreter', () => {
     const rechecked = await service.recheck();
     expect(rechecked).not.toBe(first);
     expect(rechecked.command).toBe(first.command);
+  });
+});
+
+/**
+ * J-171: the interpreter path is the executable a signed Joinery spawns, so a shipped release
+ * bundle refuses to take it from the environment — the same predicate every other hatch obeys
+ * (`utils/runtime-mode.ts`'s `areTestHatchesHonoured`, pinned from all four build combinations in
+ * `utils/env-hatch-gating.spec.ts`). Here only the refusal's ONE side effect is checked.
+ *
+ * The latch is module scope, so this is the only place in this file allowed to drive the release
+ * branch: a second release-build call anywhere above would consume the single warning and leave
+ * this test asserting nothing.
+ */
+describe('when a release bundle is told which interpreter to use', () => {
+  function warningsWhile(run: () => void): string[] {
+    const seen: string[] = [];
+    const stop = onLogEntry(entry => {
+      if (entry.level === 'warn' && entry.tag === 'PythonDeps') seen.push(entry.message);
+    });
+    try {
+      run();
+    } finally {
+      stop();
+    }
+    return seen;
+  }
+
+  it('ignores it and says so exactly once, however often it is asked', () => {
+    const release = { isPackaged: true, isTestBuild: false, env: { [PYTHON_ENV_VAR]: '/evil/py' } };
+
+    const warnings = warningsWhile(() => {
+      expect(resolvePythonOverride(release)).toBeNull();
+      expect(resolvePythonOverride(release)).toBeNull();
+      expect(resolvePythonOverride(release)).toBeNull();
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(PYTHON_ENV_VAR);
   });
 });

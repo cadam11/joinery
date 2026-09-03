@@ -114,6 +114,11 @@ It looks for an interpreter in this order: **`JOINERY_PYTHON`** if you set it (p
 virtualenv), then **`python3`**, then **`python`**, and on Windows the **`py -3`** launcher. The
 first one that runs and has all four packages wins.
 
+`JOINERY_PYTHON` is honoured only by a **development build**, or by a bundle built for testing — a
+released Joinery ignores it and probes the other three names instead, because the variable names an
+executable the app would spawn. If you use a released build, install the packages into the
+interpreter it finds rather than pointing it at a virtualenv.
+
 Install the four packages it imports:
 
 ```bash
@@ -159,6 +164,7 @@ single JSON entry that Joinery reads once at startup.
 | sqlglot service is spawned as `python3` against `resources/python/sqlglot-server.py`                              | `packages/main/src/services/sql/sqlglot/sqlglot-client.ts:56, 98`                                              |
 | It is a FastAPI app importing `fastapi`, `pydantic`, `sqlglot`, `uvicorn`, bound to loopback on an ephemeral port | `resources/python/sqlglot-server.py:1-12`                                                                      |
 | The interpreter is probed (JOINERY_PYTHON, python3, python, py -3) and the message names what is missing          | `packages/main/src/services/sql/python-deps.ts`, `sql-converter.ts` (`ensureRunning`, `describeMissingPython`) |
+| A released build ignores JOINERY_PYTHON, warns once, then probes the other names                                  | `packages/main/src/services/sql/python-deps.ts` (`resolvePythonOverride`)                                      |
 | Credentials are stored via `keytar` as one JSON vault entry, read once at startup                                 | `packages/main/src/services/keychain/credential-store.ts:1-4, 13-14, 52-64`                                    |
 | AI provider keys go to the same store, as `ai-<vendorId>`                                                         | `packages/main/src/services/ai/ai-service.ts:136-138`                                                          |
 | SSH passwords and passphrases go there as `<profileId>:ssh-password` / `:ssh-passphrase`                          | `packages/main/src/services/ssh/ssh-tunnel-manager.ts:88-97`                                                   |
