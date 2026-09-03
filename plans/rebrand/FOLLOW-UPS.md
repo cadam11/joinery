@@ -68,7 +68,7 @@ cutover decision (renderer-rewrite Task 24), not a UI one.
 
 ## 13. Align the dev and packaged userData directory case → [J-33](https://linear.app/adam11/issue/J-33)
 
-Dev uses `.../joinery`, packaged uses `.../Joinery`, so profiles and history split across two directories. One-line fix, but Craig's call.
+**Superseded by [J-117](https://linear.app/adam11/issue/J-117) and [J-142](https://linear.app/adam11/issue/J-142), both merged.** The case question is settled: the root manifest carries `"productName": "Joinery"`, and a one-shot guard in `packages/main/src/index.ts` moves a pre-rename lowercase `joinery` directory across on a case-sensitive volume. Development keeps a directory of its own on purpose — `packages/main/package.json` says `"productName": "Joinery (dev)"`, so a dev-time bug cannot reach real connection profiles. Both halves are pinned by `packages/main/src/services/config/user-data-dir.spec.ts`.
 
 ## 14. Fix the broken root `lint` target → [J-34](https://linear.app/adam11/issue/J-34)
 
