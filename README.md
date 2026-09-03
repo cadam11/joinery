@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="#from-source"><strong>🛠️ Build from Source</strong></a> — packaged releases arrive with v1
+  <a href="#download"><strong>⬇️ Download v1.0.0</strong></a> — or <a href="#from-source">build from source</a>
 </p>
 
 <p align="center">
@@ -209,18 +209,35 @@ The AI has access to these tools — each one is schema-aware and engine-aware:
 
 ## Download
 
-Joinery doesn't have packaged installers yet — there have been no tagged releases, and v1
-planning hasn't started. Packaged builds (macOS DMG, Windows installer) will arrive with the
-v1 release. Until then, [build from source](#from-source) — it's three commands (see Quick
-Start below).
+**[v1.0.0](https://github.com/cadam11/joinery/releases/tag/v1.0.0)** is the current release.
 
-> **macOS (once packaged):** Joinery is not code-signed or notarized, so macOS quarantines it and
-> refuses the first launch. Allow it via **System Settings → Privacy & Security → Open Anyway**, or
-> run `xattr -dr com.apple.quarantine "/Applications/Joinery.app"` first. An upgrade replaces the
-> app bundle and asks again. Full instructions:
+**macOS — Homebrew:**
+
+```bash
+brew install --cask cadam11/joinery/joinery
+```
+
+`brew upgrade --cask joinery` moves you to the next version.
+
+**Direct download:** grab a DMG (macOS, `arm64` or `x64`) or a setup EXE (Windows, `x64`, `arm64`,
+or the architecture-less installer that carries both) from
+[the latest release](https://github.com/cadam11/joinery/releases/latest). Each release ships a
+`SHA256SUMS.txt`, so `shasum -a 256 -c SHA256SUMS.txt --ignore-missing` checks a download before
+you open it.
+
+Prefer to build it yourself? [From source](#from-source) is three commands.
+
+> **macOS:** Joinery is not code-signed or notarized, and won't be — there's no Apple Developer
+> Program membership behind it. macOS quarantines it however you install it, Homebrew included, and
+> refuses the first launch. Allow it once: double-click Joinery and let macOS refuse; open **System
+> Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** beside the
+> message about Joinery; confirm and authenticate. Every launch after that is normal, and an
+> upgrade replaces the bundle and asks again. Terminal alternative:
+> `xattr -dr com.apple.quarantine "/Applications/Joinery.app"`. Full instructions:
 > [the install page](https://usejoinery.com/getting-started/install/).
 >
-> **Windows (once packaged):** if SmartScreen warns you, click "More info" → "Run anyway" (not code-signed).
+> **Windows:** the builds are not code-signed either, so SmartScreen warns. Click "More info" →
+> "Run anyway".
 
 ### Requirements
 
