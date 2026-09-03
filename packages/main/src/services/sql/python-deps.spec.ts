@@ -9,9 +9,10 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { onLogEntry } from '../../utils/logger';
+import * as runtimeMode from '../../utils/runtime-mode';
 
 import { PYTHON_ENV_VAR, PythonDepsService, resolvePythonOverride } from './python-deps';
 
@@ -114,9 +115,9 @@ describeIfPython('against a real interpreter', () => {
  * (`utils/runtime-mode.ts`'s `areTestHatchesHonoured`, pinned from all four build combinations in
  * `utils/env-hatch-gating.spec.ts`). Here only the refusal's ONE side effect is checked.
  *
- * The latch is module scope, so this is the only place in this file allowed to drive the release
- * branch: a second release-build call anywhere above would consume the single warning and leave
- * this test asserting nothing.
+ * The latch is module scope, so this must be the FIRST place in this file that drives the release
+ * branch: a release-build call anywhere above would consume the single warning and leave this test
+ * asserting nothing. The wiring suite below drives it too, which is why it comes after.
  */
 describe('when a release bundle is told which interpreter to use', () => {
   function warningsWhile(run: () => void): string[] {
@@ -143,5 +144,64 @@ describe('when a release bundle is told which interpreter to use', () => {
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(PYTHON_ENV_VAR);
+  });
+});
+
+/**
+ * The gate is only worth having if the SERVICE reaches it (J-171 review, N6).
+ *
+ * Every other case here drives the pure `resolvePythonOverride`. Nothing pinned that `probe()`
+ * hands it the REAL `runtimeSignals()` — a refactor to a hard-coded `{ isPackaged: false, env:
+ * process.env }` would leave the whole suite green and reopen the hole. So this drives the real
+ * `PythonDepsService.check()` and only replaces the signals gatherer, at the seam
+ * `python-deps.ts` actually imports.
+ *
+ * The interpreter is a real one, named by ABSOLUTE path, so that honoured and refused give
+ * different answers: honoured means `command` is that path, refused means the probe fell through
+ * to the bare `python3` name.
+ */
+describeIfPython('the packaged gate, through the real service', () => {
+  /** `python3`'s own absolute path — a name the fall-through candidates can never produce. */
+  const absolute = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'])
+    .toString()
+    .trim();
+
+  beforeEach(() => {
+    expect(absolute.startsWith('/')).toBe(true);
+    process.env.JOINERY_PYTHON = absolute;
+    PythonDepsService.resetInstance();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function withBuild(isPackaged: boolean, isTestBuild: boolean): void {
+    vi.spyOn(runtimeMode, 'runtimeSignals').mockReturnValue({
+      isPackaged,
+      isTestBuild,
+      env: process.env,
+    });
+  }
+
+  it('honours the override in a development build', async () => {
+    withBuild(false, false);
+
+    const result = await PythonDepsService.getInstance().check();
+
+    expect(result.command).toBe(absolute);
+    expect(result.tried[0]).toBe(absolute);
+  });
+
+  it('refuses it in a packaged bundle, stamped as a test build or not', async () => {
+    for (const isTestBuild of [false, true]) {
+      PythonDepsService.resetInstance();
+      withBuild(true, isTestBuild);
+
+      const result = await PythonDepsService.getInstance().check();
+
+      expect(result.command).not.toBe(absolute);
+      expect(result.tried).not.toContain(absolute);
+    }
   });
 });

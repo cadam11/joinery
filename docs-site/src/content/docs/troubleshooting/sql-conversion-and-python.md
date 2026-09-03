@@ -57,18 +57,19 @@ one on [Prerequisites](../../getting-started/prerequisites/#python-and-sqlglot-f
 python3 -c "import sqlglot, fastapi, uvicorn, pydantic"
 ```
 
-**The interpreter is under a different name.** Joinery tries `JOINERY_PYTHON`, then `python3`, then
-`python`, and on Windows the `py -3` launcher, taking the first that runs and has all four
-packages. So a Windows machine whose interpreter is `python` works without configuration — which it
+**The interpreter is under a different name.** Joinery tries `python3`, then `python`, and on
+Windows the `py -3` launcher, taking the first that runs and has all four packages — plus
+`JOINERY_PYTHON` ahead of them when it is run from source. The setup dialog's **Probed** line names
+exactly what was tried on this machine. So a Windows machine whose interpreter is `python` works without configuration — which it
 did not before **J-29**, when the spawn was hardcoded to `python3` and failed with `ENOENT`
 whatever was installed.
 
 **Your packages live in a virtualenv.** Install them into the interpreter Joinery finds as well —
-`python3`, `python`, or `py -3` on Windows. Setting `JOINERY_PYTHON` to the virtualenv's interpreter
-works in a **development build** (it wins over every other candidate, and it is the same variable
-the integration suite uses), but a **released Joinery ignores it** and logs one line saying so. The
-variable names the executable the app spawns, and a signed app that took that from its environment
-would run whatever binary the launcher pointed it at.
+`python3`, `python`, or `py -3` on Windows. An installed Joinery **ignores `JOINERY_PYTHON`** and
+logs one line saying so: the variable names the executable the app spawns, and a signed app that
+took that from its environment would run whatever binary the launcher pointed it at. Run from
+source, the variable is honoured and wins over every other candidate — it is the same one the
+integration suite uses.
 
 > **Note** — the probe result is cached for the lifetime of the app. If you install the packages
 > while Joinery is running, press **Check again** in the setup dialog: that is what re-probes

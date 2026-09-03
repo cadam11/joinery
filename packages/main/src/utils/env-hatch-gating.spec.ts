@@ -183,8 +183,13 @@ const HATCH_BEHAVIOUR = [
       }) !== null,
   },
   {
+    // Not reopened by the J-167 marker, unlike every other hatch here: nothing in
+    // `scripts/release/`, `tests/smoke-packaged/` or any Playwright config sets this variable for a
+    // packaged run, and the packaged smoke tier does not touch Python at all. So shutting it for
+    // ANY packaged bundle is strictly tighter at zero cost — and this is the one hatch that selects
+    // an executable rather than redirecting a read, so the tighter side is the right default.
     variable: 'JOINERY_PYTHON',
-    reopenedByTestBuild: true,
+    reopenedByTestBuild: false,
     isHonoured: (build: BuildUnderTest) =>
       resolvePythonOverride({ ...build, env: { [PYTHON_ENV_VAR]: '/tmp/venv/bin/python' } }) ===
       '/tmp/venv/bin/python',

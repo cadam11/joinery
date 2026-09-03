@@ -29,11 +29,7 @@ import {
 
 import { BaseSingleton } from '../../utils/singleton';
 import { createLogger } from '../../utils/logger';
-import {
-  areTestHatchesHonoured,
-  runtimeSignals,
-  type RuntimeSignals,
-} from '../../utils/runtime-mode';
+import { runtimeSignals, type RuntimeSignals } from '../../utils/runtime-mode';
 
 const log = createLogger('PythonDeps');
 
@@ -62,31 +58,35 @@ const MODULE_PROBE = [
  * Environment variable naming the interpreter to try first.
  *
  * Read here and nowhere else, which `utils/env-hatch-gating.spec.ts` enforces — and, since J-171,
- * honoured only by a build that {@link areTestHatchesHonoured} allows.
+ * honoured only while the app is UNPACKAGED.
  */
 export const PYTHON_ENV_VAR = 'JOINERY_PYTHON';
 
 /**
  * Warned already? Module scope on purpose: the probe re-runs on every `recheck()` — the setup
  * dialog's "Check again" button — and a user whose shell exports this variable should get one line
- * in the Output panel, not one per press. Matches the keychain precedent, whose single warning
- * comes from `CredentialStore` resolving once in its constructor.
+ * in the Output panel, not one per press. The precedent is `services/docker/docker-fixture.ts`,
+ * which also logs its refusal inline; `service-name.ts` is deliberately pure and hands its warning
+ * back for the caller to log, which is not available here because `candidates()` has no caller
+ * placed to say it.
  */
 let warnedAboutRefusal = false;
 
 /**
  * The interpreter path this build takes from the environment, or `null`.
  *
- * Gated (J-171). This variable is not a redirected read like the other hatches — it names the
+ * Gated (J-171), and STRICTER than every other hatch: refused by any packaged bundle, including one
+ * stamped with the J-167 test marker. This variable is not a redirected read — it names the
  * EXECUTABLE that gets spawned inside the signed app's process tree, and on macOS a child is
  * generally attributed to its responsible process, so it inherits Joinery's TCC grants. A launcher
  * that can set the environment of a shipped Joinery could therefore run its own binary with
- * Joinery's permissions. So the same predicate every other hatch obeys applies here: honoured
- * while unpackaged, and by a bundle stamped with the J-167 test marker, never by a release bundle.
+ * Joinery's permissions. Nothing in `scripts/release/`, `tests/smoke-packaged/` or any Playwright
+ * config sets it for a packaged run, so reopening it for a stamped bundle would buy uniformity and
+ * nothing else. `utils/env-hatch-gating.spec.ts` pins the difference from all four sides.
  *
- * Refused and warned rather than fatal, matching `services/keychain/service-name.ts` and
- * `services/docker/docker-fixture.ts`: a user whose shell exports this must still get a working
- * converter, which the `python3` / `python` / `py -3` candidates below still give them.
+ * Refused and warned rather than fatal, matching `services/docker/docker-fixture.ts`: a user whose
+ * shell exports this must still get a working converter, which the `python3` / `python` / `py -3`
+ * candidates below still give them.
  *
  * The cost is real and is why this stayed ungated until now: a release user whose packages live in
  * a virtualenv has lost the documented way to point Joinery at that interpreter, and must install
@@ -97,13 +97,13 @@ export function resolvePythonOverride(signals: RuntimeSignals): string | null {
   const configured = signals.env[PYTHON_ENV_VAR];
   if (!configured) return null;
 
-  if (!areTestHatchesHonoured(signals)) {
+  if (signals.isPackaged) {
     if (!warnedAboutRefusal) {
       warnedAboutRefusal = true;
       log.warn(
         `${PYTHON_ENV_VAR} is set, but this Joinery ignores it and finds its own Python. It is ` +
-          `honoured only by a development build or a bundle built for testing. Install the ` +
-          `packages into the interpreter Joinery finds, and unset it to silence this warning.`
+          `honoured only by a development build. Install the packages into the interpreter ` +
+          `Joinery finds, and unset it to silence this warning.`
       );
     }
     return null;
@@ -145,8 +145,10 @@ export class PythonDepsService extends BaseSingleton {
 
   private async probe(): Promise<PythonDepsResult> {
     const platform = process.platform;
+    const tried = candidates(platform, runtimeSignals());
+    const triedNames = tried.map(candidate => [candidate.command, ...candidate.args].join(' '));
 
-    for (const candidate of candidates(platform, runtimeSignals())) {
+    for (const candidate of tried) {
       const modules = await this.probeModules(candidate);
       if (modules === null) continue; // this interpreter did not run at all
 
@@ -166,6 +168,7 @@ export class PythonDepsService extends BaseSingleton {
         platform,
         command: candidate.command,
         commandArgs: [...candidate.args],
+        tried: triedNames,
         version,
         modules,
         ready,
@@ -178,6 +181,7 @@ export class PythonDepsService extends BaseSingleton {
       platform,
       command: null,
       commandArgs: [],
+      tried: triedNames,
       modules: [],
       ready: false,
       installInstructions: getPythonInstallInstructions(platform),

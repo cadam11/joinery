@@ -83,8 +83,10 @@ export function PythonSetupDialog({
             <p className="font-mono text-2xs tracking-eyebrow text-fg-muted uppercase">Probed</p>
             {deps.command === null ? (
               <p className="text-sm text-fg-muted" data-testid="python-setup-no-interpreter">
-                Tried JOINERY_PYTHON, python3, python
-                {deps.platform === 'win32' ? ', py -3' : ''}.
+                {/* The names the probe actually ran, sent up by `PythonDepsService` — not a list
+                    repeated here, which is how this line came to claim JOINERY_PYTHON was tried on
+                    a build that refuses it (J-171). */}
+                Tried {deps.tried.join(', ')}.
               </p>
             ) : (
               <ul className="flex flex-col gap-1">

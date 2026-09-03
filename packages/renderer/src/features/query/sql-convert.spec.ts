@@ -132,6 +132,7 @@ describe('a refusal this host cannot fix by retrying', () => {
       platform: 'darwin',
       command: 'python3',
       commandArgs: [],
+      tried: ['python3', 'python'],
       modules: [
         { module: 'sqlglot', available: false },
         { module: 'fastapi', available: true },

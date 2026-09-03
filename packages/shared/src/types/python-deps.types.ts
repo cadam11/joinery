@@ -42,6 +42,13 @@ export interface PythonDepsResult {
   command: string | null;
   /** Extra arguments the command needs, e.g. `['-3']` for the Windows `py` launcher. */
   commandArgs: string[];
+  /**
+   * Every candidate the probe actually ran, in order, as the user would type them — so the setup
+   * dialog can say what was tried instead of repeating the list from memory. It used to name
+   * `JOINERY_PYTHON` unconditionally, which went stale the moment J-171 stopped a packaged build
+   * from honouring it.
+   */
+  tried: string[];
   /** `<command> --version`, when one ran. */
   version?: string;
   /** Empty when no interpreter ran — nothing could be imported to find out. */
