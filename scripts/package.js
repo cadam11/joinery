@@ -38,6 +38,15 @@ try {
     stdio: 'inherit',
     shell: process.platform === 'win32',
     cwd: rootDir,
+    // electron-builder picks its dependency collector by package manager. It reads pnpm from
+    // package.json's `packageManager` field, then asks pnpm for the workspace root with
+    // `pnpm --workspace-root exec pwd`. On Windows that `pwd` is Git's Unix pwd.exe and prints
+    // `/d/a/joinery/joinery`, a path Node cannot open, so re-detection from it fails and
+    // electron-builder falls back to `npm_config_user_agent`. `pnpm run` sets that; a direct
+    // `node scripts/package.js` does not, and the empty fallback is npm, whose
+    // `npm list --json --long` walk of a pnpm-hoisted tree never returned on the v1.0.0 release
+    // run (J-220). Naming pnpm here makes both invocations resolve the same way.
+    env: { ...process.env, npm_config_user_agent: process.env.npm_config_user_agent || 'pnpm' },
   });
   if (result.error) {
     console.error('Failed to launch electron-builder:', result.error.message);
