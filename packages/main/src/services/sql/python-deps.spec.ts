@@ -9,7 +9,7 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { onLogEntry } from '../../utils/logger';
 import * as runtimeMode from '../../utils/runtime-mode';
@@ -110,10 +110,11 @@ describeIfPython('against a real interpreter', () => {
 });
 
 /**
- * J-171: the interpreter path is the executable a signed Joinery spawns, so a shipped release
- * bundle refuses to take it from the environment — the same predicate every other hatch obeys
- * (`utils/runtime-mode.ts`'s `areTestHatchesHonoured`, pinned from all four build combinations in
- * `utils/env-hatch-gating.spec.ts`). Here only the refusal's ONE side effect is checked.
+ * J-171: the interpreter path is the executable a signed Joinery spawns, so a PACKAGED bundle
+ * refuses to take it from the environment. Stricter than every other hatch, which the J-167 test
+ * marker reopens: this one is `isPackaged` alone, so a stamped bundle refuses it too. Pinned from
+ * all four build combinations in `utils/env-hatch-gating.spec.ts`; here only the refusal's ONE side
+ * effect is checked.
  *
  * The latch is module scope, so this must be the FIRST place in this file that drives the release
  * branch: a release-build call anywhere above would consume the single warning and leave this test
@@ -161,13 +162,23 @@ describe('when a release bundle is told which interpreter to use', () => {
  * to the bare `python3` name.
  */
 describeIfPython('the packaged gate, through the real service', () => {
-  /** `python3`'s own absolute path — a name the fall-through candidates can never produce. */
-  const absolute = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'])
-    .toString()
-    .trim();
+  /**
+   * `python3`'s own absolute path — a name the fall-through candidates can never produce.
+   *
+   * Resolved in `beforeAll`, not in this factory: `describe.skip` still RUNS the factory to collect
+   * the cases it then skips, so spawning here would fail collection of the whole file on a host
+   * with no `python3` — the exact host this suite is skipped for.
+   */
+  let absolute = '';
+
+  beforeAll(() => {
+    absolute = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'])
+      .toString()
+      .trim();
+    expect(absolute.startsWith('/')).toBe(true);
+  });
 
   beforeEach(() => {
-    expect(absolute.startsWith('/')).toBe(true);
     process.env.JOINERY_PYTHON = absolute;
     PythonDepsService.resetInstance();
   });

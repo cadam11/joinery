@@ -142,10 +142,16 @@ describe.each(GATED_HATCHES)(
  *
  * `reopenedByTestBuild` is the only per-hatch difference. A J-167 test bundle
  * (`Contents/Resources/joinery-test-build`) gets the test-only hatches back, because the packaged
- * smoke run boots a real bundle and needs them; `NODE_ENV=development` is deliberately NOT
- * reopened — a stamped bundle has no dev server to reach either, so honouring it would only let
- * whoever set the variable serve their own page into a bundle that carries the preload bridge.
- * See `runtime-mode.ts`'s {@link isDevelopmentHatchOpen}.
+ * smoke run boots a real bundle and needs them. TWO are deliberately not reopened, and both gate on
+ * `isPackaged` alone:
+ *
+ *  - `NODE_ENV=development` — a stamped bundle has no dev server to reach either, so honouring it
+ *    would only let whoever set the variable serve their own page into a bundle that carries the
+ *    preload bridge. See `runtime-mode.ts`'s {@link isDevelopmentHatchOpen}.
+ *  - `JOINERY_PYTHON` (J-171) — it selects an executable to spawn rather than redirecting a read,
+ *    and nothing in `scripts/release/`, `tests/smoke-packaged/` or any Playwright config sets it
+ *    for a packaged run, so reopening it would buy uniformity and nothing else. See
+ *    `services/sql/python-deps.ts`'s `resolvePythonOverride`.
  */
 const HATCH_BEHAVIOUR = [
   {

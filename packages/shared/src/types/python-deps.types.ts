@@ -43,10 +43,14 @@ export interface PythonDepsResult {
   /** Extra arguments the command needs, e.g. `['-3']` for the Windows `py` launcher. */
   commandArgs: string[];
   /**
-   * Every candidate the probe actually ran, in order, as the user would type them — so the setup
-   * dialog can say what was tried instead of repeating the list from memory. It used to name
-   * `JOINERY_PYTHON` unconditionally, which went stale the moment J-171 stopped a packaged build
-   * from honouring it.
+   * Every candidate this build was WILLING to try, in probe order, as the user would type them —
+   * so the setup dialog can say what was tried instead of repeating the list from memory. It used
+   * to name `JOINERY_PYTHON` unconditionally, which went stale the moment J-171 stopped a packaged
+   * build from honouring it.
+   *
+   * Willing, not attempted: the probe returns at the first candidate that runs, so when `command`
+   * is non-null the names after it were never spawned. The list is exact for the case the dialog
+   * shows it in — `command: null`, where every one of them was tried and none ran.
    */
   tried: string[];
   /** `<command> --version`, when one ran. */
