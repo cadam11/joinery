@@ -372,12 +372,16 @@ jobs:
           done
 
       # This repo's Casks/joinery.rb is the template and the single source of truth; the tap's
-      # copy is an output. Editing the cask means editing it here.
+      # copy is an output. Editing the cask means editing it here. The same goes for the tap's
+      # README: Casks/TAP_README.md is the source, and it is copied on every release because the
+      # v1.0.0 tap still carried a pre-release README telling users to right-click → Open, which
+      # macOS Sequoia no longer honours.
       - name: Stamp the cask and push it
         run: |
           set -euo pipefail
           mkdir -p tap/Casks
           cp Casks/joinery.rb tap/Casks/joinery.rb
+          cp Casks/TAP_README.md tap/README.md
           node scripts/release/update-cask.ts \
             --cask tap/Casks/joinery.rb \
             --version "$VERSION" \
@@ -386,7 +390,7 @@ jobs:
           cd tap
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Casks/joinery.rb
+          git add Casks/joinery.rb README.md
           if git diff --cached --quiet; then
             echo "The tap is already at ${VERSION}; nothing to push." >> "$GITHUB_STEP_SUMMARY"
             exit 0
